@@ -1,6 +1,8 @@
 # System Explorer
 
-![System Explorer Overview](screenshots/overview.png)
+<p align="center">
+  <img src="screenshots/overview.png" alt="System Explorer Overview">
+</p>
 
 System Explorer is a Godot C# editor plugin that provides an architecture-focused view of your project.
 
