@@ -214,6 +214,7 @@ While Shift is held, drag & drop is temporarily disabled to prevent accidental r
 
 ## Context Menus
 ![ContextMenu](screenshots/context_menu.png)
+
 Right-click systems, folders, and scripts for quick actions.
 
 Examples include:
