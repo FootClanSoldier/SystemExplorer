@@ -231,10 +231,11 @@ Examples include:
 
 System Explorer separates architecture organization from file management.
 
+![RemoveSystem](screenshots/RemoveSystem.png)
+
 When removing content you can choose between:
 
 ### Remove From System Explorer
-![RemoveSystem](screenshots/RemoveSystem.png)
 
 Removes the item from the System Explorer tree while keeping all files intact in your Godot project.
 
