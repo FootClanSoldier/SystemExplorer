@@ -168,13 +168,15 @@ If no template file is found, System Explorer falls back to a built-in default t
 
 ## Drag & Drop Organization
 
+![DragAndDrop](screenshots/drag_drop.gif)
+
 Supports drag & drop reordering for:
 
 * Systems
 * Folders
 * Scripts
 
-Systems, folders, and scripts can be reordered freely in both directions using drag & drop.
+Reorder systems, folders, and scripts directly in the tree view using drag & drop.
 
 This makes it easy to keep architecture and script flow organized without manually editing configuration files.
 
@@ -211,7 +213,7 @@ While Shift is held, drag & drop is temporarily disabled to prevent accidental r
 ---
 
 ## Context Menus
-
+![ContextMenu](screenshots/context_menu.png)
 Right-click systems, folders, and scripts for quick actions.
 
 Examples include:
@@ -231,6 +233,7 @@ System Explorer separates architecture organization from file management.
 When removing content you can choose between:
 
 ### Remove From System Explorer
+![RemoveSystem](screenshots/RemoveSystem.png)
 
 Removes the item from the System Explorer tree while keeping all files intact in your Godot project.
 
