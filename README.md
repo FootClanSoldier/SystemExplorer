@@ -306,8 +306,11 @@ This file can safely be committed to source control.
 
 ---
 
-# Known Editor Behavior
-When deleting scripts from the filesystem through the plugin (using the Remove from filesystem checkbox), Godot may occasionally display errors similar to:
+# Known Issues
+
+## Godot Editor Cache Warnings
+
+When deleting scripts from the filesystem through the plugin (using the Remove from FileSystem checkbox), Godot may occasionally display errors similar to:
 
 ```text
 Cannot open file 'res://Example.cs'
@@ -329,6 +332,7 @@ If this happens, restarting Godot usually resolves the issue.
 If you are able to reproduce this problem or notice a pattern in when it occurs, bug reports with reproduction steps are greatly appreciated.
 
 ---
+
 # Future Ideas
 
 * Beautify individual scripts
@@ -347,10 +351,12 @@ System Explorer is not intended to replace Godot's FileSystem dock.
 
 The goal is to provide a higher-level architectural view of your project, making it easier to navigate large C# codebases and organize systems according to how the game is structured rather than how files are stored on disk.
 
-## Future Development
+---
+
+# Feedback
 
 System Explorer has reached a point where I feel it has a strong foundation and covers the functionality I originally set out to build.
 
-Future updates may happen when needed, but my primary focus is currently my own game project.
+Most future updates will likely be driven by real-world usage, bug reports, and community feedback.
 
 Feedback, suggestions, bug reports, and feature requests are always welcome and appreciated.
