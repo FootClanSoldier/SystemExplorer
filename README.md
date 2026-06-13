@@ -219,9 +219,9 @@ Right-click systems, folders, and scripts for quick actions.
 
 Examples include:
 
-* Add Folder
-* Add Script
+* New Folder
 * New Script
+* Add Script
 * Rename
 * Remove
 
