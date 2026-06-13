@@ -1,10 +1,10 @@
 # System Explorer
 
-![System Explorer Overview](screenshots/overview.png)
-
 System Explorer is a Godot C# editor plugin that provides an architecture-focused view of your project.
 
 Instead of navigating large projects through the FileSystem dock, you can organize scripts into custom systems and folders that reflect the architecture of your game.
+
+![System Explorer Overview](screenshots/overview.png)
 
 ---
 
