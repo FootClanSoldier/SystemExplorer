@@ -307,8 +307,7 @@ This file can safely be committed to source control.
 ---
 
 # Known Editor Behavior
-
-When deleting scripts that were recently opened in the Godot script editor, Godot may occasionally display errors similar to:
+When deleting scripts from the filesystem through the plugin (using the Remove from filesystem checkbox), Godot may occasionally display errors similar to:
 
 ```text
 Cannot open file 'res://Example.cs'
