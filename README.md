@@ -231,8 +231,6 @@ Examples include:
 
 System Explorer separates architecture organization from file management.
 
-![RemoveSystem](screenshots/RemoveSystem.png)
-
 When removing content you can choose between:
 
 ### Remove From System Explorer
@@ -254,6 +252,8 @@ This can be performed for:
 A confirmation dialog and checkbox are provided before files are permanently removed.
 
 This makes it possible to use System Explorer both as an architecture view and as a lightweight script management tool.
+
+![RemoveSystem](screenshots/RemoveSystem.png)
 
 ---
 
