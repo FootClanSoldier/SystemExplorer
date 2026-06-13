@@ -347,7 +347,7 @@ System Explorer is not intended to replace Godot's FileSystem dock.
 
 The goal is to provide a higher-level architectural view of your project, making it easier to navigate large C# codebases and organize systems according to how the game is structured rather than how files are stored on disk.
 
-## Final Notes
+## Future Development
 
 System Explorer has reached a point where I feel it has a strong foundation and covers the functionality I originally set out to build.
 
