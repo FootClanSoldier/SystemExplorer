@@ -233,6 +233,8 @@ System Explorer separates architecture organization from file management.
 
 When removing content you can choose between:
 
+![RemoveSystem](screenshots/RemoveSystem.png)
+
 ### Remove From System Explorer
 
 Removes the item from the System Explorer tree while keeping all files intact in your Godot project.
@@ -252,8 +254,6 @@ This can be performed for:
 A confirmation dialog and checkbox are provided before files are permanently removed.
 
 This makes it possible to use System Explorer both as an architecture view and as a lightweight script management tool.
-
-![RemoveSystem](screenshots/RemoveSystem.png)
 
 ---
 
