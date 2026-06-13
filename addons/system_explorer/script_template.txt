@@ -1,0 +1,9 @@
+using Godot;
+
+namespace MyNameSpace
+{
+	public sealed class {{CLASS_NAME}}
+	{
+
+	}
+}
