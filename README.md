@@ -5,10 +5,21 @@
 <h1 align="center">System Explorer</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Godot-4.0-blue" alt="Godot">
-  <img src="https://img.shields.io/badge/C%23-.NET-purple" alt="C#">
-  <img src="https://img.shields.io/badge/Version-1.0.0-green" alt="Version">
-  <img src="https://img.shields.io/badge/License-MIT-brightgreen" alt="License">
+  <a href="https://godotengine.org/">
+    <img src="https://img.shields.io/badge/Godot-4.0-blue" alt="Godot">
+  </a>
+
+  <a href="#about">
+    <img src="https://img.shields.io/badge/C%23-.NET-purple" alt="C#">
+  </a>
+
+  <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
+    <img src="https://img.shields.io/badge/Version-1.0.0-green" alt="Version">
+  </a>
+
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-brightgreen" alt="License">
+  </a>
 </p>
 
 > Architecture-focused navigation plugin for Godot C# projects.
