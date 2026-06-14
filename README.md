@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://godotengine.org/">
-    <img src="https://img.shields.io/badge/Godot-4.0-blue" alt="Godot">
+    <img src="https://img.shields.io/badge/Godot-4.6-blue" alt="Godot">
   </a>
 
   <a href="#about">
