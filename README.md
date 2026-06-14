@@ -1,10 +1,25 @@
-# System Explorer
+<p align="center">
+  <img src="icon.png" width="300" alt="System Explorer Logo">
+</p>
 
+<h1 align="center">System Explorer</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Godot-4.0-blue" alt="Godot">
+  <img src="https://img.shields.io/badge/C%23-.NET-purple" alt="C#">
+  <img src="https://img.shields.io/badge/Version-1.0.0-green" alt="Version">
+  <img src="https://img.shields.io/badge/License-MIT-brightgreen" alt="License">
+</p>
+
+> Architecture-focused navigation plugin for Godot C# projects.
+---
+
+# About
 System Explorer is a Godot C# editor plugin that provides an architecture-focused view of your project.
 
 Instead of navigating large projects through the FileSystem dock, you can organize scripts into custom systems and folders that reflect the architecture of your game.
 
-![System Explorer Overview](screenshots/overview.png)
+<img src="screenshots/overview.png" alt="System Explorer Overview">
 
 ---
 
