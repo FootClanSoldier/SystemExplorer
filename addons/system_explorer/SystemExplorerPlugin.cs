@@ -404,7 +404,7 @@ public sealed class {{CLASS_NAME}}
 				TreeItem folderItem = _tree.CreateItem(parent);
 				folderItem.SetText(0, part);
 				folderItem.SetIcon(0, _folderIcon);
-				folderItem.SetIconModulate(0,_folderColor);
+				folderItem.SetIconModulate(0, _folderColor);
 				folderItem.SetMetadata(0, $"folder::{systemName}::{currentPath}");
 				folderItem.Collapsed = true;
 				folders[currentPath] = folderItem;
