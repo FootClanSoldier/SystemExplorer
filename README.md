@@ -1,5 +1,7 @@
 <p align="center">
+	<a href="https://github.com/FootClanSoldier/SystemExplorer">
   <img src="icon.png" width="300" alt="System Explorer Logo">
+	</a>
 </p>
 
 <h1 align="center">System Explorer</h1>
