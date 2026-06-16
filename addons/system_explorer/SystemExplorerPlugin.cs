@@ -44,6 +44,10 @@ public partial class SystemExplorerPlugin : EditorPlugin
     private string _pendingMissingScriptEntry = "";
     private string _pendingMissingScriptPath = "";
 
+    private Texture2D _scriptIcon;
+    private Texture2D _systemIcon;
+    private Texture2D _folderIcon;
+
     private readonly Dictionary<string, List<string>> _systems = new();
     private readonly HashSet<string> _expandedItems = new();
     private readonly HashSet<string> _forcedExpandedItems = new();
@@ -54,6 +58,11 @@ public partial class SystemExplorerPlugin : EditorPlugin
     public override void _EnterTree()
     {
         DebugLogOperation("Enter Tree");
+
+        var editorTheme = EditorInterface.Singleton.GetEditorTheme();
+        _scriptIcon = editorTheme.GetIcon("CSharpScript", "EditorIcons");
+        _systemIcon = editorTheme.GetIcon("GDScript", "EditorIcons");
+        _folderIcon = editorTheme.GetIcon("Folder", "EditorIcons");
 
         EnsureScriptTemplateExists();
         BuildDock();
@@ -238,6 +247,7 @@ public sealed class {{CLASS_NAME}}
         {
             TreeItem systemItem = _tree.CreateItem(root);
             systemItem.SetText(0, system.Key);
+            systemItem.SetIcon(0, _systemIcon);
             systemItem.SetMetadata(0, $"system::{system.Key}");
             systemItem.Collapsed = true;
 
@@ -257,6 +267,7 @@ public sealed class {{CLASS_NAME}}
 
                 TreeItem scriptItem = _tree.CreateItem(parent);
                 scriptItem.SetText(0, GetScriptPathFromEntry(entry).GetFile());
+                scriptItem.SetIcon(0, _scriptIcon);
                 scriptItem.SetMetadata(0, $"script::{entry}");
             }
         }
@@ -389,6 +400,7 @@ public sealed class {{CLASS_NAME}}
             {
                 TreeItem folderItem = _tree.CreateItem(parent);
                 folderItem.SetText(0, part);
+                folderItem.SetIcon(0, _folderIcon);
                 folderItem.SetMetadata(0, $"folder::{systemName}::{currentPath}");
                 folderItem.Collapsed = true;
                 folders[currentPath] = folderItem;
