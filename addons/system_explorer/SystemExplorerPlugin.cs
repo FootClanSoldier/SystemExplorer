@@ -63,7 +63,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		var editorTheme = EditorInterface.Singleton.GetEditorTheme();
 		_scriptIcon = editorTheme.GetIcon("CSharpScript", "EditorIcons");
-		_systemIcon = editorTheme.GetIcon("GDScript", "EditorIcons");
+		_systemIcon = editorTheme.GetIcon("Environment", "EditorIcons");
 		_folderIcon = editorTheme.GetIcon("Folder", "EditorIcons");
 
 		EnsureScriptTemplateExists();
