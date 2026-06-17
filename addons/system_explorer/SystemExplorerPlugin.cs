@@ -19,6 +19,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextNewScript = 2;
 	private const int ContextRename = 3;
 	private const int ContextRemove = 4;
+	private const float ClickOpenDragThreshold = 6.0f;
 
 	private EditorDock _editorDock;
 	private VBoxContainer _dock;
@@ -41,6 +42,11 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _pendingRenameMetadata = "";
 	private string _pendingAddFolderMetadata = "";
 	private string _draggedMetadata = "";
+	private string _draggedSourceSystemName = "";
+	private string _draggedSourceFolderPath = "";
+	private bool _leftMousePressedOnSelectedScript;
+	private Vector2 _leftMousePressPosition;
+	private string _leftMousePressedMetadata = "";
 	private string _pendingMissingScriptEntry = "";
 	private string _pendingMissingScriptPath = "";
 
@@ -586,12 +592,15 @@ public sealed class {{CLASS_NAME}}
 
 	private void OnItemSelected()
 	{
-		TreeItem selectedItem = _tree.GetSelected();
+		OpenScriptFromTreeItem(_tree.GetSelected());
+	}
 
-		if (selectedItem == null)
+	private void OpenScriptFromTreeItem(TreeItem item)
+	{
+		if (item == null)
 			return;
 
-		string metadata = selectedItem.GetMetadata(0).AsString();
+		string metadata = item.GetMetadata(0).AsString();
 
 		if (!metadata.StartsWith("script::"))
 			return;
@@ -795,7 +804,7 @@ public sealed class {{CLASS_NAME}}
 		{
 			if (IsShiftPressed(mouseButton))
 			{
-				_draggedMetadata = "";
+				ClearDragState();
 
 				if (mouseButton.Pressed)
 					ToggleExpandedIfSystemOrFolder(item);
@@ -807,20 +816,36 @@ public sealed class {{CLASS_NAME}}
 			if (mouseButton.Pressed)
 			{
 				_draggedMetadata = item?.GetMetadata(0).AsString() ?? "";
+				_draggedSourceSystemName = item == null ? "" : GetSystemNameFromTreeItem(item);
+				_draggedSourceFolderPath = item == null ? "" : GetFolderPathFromTreeItem(item);
+				_leftMousePressPosition = mousePosition;
+				_leftMousePressedMetadata = _draggedMetadata;
+				_leftMousePressedOnSelectedScript = IsSelectedScriptItem(item);
 			}
 			else
 			{
 				if (string.IsNullOrWhiteSpace(_draggedMetadata) || item == null)
 				{
-					_draggedMetadata = "";
+					ClearDragState();
 					return;
 				}
 
-				string targetMetadata = item.GetMetadata(0).AsString();
+				string releaseMetadata = item.GetMetadata(0).AsString();
+				bool isClick =
+					_leftMousePressedOnSelectedScript
+					&& _leftMousePressedMetadata == releaseMetadata
+					&& _leftMousePressPosition.DistanceTo(mousePosition) <= ClickOpenDragThreshold;
 
-				MoveDraggedItem(_draggedMetadata, targetMetadata);
+				if (isClick)
+				{
+					OpenScriptFromTreeItem(item);
+					ClearDragState();
+					return;
+				}
 
-				_draggedMetadata = "";
+				MoveDraggedItem(_draggedMetadata, item);
+
+				ClearDragState();
 			}
 
 			return;
@@ -871,6 +896,19 @@ public sealed class {{CLASS_NAME}}
 			return;
 
 		item.Collapsed = !item.Collapsed;
+	}
+
+	private bool IsSelectedScriptItem(TreeItem item)
+	{
+		if (item == null)
+			return false;
+
+		if (_tree.GetSelected() != item)
+			return false;
+
+		string metadata = item.GetMetadata(0).AsString();
+
+		return metadata.StartsWith("script::");
 	}
 
 	private void SetContextMenuItemDisabled(int id, bool disabled)
@@ -1031,8 +1069,10 @@ public sealed class {{CLASS_NAME}}
 	#endregion
 
 	#region Drag and Drop Reordering
-	private void MoveDraggedItem(string draggedMetadata, string targetMetadata)
+	private void MoveDraggedItem(string draggedMetadata, TreeItem targetItem)
 	{
+		string targetMetadata = targetItem?.GetMetadata(0).AsString() ?? "";
+
 		DebugLogOperation(
 			"Drag Move Requested",
 			$"Dragged='{draggedMetadata}', Target='{targetMetadata}'"
@@ -1044,19 +1084,27 @@ public sealed class {{CLASS_NAME}}
 			return;
 		}
 
-		if (draggedMetadata == targetMetadata)
-		{
-			DebugLog("Drag Move cancelled: dragged and target metadata are identical.");
-			return;
-		}
-
 		bool moved = false;
 
 		if (draggedMetadata.StartsWith("system::") && targetMetadata.StartsWith("system::"))
 		{
+			if (draggedMetadata == targetMetadata)
+			{
+				DebugLog("Drag Move cancelled: dragged and target metadata are identical.");
+				return;
+			}
+
 			moved = MoveSystem(draggedMetadata, targetMetadata);
 		}
-		else if (IsSystemEntryMetadata(draggedMetadata) && IsSystemEntryMetadata(targetMetadata))
+		else if (draggedMetadata.StartsWith("script::") && IsValidScriptDropTargetMetadata(targetMetadata))
+		{
+			moved = MoveScriptToDropTarget(draggedMetadata, targetItem);
+		}
+		else if (
+			draggedMetadata != targetMetadata
+			&& IsSystemEntryMetadata(draggedMetadata)
+			&& IsSystemEntryMetadata(targetMetadata)
+		)
 		{
 			moved = MoveSystemEntry(draggedMetadata, targetMetadata);
 		}
@@ -1110,6 +1158,136 @@ public sealed class {{CLASS_NAME}}
 			_systems[system.Key] = system.Value;
 
 		DebugLogOperation("Move System Mutated", $"{draggedSystemName} -> {targetSystemName}");
+
+		return true;
+	}
+
+	private bool MoveScriptToDropTarget(string draggedMetadata, TreeItem targetItem)
+	{
+		if (targetItem == null)
+			return false;
+
+		string targetMetadata = targetItem.GetMetadata(0).AsString();
+
+		if (!IsValidScriptDropTargetMetadata(targetMetadata))
+			return false;
+
+		string draggedEntry = GetEntryFromMetadata(draggedMetadata);
+		string draggedScriptPath = GetScriptPathFromEntry(draggedEntry);
+
+		if (string.IsNullOrWhiteSpace(draggedEntry) || string.IsNullOrWhiteSpace(draggedScriptPath))
+			return false;
+
+		string sourceSystemName = _draggedSourceSystemName;
+
+		if (string.IsNullOrWhiteSpace(sourceSystemName))
+			sourceSystemName = FindSystemNameForEntry(draggedEntry);
+
+		string targetSystemName = GetSystemNameFromTreeItem(targetItem);
+		string targetFolderPath = GetDropFolderPathFromTargetItem(targetItem);
+		string targetEntry = targetMetadata.StartsWith("script::")
+			? GetEntryFromMetadata(targetMetadata)
+			: "";
+
+		if (string.IsNullOrWhiteSpace(sourceSystemName) || string.IsNullOrWhiteSpace(targetSystemName))
+		{
+			TryRecoverSystemsFromDisk("Move Script Resolve Systems");
+
+			if (string.IsNullOrWhiteSpace(sourceSystemName))
+				sourceSystemName = FindSystemNameForEntry(draggedEntry);
+
+			if (string.IsNullOrWhiteSpace(targetSystemName))
+				targetSystemName = GetSystemNameFromTreeItem(targetItem);
+		}
+
+		if (
+			!EnsureSystemsAvailable(
+				new[] { sourceSystemName, targetSystemName },
+				"Move Script"
+			)
+		)
+		{
+			return false;
+		}
+
+		List<string> sourceEntries = _systems[sourceSystemName];
+		List<string> targetEntries = _systems[targetSystemName];
+
+		int sourceIndex = sourceEntries.IndexOf(draggedEntry);
+
+		if (sourceIndex < 0)
+		{
+			if (!TryRecoverSystemsFromDisk("Move Script Source Entry"))
+				return false;
+
+			if (!_systems.ContainsKey(sourceSystemName) || !_systems.ContainsKey(targetSystemName))
+				return false;
+
+			sourceEntries = _systems[sourceSystemName];
+			targetEntries = _systems[targetSystemName];
+			sourceIndex = sourceEntries.IndexOf(draggedEntry);
+
+			if (sourceIndex < 0)
+				return false;
+		}
+
+		string newEntry = string.IsNullOrWhiteSpace(targetFolderPath)
+			? draggedScriptPath
+			: $"{targetFolderPath}|{draggedScriptPath}";
+
+		bool sameSystem = sourceSystemName == targetSystemName;
+		bool sameLocation = sameSystem && draggedEntry == newEntry;
+
+		if (sameLocation && !targetMetadata.StartsWith("script::"))
+			return false;
+
+		if (sameLocation && targetMetadata.StartsWith("script::") && draggedEntry == targetEntry)
+			return false;
+
+		int targetIndexBeforeRemove = targetMetadata.StartsWith("script::")
+			? targetEntries.IndexOf(targetEntry)
+			: -1;
+
+		if (targetMetadata.StartsWith("script::") && targetIndexBeforeRemove < 0)
+			return false;
+
+		sourceEntries.RemoveAt(sourceIndex);
+
+		if (targetMetadata.StartsWith("script::"))
+		{
+			if (sameSystem)
+				targetEntries = sourceEntries;
+
+			int targetIndexAfterRemove = targetEntries.IndexOf(targetEntry);
+
+			if (targetIndexAfterRemove < 0)
+				return false;
+
+			if (!targetEntries.Contains(newEntry))
+			{
+				bool moveDownInSameList = sameSystem && sourceIndex < targetIndexBeforeRemove;
+				int insertIndex = moveDownInSameList
+					? targetIndexAfterRemove + 1
+					: targetIndexAfterRemove;
+
+				targetEntries.Insert(insertIndex, newEntry);
+			}
+		}
+		else if (!targetEntries.Contains(newEntry))
+		{
+			int insertIndex = GetAppendIndexForScriptDrop(targetEntries, targetFolderPath);
+			targetEntries.Insert(insertIndex, newEntry);
+		}
+
+		if (string.IsNullOrWhiteSpace(targetFolderPath))
+			ForceExpandSystem(targetSystemName);
+		else
+			ForceExpandFolderPath(targetSystemName, targetFolderPath);
+
+		DebugLogOperation(
+			"Move Script Mutated",
+			$"{sourceSystemName}:{draggedEntry} -> {targetSystemName}:{newEntry}"
+		);
 
 		return true;
 	}
@@ -1179,6 +1357,37 @@ public sealed class {{CLASS_NAME}}
 		return metadata.StartsWith("folder::") || metadata.StartsWith("script::");
 	}
 
+	private static bool IsValidScriptDropTargetMetadata(string metadata)
+	{
+		return metadata.StartsWith("system::")
+			|| metadata.StartsWith("folder::")
+			|| metadata.StartsWith("script::");
+	}
+
+	private static int GetAppendIndexForScriptDrop(List<string> entries, string targetFolderPath)
+	{
+		for (int i = entries.Count - 1; i >= 0; i--)
+		{
+			string entry = entries[i];
+
+			if (entry.StartsWith("folder::"))
+				continue;
+
+			if (GetFolderPathFromEntry(entry) == targetFolderPath)
+				return i + 1;
+		}
+
+		if (!string.IsNullOrWhiteSpace(targetFolderPath))
+		{
+			int folderIndex = entries.IndexOf($"folder::{targetFolderPath}");
+
+			if (folderIndex >= 0)
+				return folderIndex + 1;
+		}
+
+		return entries.Count;
+	}
+
 	private string GetSystemNameFromEntryMetadata(string metadata)
 	{
 		if (metadata.StartsWith("folder::"))
@@ -1237,6 +1446,69 @@ public sealed class {{CLASS_NAME}}
 		}
 
 		return "";
+	}
+
+	private static string GetSystemNameFromTreeItem(TreeItem item)
+	{
+		TreeItem current = item;
+
+		while (current != null)
+		{
+			string metadata = current.GetMetadata(0).AsString();
+
+			if (metadata.StartsWith("system::"))
+				return metadata.Replace("system::", "");
+
+			if (metadata.StartsWith("folder::"))
+				return GetSystemNameFromMetadata(metadata);
+
+			current = current.GetParent();
+		}
+
+		return "";
+	}
+
+	private static string GetFolderPathFromTreeItem(TreeItem item)
+	{
+		TreeItem current = item;
+
+		while (current != null)
+		{
+			string metadata = current.GetMetadata(0).AsString();
+
+			if (metadata.StartsWith("folder::"))
+				return GetFolderPathFromMetadata(metadata);
+
+			current = current.GetParent();
+		}
+
+		return "";
+	}
+
+	private static string GetDropFolderPathFromTargetItem(TreeItem targetItem)
+	{
+		if (targetItem == null)
+			return "";
+
+		string targetMetadata = targetItem.GetMetadata(0).AsString();
+
+		if (targetMetadata.StartsWith("folder::"))
+			return GetFolderPathFromMetadata(targetMetadata);
+
+		if (targetMetadata.StartsWith("script::"))
+			return GetFolderPathFromEntry(GetEntryFromMetadata(targetMetadata));
+
+		return "";
+	}
+
+	private void ClearDragState()
+	{
+		_draggedMetadata = "";
+		_draggedSourceSystemName = "";
+		_draggedSourceFolderPath = "";
+		_leftMousePressedOnSelectedScript = false;
+		_leftMousePressPosition = Vector2.Zero;
+		_leftMousePressedMetadata = "";
 	}
 
 	#endregion
