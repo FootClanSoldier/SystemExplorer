@@ -19,6 +19,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextNewScript = 2;
 	private const int ContextRename = 3;
 	private const int ContextRemove = 4;
+	private const int ContextLinkScene = 5;
+	private const int ContextUnlinkScene = 6;
+	private const string LinkedSceneMarker = "||linkedScene::";
 	private const float ClickOpenDragThreshold = 6.0f;
 
 	private EditorDock _editorDock;
@@ -36,7 +39,10 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private LineEdit _addFolderInput;
 	private EditorFileDialog _createScriptDialog;
 	private EditorFileDialog _relinkScriptDialog;
+	private EditorFileDialog _linkSceneDialog;
+	private EditorFileDialog _relinkSceneDialog;
 	private ConfirmationDialog _missingScriptDialog;
+	private ConfirmationDialog _missingSceneDialog;
 
 	private string _pendingRemoveMetadata = "";
 	private string _pendingRenameMetadata = "";
@@ -49,8 +55,12 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _leftMousePressedMetadata = "";
 	private string _pendingMissingScriptEntry = "";
 	private string _pendingMissingScriptPath = "";
+	private string _pendingSceneLinkEntry = "";
+	private string _pendingMissingSceneEntry = "";
+	private string _pendingMissingScenePath = "";
 
 	private Texture2D _scriptIcon;
+	private Texture2D _sceneIcon;
 	private Texture2D _systemIcon;
 	private Texture2D _folderIcon;
 	private Color _systemColor = Color.FromHtml("#6495ED");
@@ -69,6 +79,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		var editorTheme = EditorInterface.Singleton.GetEditorTheme();
 		_scriptIcon = editorTheme.GetIcon("CSharpScript", "EditorIcons");
+		_sceneIcon = editorTheme.GetIcon("PackedScene", "EditorIcons");
 		_systemIcon = editorTheme.GetIcon("Environment", "EditorIcons");
 		_folderIcon = editorTheme.GetIcon("Folder", "EditorIcons");
 
@@ -96,7 +107,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-            @"using Godot;
+			@"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {
@@ -153,9 +164,25 @@ public sealed class {{CLASS_NAME}}
 			Title = "Relink C# Script"
 		};
 
+		_linkSceneDialog = new EditorFileDialog
+		{
+			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
+			Access = EditorFileDialog.AccessEnum.Resources,
+			Title = "Link Godot Scene"
+		};
+
+		_relinkSceneDialog = new EditorFileDialog
+		{
+			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
+			Access = EditorFileDialog.AccessEnum.Resources,
+			Title = "Relink Godot Scene"
+		};
+
 		_fileDialog.Filters = new[] { "*.cs ; C# Scripts" };
 		_createScriptDialog.Filters = new[] { "*.cs ; C# Scripts" };
 		_relinkScriptDialog.Filters = new[] { "*.cs ; C# Scripts" };
+		_linkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
+		_relinkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
 
 		_contextMenu = new PopupMenu();
 		_contextMenu.AddItem("New Folder", ContextAddFolder);
@@ -196,6 +223,16 @@ public sealed class {{CLASS_NAME}}
 
 		_missingScriptDialog.AddButton("Remove from Plugin", false, "remove_from_plugin");
 
+		_missingSceneDialog = new ConfirmationDialog
+		{
+			Title = "Scene Not Found",
+			DialogText = "The linked scene could not be found:",
+			MinSize = new Vector2I(520, 220),
+			OkButtonText = "Relink Scene"
+		};
+
+		_missingSceneDialog.AddButton("Remove Scene Link", false, "remove_scene_link");
+
 		_renameDialog = new AcceptDialog { Title = "Rename Item", MinSize = new Vector2I(350, 0) };
 
 		_renameInput = new LineEdit { PlaceholderText = "New name..." };
@@ -212,25 +249,38 @@ public sealed class {{CLASS_NAME}}
 
 		_createScriptDialog.FileSelected += OnCreateScriptFileSelected;
 		_relinkScriptDialog.FileSelected += OnRelinkScriptFileSelected;
+		_linkSceneDialog.FileSelected += OnLinkSceneFileSelected;
+		_relinkSceneDialog.FileSelected += OnRelinkSceneFileSelected;
 		_missingScriptDialog.Confirmed += OnMissingScriptRelinkPressed;
 		_missingScriptDialog.CustomAction += OnMissingScriptCustomAction;
+		_missingSceneDialog.Confirmed += OnMissingSceneRelinkPressed;
+		_missingSceneDialog.CustomAction += OnMissingSceneCustomAction;
 		_addSystemButton.Pressed += OnAddSystemPressed;
 		_tree.ItemSelected += OnItemSelected;
 		_tree.GuiInput += OnTreeGuiInput;
 		_fileDialog.FileSelected += OnScriptFileSelected;
 		_contextMenu.IdPressed += OnContextMenuIdPressed;
 		_removeDialog.Confirmed += OnRemoveConfirmed;
+		_removeDialog.WindowInput += OnRemoveDialogWindowInput;
+		_removeFromFilesystemCheckBox.GuiInput += OnRemoveDialogWindowInput;
 		_renameDialog.Confirmed += OnRenameConfirmed;
+		_renameDialog.WindowInput += OnRenameDialogWindowInput;
+		_renameInput.TextSubmitted += _ => ConfirmRenameDialogFromEnter();
 		_addFolderDialog.Confirmed += OnAddFolderConfirmed;
+		_addFolderDialog.WindowInput += OnAddFolderDialogWindowInput;
+		_addFolderInput.TextSubmitted += _ => ConfirmAddFolderDialogFromEnter();
 
 		_dock.AddChild(_systemNameInput);
 		_dock.AddChild(_addSystemButton);
 		_dock.AddChild(_tree);
 		_dock.AddChild(_fileDialog);
 		_dock.AddChild(_relinkScriptDialog);
+		_dock.AddChild(_linkSceneDialog);
+		_dock.AddChild(_relinkSceneDialog);
 		_dock.AddChild(_contextMenu);
 		_dock.AddChild(_removeDialog);
 		_dock.AddChild(_missingScriptDialog);
+		_dock.AddChild(_missingSceneDialog);
 		_dock.AddChild(_renameDialog);
 		_dock.AddChild(_addFolderDialog);
 		_dock.AddChild(_createScriptDialog);
@@ -275,8 +325,19 @@ public sealed class {{CLASS_NAME}}
 					: CreateFolderPath(systemItem, folders, system.Key, folderPath);
 
 				TreeItem scriptItem = _tree.CreateItem(parent);
-				scriptItem.SetText(0, GetScriptPathFromEntry(entry).GetFile());
-				scriptItem.SetIcon(0, _scriptIcon);
+				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+				string scriptPath = GetScriptPathFromEntry(entry);
+				string scriptText = scriptPath.GetFile();
+				string tooltipText = $"{scriptPath}";
+
+				if (!string.IsNullOrWhiteSpace(linkedScenePath))
+				{
+					tooltipText += $"\n{linkedScenePath}";
+				}
+
+				scriptItem.SetTooltipText(0, tooltipText);
+				scriptItem.SetText(0, scriptText);
+				scriptItem.SetIcon(0, string.IsNullOrWhiteSpace(linkedScenePath) ? _scriptIcon : _sceneIcon);
 				scriptItem.SetMetadata(0, $"script::{entry}");
 			}
 		}
@@ -691,9 +752,8 @@ public sealed class {{CLASS_NAME}}
 
 		string oldEntry = _pendingMissingScriptEntry;
 		string folderPath = GetFolderPathFromEntry(oldEntry);
-		string newEntry = string.IsNullOrWhiteSpace(folderPath)
-			? newScriptPath
-			: $"{folderPath}|{newScriptPath}";
+		string linkedScenePath = GetLinkedScenePathFromEntry(oldEntry);
+		string newEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath);
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
@@ -802,6 +862,13 @@ public sealed class {{CLASS_NAME}}
 
 		if (mouseButton.ButtonIndex == MouseButton.Left)
 		{
+			if (mouseButton.Pressed && mouseButton.DoubleClick && IsScriptItem(item))
+			{
+				OpenLinkedSceneFromTreeItem(item);
+				_tree.AcceptEvent();
+				return;
+			}
+
 			if (IsShiftPressed(mouseButton))
 			{
 				ClearDragState();
@@ -865,16 +932,7 @@ public sealed class {{CLASS_NAME}}
 		_pendingRenameMetadata = rightClickMetadata;
 		_pendingAddFolderMetadata = rightClickMetadata;
 
-		bool canRename =
-			rightClickMetadata.StartsWith("system::")
-			|| rightClickMetadata.StartsWith("folder::")
-			|| rightClickMetadata.StartsWith("script::");
-
-		bool canAddFolder =
-			rightClickMetadata.StartsWith("system::") || rightClickMetadata.StartsWith("folder::");
-
-		SetContextMenuItemDisabled(ContextRename, !canRename);
-		SetContextMenuItemDisabled(ContextAddFolder, !canAddFolder);
+		BuildContextMenuForMetadata(rightClickMetadata);
 
 		_contextMenu.Position = DisplayServer.MouseGetPosition();
 		_contextMenu.Popup();
@@ -911,6 +969,46 @@ public sealed class {{CLASS_NAME}}
 		return metadata.StartsWith("script::");
 	}
 
+	private static bool IsScriptItem(TreeItem item)
+	{
+		if (item == null)
+			return false;
+
+		string metadata = item.GetMetadata(0).AsString();
+		return metadata.StartsWith("script::");
+	}
+
+	private void BuildContextMenuForMetadata(string metadata)
+	{
+		_contextMenu.Clear();
+
+		bool isSystem = metadata.StartsWith("system::");
+		bool isFolder = metadata.StartsWith("folder::");
+		bool isScript = metadata.StartsWith("script::");
+
+		if (isSystem || isFolder)
+			_contextMenu.AddItem("New Folder", ContextAddFolder);
+
+		_contextMenu.AddItem("New Script", ContextNewScript);
+		_contextMenu.AddItem("Add Script", ContextAddScript);
+
+		if (isScript)
+		{
+			_contextMenu.AddSeparator();
+
+			string entry = metadata.Replace("script::", "");
+
+			if (string.IsNullOrWhiteSpace(GetLinkedScenePathFromEntry(entry)))
+				_contextMenu.AddItem("Link to Scene", ContextLinkScene);
+			else
+				_contextMenu.AddItem("Unlink from Scene", ContextUnlinkScene);
+		}
+
+		_contextMenu.AddSeparator();
+		_contextMenu.AddItem("Rename", ContextRename);
+		_contextMenu.AddItem("Remove", ContextRemove);
+	}
+
 	private void SetContextMenuItemDisabled(int id, bool disabled)
 	{
 		int index = _contextMenu.GetItemIndex(id);
@@ -944,6 +1042,14 @@ public sealed class {{CLASS_NAME}}
 
 			case ContextRemove:
 				OpenRemoveDialog();
+				break;
+
+			case ContextLinkScene:
+				OpenLinkSceneDialog();
+				break;
+
+			case ContextUnlinkScene:
+				UnlinkSceneFromPendingScript();
 				break;
 		}
 	}
@@ -994,6 +1100,235 @@ public sealed class {{CLASS_NAME}}
 			return;
 
 		dialog.GetOkButton()?.ReleaseFocus();
+	}
+
+	private void OnRemoveDialogWindowInput(InputEvent inputEvent)
+	{
+		if (!IsEnterPressed(inputEvent))
+			return;
+
+		ConfirmRemoveDialogFromEnter();
+	}
+
+	private void ConfirmRemoveDialogFromEnter()
+	{
+		if (_removeDialog == null || !_removeDialog.Visible)
+			return;
+
+		_removeDialog.Hide();
+		OnRemoveConfirmed();
+	}
+
+	private void OnRenameDialogWindowInput(InputEvent inputEvent)
+	{
+		if (!IsEnterPressed(inputEvent))
+			return;
+
+		ConfirmRenameDialogFromEnter();
+	}
+
+	private void ConfirmRenameDialogFromEnter()
+	{
+		if (_renameDialog == null || !_renameDialog.Visible)
+			return;
+
+		_renameDialog.Hide();
+		OnRenameConfirmed();
+	}
+
+	private void OnAddFolderDialogWindowInput(InputEvent inputEvent)
+	{
+		if (!IsEnterPressed(inputEvent))
+			return;
+
+		ConfirmAddFolderDialogFromEnter();
+	}
+
+	private void ConfirmAddFolderDialogFromEnter()
+	{
+		if (_addFolderDialog == null || !_addFolderDialog.Visible)
+			return;
+
+		_addFolderDialog.Hide();
+		OnAddFolderConfirmed();
+	}
+
+	private static bool IsEnterPressed(InputEvent inputEvent)
+	{
+		return inputEvent is InputEventKey keyEvent
+			&& keyEvent.Pressed
+			&& !keyEvent.Echo
+			&& (keyEvent.Keycode == Key.Enter || keyEvent.Keycode == Key.KpEnter);
+	}
+
+	#endregion
+
+	#region Scene Linking
+	private void OpenLinkSceneDialog()
+	{
+		if (string.IsNullOrWhiteSpace(_pendingRenameMetadata))
+			return;
+
+		if (!_pendingRenameMetadata.StartsWith("script::"))
+			return;
+
+		string entry = _pendingRenameMetadata.Replace("script::", "");
+		if (!IsScriptEntryValidOrOpenMissingDialog(entry))
+			return;
+
+		_pendingSceneLinkEntry = entry;
+		_linkSceneDialog.PopupCenteredRatio(0.8f);
+	}
+
+	private void OnLinkSceneFileSelected(string scenePath)
+	{
+		if (string.IsNullOrWhiteSpace(_pendingSceneLinkEntry))
+			return;
+
+		UpdateLinkedScenePath(_pendingSceneLinkEntry, scenePath);
+		_pendingSceneLinkEntry = "";
+	}
+
+	private void UnlinkSceneFromPendingScript()
+	{
+		if (string.IsNullOrWhiteSpace(_pendingRenameMetadata))
+			return;
+
+		if (!_pendingRenameMetadata.StartsWith("script::"))
+			return;
+
+		string entry = _pendingRenameMetadata.Replace("script::", "");
+		UpdateLinkedScenePath(entry, "");
+	}
+
+	private void OpenLinkedSceneFromTreeItem(TreeItem item)
+	{
+		if (item == null)
+			return;
+
+		string metadata = item.GetMetadata(0).AsString();
+
+		if (!metadata.StartsWith("script::"))
+			return;
+
+		string entry = metadata.Replace("script::", "");
+
+		if (!IsScriptEntryValidOrOpenMissingDialog(entry))
+			return;
+
+		string scriptPath = GetScriptPathFromEntry(entry);
+		string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+
+		if (string.IsNullOrWhiteSpace(linkedScenePath))
+		{
+			OpenScriptOrMissingDialog(entry, scriptPath);
+			return;
+		}
+
+		if (!FileAccess.FileExists(linkedScenePath))
+		{
+			OpenMissingSceneDialog(entry, linkedScenePath);
+			return;
+		}
+
+		EditorInterface.Singleton.OpenSceneFromPath(linkedScenePath);
+	}
+
+	private bool IsScriptEntryValidOrOpenMissingDialog(string entry)
+	{
+		string scriptPath = GetScriptPathFromEntry(entry);
+
+		if (!FileAccess.FileExists(scriptPath))
+		{
+			OpenMissingScriptDialog(entry, scriptPath);
+			return false;
+		}
+
+		Script script = ResourceLoader.Load<Script>(scriptPath);
+
+		if (script == null)
+		{
+			OpenMissingScriptDialog(entry, scriptPath);
+			return false;
+		}
+
+		return true;
+	}
+
+	private void OpenMissingSceneDialog(string entry, string scenePath)
+	{
+		_pendingMissingSceneEntry = entry;
+		_pendingMissingScenePath = scenePath;
+
+		_missingSceneDialog.DialogText =
+			$"Linked scene could not be found.\n\n{scenePath}";
+
+		_missingSceneDialog.PopupCentered();
+		CallDeferred(nameof(ReleaseMissingSceneDialogFocus));
+	}
+
+	private void ReleaseMissingSceneDialogFocus()
+	{
+		ReleaseDialogOkButtonFocus(_missingSceneDialog);
+	}
+
+	private void OnMissingSceneRelinkPressed()
+	{
+		if (string.IsNullOrWhiteSpace(_pendingMissingSceneEntry))
+			return;
+
+		_relinkSceneDialog.PopupCenteredRatio(0.8f);
+	}
+
+	private void OnMissingSceneCustomAction(StringName action)
+	{
+		if (action != "remove_scene_link")
+			return;
+
+		if (string.IsNullOrWhiteSpace(_pendingMissingSceneEntry))
+			return;
+
+		string entry = _pendingMissingSceneEntry;
+		_missingSceneDialog.Hide();
+		ClearMissingSceneState();
+		UpdateLinkedScenePath(entry, "");
+	}
+
+	private void OnRelinkSceneFileSelected(string newScenePath)
+	{
+		if (string.IsNullOrWhiteSpace(_pendingMissingSceneEntry))
+			return;
+
+		string entry = _pendingMissingSceneEntry;
+		ClearMissingSceneState();
+		UpdateLinkedScenePath(entry, newScenePath);
+	}
+
+	private void ClearMissingSceneState()
+	{
+		_pendingMissingSceneEntry = "";
+		_pendingMissingScenePath = "";
+	}
+
+	private bool UpdateLinkedScenePath(string oldEntry, string linkedScenePath)
+	{
+		string folderPath = GetFolderPathFromEntry(oldEntry);
+		string scriptPath = GetScriptPathFromEntry(oldEntry);
+		string newEntry = BuildScriptEntry(folderPath, scriptPath, linkedScenePath);
+
+		if (!ReplaceEntry(oldEntry, newEntry))
+		{
+			DebugLogOperation(
+				"Update Linked Scene cancelled: mutation failed",
+				$"{oldEntry} -> {newEntry}"
+			);
+			return false;
+		}
+
+		if (SaveSystems())
+			BuildTree();
+
+		return true;
 	}
 
 	#endregion
@@ -1231,9 +1566,8 @@ public sealed class {{CLASS_NAME}}
 				return false;
 		}
 
-		string newEntry = string.IsNullOrWhiteSpace(targetFolderPath)
-			? draggedScriptPath
-			: $"{targetFolderPath}|{draggedScriptPath}";
+		string linkedScenePath = GetLinkedScenePathFromEntry(draggedEntry);
+		string newEntry = BuildScriptEntry(targetFolderPath, draggedScriptPath, linkedScenePath);
 
 		bool sameSystem = sourceSystemName == targetSystemName;
 		bool sameLocation = sameSystem && draggedEntry == newEntry;
@@ -1967,9 +2301,8 @@ public sealed class {{CLASS_NAME}}
 
 				string folderPath = GetFolderPathFromEntry(entry);
 
-				string updatedEntry = string.IsNullOrWhiteSpace(folderPath)
-					? newScriptPath
-					: $"{folderPath}|{newScriptPath}";
+				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+				string updatedEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath);
 
 				updatedEntries.Add(updatedEntry);
 			}
@@ -2093,12 +2426,43 @@ public sealed class {{CLASS_NAME}}
 
 	private static string GetFolderPathFromEntry(string entry)
 	{
-		return entry.Contains("|") ? entry.Split("|")[0] : "";
+		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);
+		return entryWithoutLinkedScene.Contains("|") ? entryWithoutLinkedScene.Split("|")[0] : "";
 	}
 
 	private static string GetScriptPathFromEntry(string entry)
 	{
-		return entry.Contains("|") ? entry.Split("|")[1] : entry;
+		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);
+		return entryWithoutLinkedScene.Contains("|") ? entryWithoutLinkedScene.Split("|")[1] : entryWithoutLinkedScene;
+	}
+
+	private static string GetLinkedScenePathFromEntry(string entry)
+	{
+		if (string.IsNullOrWhiteSpace(entry) || !entry.Contains(LinkedSceneMarker))
+			return "";
+
+		string[] parts = entry.Split(LinkedSceneMarker, System.StringSplitOptions.None);
+		return parts.Length >= 2 ? parts[1] : "";
+	}
+
+	private static string GetEntryWithoutLinkedScene(string entry)
+	{
+		if (string.IsNullOrWhiteSpace(entry) || !entry.Contains(LinkedSceneMarker))
+			return entry;
+
+		return entry.Split(LinkedSceneMarker, System.StringSplitOptions.None)[0];
+	}
+
+	private static string BuildScriptEntry(string folderPath, string scriptPath, string linkedScenePath = "")
+	{
+		string entry = string.IsNullOrWhiteSpace(folderPath)
+			? scriptPath
+			: $"{folderPath}|{scriptPath}";
+
+		if (!string.IsNullOrWhiteSpace(linkedScenePath))
+			entry += $"{LinkedSceneMarker}{linkedScenePath}";
+
+		return entry;
 	}
 
 	private void NormalizeAllSystemEntries()
@@ -2205,10 +2569,7 @@ public sealed class {{CLASS_NAME}}
 
 		NormalizeAllSystemEntries();
 
-		string json = JsonSerializer.Serialize(
-			_systems,
-			new JsonSerializerOptions { WriteIndented = true }
-		);
+		string json = SerializeSystems();
 
 		using FileAccess file = FileAccess.Open(SavePath, FileAccess.ModeFlags.Write);
 		file.StoreString(json);
@@ -2261,7 +2622,7 @@ public sealed class {{CLASS_NAME}}
 
 		try
 		{
-			return JsonSerializer.Deserialize<Dictionary<string, List<string>>>(existingJson);
+			return DeserializeSystems(existingJson);
 		}
 		catch
 		{
@@ -2416,7 +2777,7 @@ public sealed class {{CLASS_NAME}}
 
 		try
 		{
-			return JsonSerializer.Deserialize<Dictionary<string, List<string>>>(existingJson);
+			return DeserializeSystems(existingJson);
 		}
 		catch (System.Exception exception)
 		{
@@ -2426,6 +2787,113 @@ public sealed class {{CLASS_NAME}}
 			);
 			return null;
 		}
+	}
+
+	private string SerializeSystems()
+	{
+		Dictionary<string, List<object>> serializedSystems = new();
+
+		foreach (KeyValuePair<string, List<string>> system in _systems)
+		{
+			List<object> serializedEntries = new();
+
+			foreach (string entry in system.Value)
+			{
+				if (entry.StartsWith("folder::"))
+				{
+					serializedEntries.Add(entry);
+					continue;
+				}
+
+				string scriptPath = GetScriptPathFromEntry(entry);
+				string folderPath = GetFolderPathFromEntry(entry);
+				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+
+				Dictionary<string, string> scriptEntry = new()
+				{
+					["name"] = scriptPath.GetFile(),
+					["path"] = scriptPath
+				};
+
+				if (!string.IsNullOrWhiteSpace(folderPath))
+					scriptEntry["folderPath"] = folderPath;
+
+				if (!string.IsNullOrWhiteSpace(linkedScenePath))
+					scriptEntry["linkedScenePath"] = linkedScenePath;
+
+				serializedEntries.Add(scriptEntry);
+			}
+
+			serializedSystems[system.Key] = serializedEntries;
+		}
+
+		return JsonSerializer.Serialize(
+			serializedSystems,
+			new JsonSerializerOptions { WriteIndented = true }
+		);
+	}
+
+	private Dictionary<string, List<string>> DeserializeSystems(string json)
+	{
+		Dictionary<string, List<string>> systems = new();
+
+		using JsonDocument document = JsonDocument.Parse(json);
+
+		if (document.RootElement.ValueKind != JsonValueKind.Object)
+			return systems;
+
+		foreach (JsonProperty systemProperty in document.RootElement.EnumerateObject())
+		{
+			List<string> entries = new();
+
+			if (systemProperty.Value.ValueKind != JsonValueKind.Array)
+			{
+				systems[systemProperty.Name] = entries;
+				continue;
+			}
+
+			foreach (JsonElement entryElement in systemProperty.Value.EnumerateArray())
+			{
+				if (entryElement.ValueKind == JsonValueKind.String)
+				{
+					string entry = entryElement.GetString() ?? "";
+
+					if (!string.IsNullOrWhiteSpace(entry))
+						entries.Add(entry);
+
+					continue;
+				}
+
+				if (entryElement.ValueKind != JsonValueKind.Object)
+					continue;
+
+				string folderPath = GetJsonString(entryElement, "folderPath");
+				string scriptPath = GetJsonString(entryElement, "path");
+				string linkedScenePath = GetJsonString(entryElement, "linkedScenePath");
+
+				if (string.IsNullOrWhiteSpace(scriptPath))
+					continue;
+
+				entries.Add(BuildScriptEntry(folderPath, scriptPath, linkedScenePath));
+			}
+
+			systems[systemProperty.Name] = entries;
+		}
+
+		return systems;
+	}
+
+	private static string GetJsonString(JsonElement element, string propertyName)
+	{
+		if (element.TryGetProperty(propertyName, out JsonElement value))
+			return value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+
+		string pascalName = char.ToUpperInvariant(propertyName[0]) + propertyName.Substring(1);
+
+		if (element.TryGetProperty(pascalName, out value))
+			return value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+
+		return "";
 	}
 
 	private void LoadSystems()
@@ -2447,9 +2915,7 @@ public sealed class {{CLASS_NAME}}
 			return;
 		}
 
-		Dictionary<string, List<string>> loaded = JsonSerializer.Deserialize<
-			Dictionary<string, List<string>>
-		>(json);
+		Dictionary<string, List<string>> loaded = DeserializeSystems(json);
 
 		if (loaded == null)
 		{
