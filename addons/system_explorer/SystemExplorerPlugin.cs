@@ -256,6 +256,7 @@ public sealed class {{CLASS_NAME}}
 		_missingSceneDialog.Confirmed += OnMissingSceneRelinkPressed;
 		_missingSceneDialog.CustomAction += OnMissingSceneCustomAction;
 		_addSystemButton.Pressed += OnAddSystemPressed;
+		_systemNameInput.TextSubmitted += _ => OnAddSystemPressed();
 		_tree.ItemSelected += OnItemSelected;
 		_tree.GuiInput += OnTreeGuiInput;
 		_fileDialog.FileSelected += OnScriptFileSelected;
