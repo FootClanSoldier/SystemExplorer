@@ -698,7 +698,7 @@ public sealed class {{CLASS_NAME}}
 		_pendingMissingScriptPath = scriptPath;
 
 		_missingScriptDialog.DialogText =
-			$"The script file could not be found: {scriptPath}\n\nIt may have been moved, renamed, or deleted outside System Explorer.";
+			$"The selected script could not be found:\n{scriptPath}\n\nIt may have been moved, renamed, or deleted outside System Explorer.";
 
 		_missingScriptDialog.PopupCentered();
 		CallDeferred(nameof(ReleaseMissingDialogFocus));
