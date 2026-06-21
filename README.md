@@ -1,8 +1,6 @@
 > 🚧 Preparing for release.
 >
-> Documentation and screenshots are currently being updated for the upcoming 1.1.1 release.
->
-> If you'd like to try the latest changes before the release is published, you can download the latest version of the addon folder directly from the `main` branch on GitHub.
+> Documentation and screenshots are currently being updated for the 1.1.1 release.
 
 
 <p align="center">
@@ -23,7 +21,7 @@
   </a>
 
   <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
-    <img src="https://img.shields.io/badge/Version-1.1.0-green" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.1.1-green" alt="Version">
   </a>
 
   <a href="./LICENSE">
