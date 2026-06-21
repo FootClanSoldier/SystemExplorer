@@ -1,3 +1,8 @@
+> 🚧 Preparing for release.
+>
+> Documentation is currently being updated for the upcoming 1.1.1 release.
+
+
 <p align="center">
 	<a href="https://github.com/FootClanSoldier/SystemExplorer">
   <img src="icon.png" width="300" alt="System Explorer Logo">
@@ -16,7 +21,7 @@
   </a>
 
   <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
-    <img src="https://img.shields.io/badge/Version-1.1.1-green" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.1.0-green" alt="Version">
   </a>
 
   <a href="./LICENSE">
