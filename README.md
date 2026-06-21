@@ -1,4 +1,4 @@
-> 🚧 Preparing for release.
+> 🚧 Documentation WIP
 >
 > Documentation and screenshots are currently being updated for the 1.1.1 release.
 
