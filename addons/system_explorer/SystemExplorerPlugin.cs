@@ -65,6 +65,14 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _sceneIcon;
 	private Texture2D _systemIcon;
 	private Texture2D _folderIcon;
+	private Texture2D _contextFolderIcon;
+	private Texture2D _contextNewScriptIcon;
+	private Texture2D _contextAddScriptIcon;
+	private Texture2D _contextLinkSceneIcon;
+	private Texture2D _contextUnlinkSceneIcon;
+	private Texture2D _contextRenameIcon;
+	private Texture2D _contextRemoveIcon;
+	private Texture2D _contextShowInFileSystemIcon;
 	private Color _systemColor = Color.FromHtml("#6495ED");
 	private Color _folderColor = Color.FromHtml("#F2C252");
 
@@ -80,10 +88,18 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		DebugLogOperation("Enter Tree");
 
 		var editorTheme = EditorInterface.Singleton.GetEditorTheme();
-		_scriptIcon = editorTheme.GetIcon("CSharpScript", "EditorIcons");
-		_sceneIcon = editorTheme.GetIcon("PackedScene", "EditorIcons");
-		_systemIcon = editorTheme.GetIcon("Environment", "EditorIcons");
-		_folderIcon = editorTheme.GetIcon("Folder", "EditorIcons");
+		_scriptIcon = GetEditorIcon(editorTheme, "CSharpScript");
+		_sceneIcon = GetEditorIcon(editorTheme, "PackedScene");
+		_systemIcon = GetEditorIcon(editorTheme, "Environment");
+		_folderIcon = GetEditorIcon(editorTheme, "Folder");
+		_contextFolderIcon = GetEditorIcon(editorTheme, "Folder");
+		_contextNewScriptIcon = GetEditorIcon(editorTheme, "Script");
+		_contextAddScriptIcon = GetEditorIcon(editorTheme, "ScriptCreate");
+		_contextLinkSceneIcon = GetEditorIcon(editorTheme, "PackedScene");
+		_contextUnlinkSceneIcon = GetEditorIcon(editorTheme, "Unlinked");
+		_contextRenameIcon = GetEditorIcon(editorTheme, "Rename");
+		_contextRemoveIcon = GetEditorIcon(editorTheme, "Remove");
+		_contextShowInFileSystemIcon = GetEditorIcon(editorTheme, "Filesystem");
 
 		EnsureScriptTemplateExists();
 		BuildDock();
@@ -187,12 +203,12 @@ public sealed class {{CLASS_NAME}}
 		_relinkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
 
 		_contextMenu = new PopupMenu();
-		_contextMenu.AddItem("New Folder", ContextAddFolder);
-		_contextMenu.AddItem("New Script", ContextNewScript);
-		_contextMenu.AddItem("Add Script", ContextAddScript);
+		AddContextMenuIconItem("New Folder", ContextAddFolder, _contextFolderIcon);
+		AddContextMenuIconItem("New Script", ContextNewScript, _contextNewScriptIcon);
+		AddContextMenuIconItem("Add Script", ContextAddScript, _contextAddScriptIcon);
 		_contextMenu.AddSeparator();
-		_contextMenu.AddItem("Rename", ContextRename);
-		_contextMenu.AddItem("Remove", ContextRemove);
+		AddContextMenuIconItem("Rename", ContextRename, _contextRenameIcon);
+		AddContextMenuIconItem("Remove", ContextRemove, _contextRemoveIcon);
 
 		_removeDialog = new ConfirmationDialog
 		{
@@ -994,10 +1010,10 @@ public sealed class {{CLASS_NAME}}
 		bool isScript = metadata.StartsWith("script::");
 
 		if (isSystem || isFolder)
-			_contextMenu.AddItem("New Folder", ContextAddFolder);
+			AddContextMenuIconItem("New Folder", ContextAddFolder, _contextFolderIcon);
 
-		_contextMenu.AddItem("New Script", ContextNewScript);
-		_contextMenu.AddItem("Add Script", ContextAddScript);
+		AddContextMenuIconItem("New Script", ContextNewScript, _contextNewScriptIcon);
+		AddContextMenuIconItem("Add Script", ContextAddScript, _contextAddScriptIcon);
 
 		if (isScript)
 		{
@@ -1006,19 +1022,45 @@ public sealed class {{CLASS_NAME}}
 			string entry = metadata.Replace("script::", "");
 
 			if (string.IsNullOrWhiteSpace(GetLinkedScenePathFromEntry(entry)))
-				_contextMenu.AddItem("Link to Scene", ContextLinkScene);
+				AddContextMenuIconItem("Link to Scene", ContextLinkScene, _contextLinkSceneIcon);
 			else
-				_contextMenu.AddItem("Unlink from Scene", ContextUnlinkScene);
+				AddContextMenuIconItem(
+					"Unlink from Scene",
+					ContextUnlinkScene,
+					_contextUnlinkSceneIcon
+				);
 		}
 
 		_contextMenu.AddSeparator();
-		_contextMenu.AddItem("Rename", ContextRename);
-		_contextMenu.AddItem("Remove", ContextRemove);
+		AddContextMenuIconItem("Rename", ContextRename, _contextRenameIcon);
+		AddContextMenuIconItem("Remove", ContextRemove, _contextRemoveIcon);
 		if (isScript)
 		{
 			_contextMenu.AddSeparator();
-			_contextMenu.AddItem("Open File Path", ContextShowInFileManager);
-		} //Open File Path
+			AddContextMenuIconItem(
+				"Open File Path",
+				ContextShowInFileManager,
+				_contextShowInFileSystemIcon
+			);
+		}
+	}
+
+	private static Texture2D GetEditorIcon(Theme editorTheme, string iconName)
+	{
+		return editorTheme.HasIcon(iconName, "EditorIcons")
+		  ? editorTheme.GetIcon(iconName, "EditorIcons")
+		  : null;
+	}
+
+	private void AddContextMenuIconItem(string label, int id, Texture2D icon)
+	{
+		if (icon == null)
+		{
+			_contextMenu.AddItem(label, id);
+			return;
+		}
+
+		_contextMenu.AddIconItem(icon, label, id);
 	}
 
 	private void SetContextMenuItemDisabled(int id, bool disabled)
