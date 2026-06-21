@@ -21,6 +21,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextRemove = 4;
 	private const int ContextLinkScene = 5;
 	private const int ContextUnlinkScene = 6;
+	private const int ContextShowInFileManager = 7;
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const float ClickOpenDragThreshold = 6.0f;
 
@@ -47,6 +48,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _pendingRemoveMetadata = "";
 	private string _pendingRenameMetadata = "";
 	private string _pendingAddFolderMetadata = "";
+	private string _pendingShowInFileManagerMetadata = "";
 	private string _draggedMetadata = "";
 	private string _draggedSourceSystemName = "";
 	private string _draggedSourceFolderPath = "";
@@ -107,7 +109,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-			@"using Godot;
+            @"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {
@@ -338,7 +340,10 @@ public sealed class {{CLASS_NAME}}
 
 				scriptItem.SetTooltipText(0, tooltipText);
 				scriptItem.SetText(0, scriptText);
-				scriptItem.SetIcon(0, string.IsNullOrWhiteSpace(linkedScenePath) ? _scriptIcon : _sceneIcon);
+				scriptItem.SetIcon(
+					0,
+					string.IsNullOrWhiteSpace(linkedScenePath) ? _scriptIcon : _sceneIcon
+				);
 				scriptItem.SetMetadata(0, $"script::{entry}");
 			}
 		}
@@ -932,6 +937,7 @@ public sealed class {{CLASS_NAME}}
 		_pendingRemoveMetadata = rightClickMetadata;
 		_pendingRenameMetadata = rightClickMetadata;
 		_pendingAddFolderMetadata = rightClickMetadata;
+		_pendingShowInFileManagerMetadata = rightClickMetadata;
 
 		BuildContextMenuForMetadata(rightClickMetadata);
 
@@ -1008,6 +1014,11 @@ public sealed class {{CLASS_NAME}}
 		_contextMenu.AddSeparator();
 		_contextMenu.AddItem("Rename", ContextRename);
 		_contextMenu.AddItem("Remove", ContextRemove);
+		if (isScript)
+		{
+			_contextMenu.AddSeparator();
+			_contextMenu.AddItem("Open File Path", ContextShowInFileManager);
+		} //Open File Path
 	}
 
 	private void SetContextMenuItemDisabled(int id, bool disabled)
@@ -1052,7 +1063,39 @@ public sealed class {{CLASS_NAME}}
 			case ContextUnlinkScene:
 				UnlinkSceneFromPendingScript();
 				break;
+
+			case ContextShowInFileManager:
+				ShowPendingScriptInFileManager();
+				break;
 		}
+	}
+
+	private void ShowPendingScriptInFileManager()
+	{
+		if (string.IsNullOrWhiteSpace(_pendingShowInFileManagerMetadata))
+			return;
+
+		if (!_pendingShowInFileManagerMetadata.StartsWith("script::"))
+			return;
+
+		string entry = _pendingShowInFileManagerMetadata.Replace("script::", "");
+		string scriptPath = GetScriptPathFromEntry(entry);
+
+		if (!FileAccess.FileExists(scriptPath))
+		{
+			OpenMissingScriptDialog(entry, scriptPath);
+			return;
+		}
+
+		string globalScriptPath = ProjectSettings.GlobalizePath(scriptPath);
+
+		if (string.IsNullOrWhiteSpace(globalScriptPath))
+		{
+			GD.PushWarning($"Could not resolve script path: {scriptPath}");
+			return;
+		}
+
+		OS.ShellShowInFileManager(globalScriptPath, false);
 	}
 
 	private void OpenRemoveDialog()
@@ -1261,8 +1304,7 @@ public sealed class {{CLASS_NAME}}
 		_pendingMissingSceneEntry = entry;
 		_pendingMissingScenePath = scenePath;
 
-		_missingSceneDialog.DialogText =
-			$"Linked scene could not be found.\n\n{scenePath}";
+		_missingSceneDialog.DialogText = $"Linked scene could not be found.\n\n{scenePath}";
 
 		_missingSceneDialog.PopupCentered();
 		CallDeferred(nameof(ReleaseMissingSceneDialogFocus));
@@ -1432,7 +1474,10 @@ public sealed class {{CLASS_NAME}}
 
 			moved = MoveSystem(draggedMetadata, targetMetadata);
 		}
-		else if (draggedMetadata.StartsWith("script::") && IsValidScriptDropTargetMetadata(targetMetadata))
+		else if (
+			draggedMetadata.StartsWith("script::")
+			&& IsValidScriptDropTargetMetadata(targetMetadata)
+		)
 		{
 			moved = MoveScriptToDropTarget(draggedMetadata, targetItem);
 		}
@@ -1525,7 +1570,10 @@ public sealed class {{CLASS_NAME}}
 			? GetEntryFromMetadata(targetMetadata)
 			: "";
 
-		if (string.IsNullOrWhiteSpace(sourceSystemName) || string.IsNullOrWhiteSpace(targetSystemName))
+		if (
+			string.IsNullOrWhiteSpace(sourceSystemName)
+			|| string.IsNullOrWhiteSpace(targetSystemName)
+		)
 		{
 			TryRecoverSystemsFromDisk("Move Script Resolve Systems");
 
@@ -1536,12 +1584,7 @@ public sealed class {{CLASS_NAME}}
 				targetSystemName = GetSystemNameFromTreeItem(targetItem);
 		}
 
-		if (
-			!EnsureSystemsAvailable(
-				new[] { sourceSystemName, targetSystemName },
-				"Move Script"
-			)
-		)
+		if (!EnsureSystemsAvailable(new[] { sourceSystemName, targetSystemName }, "Move Script"))
 		{
 			return false;
 		}
@@ -2434,7 +2477,9 @@ public sealed class {{CLASS_NAME}}
 	private static string GetScriptPathFromEntry(string entry)
 	{
 		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);
-		return entryWithoutLinkedScene.Contains("|") ? entryWithoutLinkedScene.Split("|")[1] : entryWithoutLinkedScene;
+		return entryWithoutLinkedScene.Contains("|")
+		  ? entryWithoutLinkedScene.Split("|")[1]
+		  : entryWithoutLinkedScene;
 	}
 
 	private static string GetLinkedScenePathFromEntry(string entry)
@@ -2454,7 +2499,11 @@ public sealed class {{CLASS_NAME}}
 		return entry.Split(LinkedSceneMarker, System.StringSplitOptions.None)[0];
 	}
 
-	private static string BuildScriptEntry(string folderPath, string scriptPath, string linkedScenePath = "")
+	private static string BuildScriptEntry(
+		string folderPath,
+		string scriptPath,
+		string linkedScenePath = ""
+	)
 	{
 		string entry = string.IsNullOrWhiteSpace(folderPath)
 			? scriptPath
@@ -2810,11 +2859,8 @@ public sealed class {{CLASS_NAME}}
 				string folderPath = GetFolderPathFromEntry(entry);
 				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
 
-				Dictionary<string, string> scriptEntry = new()
-				{
-					["name"] = scriptPath.GetFile(),
-					["path"] = scriptPath
-				};
+				Dictionary<string, string> scriptEntry =
+					new() { ["name"] = scriptPath.GetFile(), ["path"] = scriptPath };
 
 				if (!string.IsNullOrWhiteSpace(folderPath))
 					scriptEntry["folderPath"] = folderPath;
@@ -2861,7 +2907,6 @@ public sealed class {{CLASS_NAME}}
 
 					if (!string.IsNullOrWhiteSpace(entry))
 						entries.Add(entry);
-
 					continue;
 				}
 
