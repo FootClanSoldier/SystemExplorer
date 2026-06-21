@@ -16,7 +16,7 @@
   </a>
 
   <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
-    <img src="https://img.shields.io/badge/Version-1.1.0-green" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.1.1-green" alt="Version">
   </a>
 
   <a href="./LICENSE">
@@ -70,220 +70,117 @@ Rather than organizing code by where files happen to live on disk, System Explor
 
 # Features
 
-## Architecture-Focused Navigation
+System Explorer is designed to provide an architecture-focused view of large Godot C# projects.
 
-Create custom top-level systems that represent the architecture of your game.
+Instead of navigating deep folder structures through the FileSystem dock, you can organize scripts into systems and folders that reflect how your game is actually structured.
 
-Example:
+---
+
+## Organization
+
+<img src="screenshots/organization.png" alt="Systems">
+
+System Explorer supports:
+
+* Create systems
+* Create folders
+* Add existing scripts
+* Create new scripts
+* Rename items
+* Remove items
+* Drag & drop organization
+
+Systems and folders are virtual organization layers and do not require changes to your physical project structure.
+
+---
+
+## Navigation
+
+Navigate your project from an architectural perspective rather than relying solely on file locations.
+
+Features include:
+
+* Architecture-focused project navigation
+* Quick script access
+* Open File Path
+* Reopen already selected scripts
+* Expansion state persistence
+
+This makes it easier to move between major systems such as:
 
 ```text
 Core
-Sound
 GameFlow
+Sound
 Player
 UI
 ```
 
-This makes it easy to navigate large projects from an architectural perspective instead of relying solely on the FileSystem dock.
+without navigating through deep directory trees.
 
 ---
 
-## Systems
+## Scene Integration
 
-Supports:
+Connect C# architecture directly to the Godot scenes that use those scripts.
 
-* Create systems
-* Rename systems
-* Delete systems
-* Reorder systems using drag & drop
+Features include:
 
-Example:
+* Link scripts to scenes
+* Unlink scene associations
+* Open linked scenes directly
+* Scene recovery support if scenes are moved or deleted
 
-```text
-AppRoot
-Sound
-GameFlow
-Player
-UI
-```
+Double-clicking a linked script automatically opens both the script and its associated scene.
 
-Useful for mirroring initialization order, application flow, or major game systems.
+Scene links are stored in `systems.json` and persist between editor sessions.
 
 ---
 
-## Folders
+## Workflow Improvements
+Several quality-of-life features help speed up common workflows:
 
-Supports:
+* Script templates
+* Script tooltips
+* Context menus
+* Keyboard shortcuts
+* Expansion state persistence
 
-* Create folders
-* Rename folders
-* Delete folders
-* Reorder folders using drag & drop
+### Keyboard Workflow
 
-Example:
+Several dialogs and input fields support confirming actions by pressing **Enter**.
 
-```text
-Player
-├── Composition
-├── Coordination
-└── Modules
-```
+This currently applies to:
 
-Folders are virtual organization layers inside System Explorer and do not require changes to your physical folder structure.
+* Rename dialogs
+* Delete confirmation dialogs
+* Create Folder dialogs
+* Add System input field
 
----
+When entering a new system name, pressing **Enter** performs the same action as clicking the **Add System** button.
 
-## Scripts
+### Quick Navigation
 
-Supports:
+* **Shift + Click** a system or folder to instantly expand or collapse its contents.
+* **Shift + Delete** opens the delete dialog for the selected item.
+* Expansion state is automatically remembered between common operations.
 
-* Add existing scripts
-* Create new scripts
-* Rename scripts
-* Remove scripts from System Explorer
-* Remove scripts from System Explorer + Delete from FileSystem
-* Reorder scripts using drag & drop
-
-Selecting a script opens it in your configured script editor.
-
----
-
-## Create New Scripts
-
-Create new scripts directly from the plugin.
-
-New scripts are:
-
-* Created in the Godot FileSystem
-* Automatically added to the System Explorer tree
-* Generated using customizable script templates
-
----
-
-## Script Templates
-
-New scripts are generated using:
-
-```text
-addons/system_explorer/script_template.txt
-```
-
-You can customize this template to match your coding style, namespaces, project structure, or preferred class layout.
-
-The placeholder:
-
-```text
-{{CLASS_NAME}}
-```
-
-is automatically replaced with the script file name.
-
-Example:
-
-```csharp
-using Godot;
-
-namespace MyNamespace
-{
-	public sealed class {{CLASS_NAME}}
-	{
-
-	}
-}
-```
-
-If no template file is found, System Explorer falls back to a built-in default template.
-
----
-
-## Drag & Drop Organization
-
-![DragAndDrop](screenshots/drag_drop.gif)
-
-Supports drag & drop reordering for:
-
-* Systems
-* Folders
-* Scripts
-
-Reorder systems, folders, and scripts directly in the tree view using drag & drop.
-
-This makes it easy to keep architecture and script flow organized without manually editing configuration files.
-
----
-
-## Expansion State Persistence
-
-System Explorer remembers which systems and folders are expanded.
-
-Expansion state is preserved when:
-
-* Rebuilding the tree
-* Creating scripts
-* Creating folders
-* Renaming systems
-* Renaming folders
-
----
-
-## Quick Navigation
-
-### Shift + Click
-
-Hold:
-
-```text
-Shift
-```
-
-and click a system or folder to quickly expand or collapse it.
-
-While Shift is held, drag & drop is temporarily disabled to prevent accidental reordering.
-
----
-
-## Context Menus
-![ContextMenu](screenshots/context_menu.png)
+### Context Menus
 
 Right-click systems, folders, and scripts for quick actions.
 
-Examples include:
+Available actions include:
 
 * New Folder
 * New Script
 * Add Script
+* Link to Scene
+* Unlink from Scene
 * Rename
 * Remove
+* Open File Path
 
----
-
-## Removal Options
-
-System Explorer separates architecture organization from file management.
-
-When removing content you can choose between:
-
-![RemoveSystem](screenshots/RemoveSystem.png)
-
-### Remove From System Explorer
-
-Removes the item from the System Explorer tree while keeping all files intact in your Godot project.
-
-Useful when reorganizing architecture views without affecting the actual project files.
-
-### Remove From System Explorer + Delete From FileSystem
-
-Removes the item from the System Explorer tree and permanently deletes the associated script files from disk.
-
-This can be performed for:
-
-* Individual scripts
-* Entire folders
-* Entire systems
-
-A confirmation dialog and checkbox are provided before files are permanently removed.
-
-This makes it possible to use System Explorer both as an architecture view and as a lightweight script management tool.
+These workflow improvements help reduce unnecessary mouse movement and make navigating larger projects faster.
 
 ---
 
@@ -324,9 +221,45 @@ Project
 
 ---
 
+## Script Templates
+
+New scripts are generated using:
+
+```text
+addons/system_explorer/script_template.txt
+```
+
+You can customize this template to match your coding style, namespaces, project structure, or preferred class layout.
+
+The placeholder:
+
+```text
+{{CLASS_NAME}}
+```
+
+is automatically replaced with the script file name.
+
+Example:
+
+```csharp
+using Godot;
+
+namespace MyNamespace
+{
+	public sealed class {{CLASS_NAME}}
+	{
+
+	}
+}
+```
+
+If no template file is found, System Explorer falls back to a built-in default template.
+
+---
+
 # Data Storage
 
-System Explorer stores its structure in:
+System Explorer stores its configuration in:
 
 ```text
 addons/system_explorer/systems.json
@@ -340,38 +273,23 @@ This file can safely be committed to source control.
 
 ## Godot Editor Cache Warnings
 
-When deleting scripts from the filesystem through the plugin (using the Remove from FileSystem checkbox), Godot may occasionally display errors similar to:
+When deleting scripts from the filesystem through the plugin, Godot may occasionally display warnings related to scripts that no longer exist.
 
-```text
-Cannot open file 'res://Example.cs'
-Failed loading resource
-```
+These warnings originate from Godot's internal editor cache and do not affect plugin functionality.
 
-These messages originate from Godot's internal editor cache attempting to reload a script that no longer exists.
-
-This does not affect plugin functionality and typically disappears after rebuilding or reopening the project.
-
-## Rare Script Creation Issue
-
-In rare cases, when creating a new script from System Explorer, the script file may be created successfully in the Godot FileSystem but not automatically added to the System Explorer tree.
-
-This issue has been difficult to reproduce consistently and is planned to be investigated further in a future update.
-
-If this happens, restarting Godot usually resolves the issue.
-
-If you are able to reproduce this problem or notice a pattern in when it occurs, bug reports with reproduction steps are greatly appreciated.
+They typically disappear after rebuilding or reopening the project.
 
 ---
 
 # Future Ideas
 
-* Beautify individual scripts
-* Beautify folders
-* Beautify systems
 * Custom icons
 * Multiple architecture views
 * Advanced search
 * Namespace generation helpers
+* Beautify systems
+* Beautify folders
+* Beautify scripts
 
 ---
 
@@ -381,12 +299,14 @@ System Explorer is not intended to replace Godot's FileSystem dock.
 
 The goal is to provide a higher-level architectural view of your project, making it easier to navigate large C# codebases and organize systems according to how the game is structured rather than how files are stored on disk.
 
+For more detailed usage information and future advanced features, dedicated documentation may be added separately from the README.
+
 ---
 
 # Feedback
 
-System Explorer has reached a point where I feel it has a strong foundation and covers the functionality I originally set out to build.
-
-Most future updates will likely be driven by real-world usage, bug reports, and community feedback.
+System Explorer has reached a point where it provides a solid foundation for navigating and organizing larger Godot C# projects.
+Future updates will primarily be driven by real-world usage, bug reports, and community feedback.
 
 Feedback, suggestions, bug reports, and feature requests are always welcome and appreciated.
+
