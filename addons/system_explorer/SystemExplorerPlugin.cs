@@ -12,7 +12,10 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string ScriptTemplatePath = "res://addons/system_explorer/script_template.txt";
 
 	// Enable only when investigating editor state/save issues.
-	private const bool DebugState = false;
+	private const bool DebugState = true;
+	
+	// Enable or disable icons in the context menu
+	private const bool EnableContextMenuIcons = true;
 
 	private const int ContextAddFolder = 0;
 	private const int ContextAddScript = 1;
@@ -1054,7 +1057,7 @@ public sealed class {{CLASS_NAME}}
 
 	private void AddContextMenuIconItem(string label, int id, Texture2D icon)
 	{
-		if (icon == null)
+		if (!EnableContextMenuIcons || icon == null)
 		{
 			_contextMenu.AddItem(label, id);
 			return;
