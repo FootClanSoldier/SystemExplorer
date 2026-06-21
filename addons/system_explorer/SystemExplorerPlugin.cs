@@ -12,7 +12,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string ScriptTemplatePath = "res://addons/system_explorer/script_template.txt";
 
 	// Enable only when investigating editor state/save issues.
-	private const bool DebugState = true;
+	private const bool DebugState = false;
 	
 	// Enable or disable icons in the context menu
 	private const bool EnableContextMenuIcons = true;
