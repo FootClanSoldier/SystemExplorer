@@ -1,6 +1,8 @@
 > 🚧 Preparing for release.
 >
-> Documentation is currently being updated for the upcoming 1.1.1 release.
+> Documentation and screenshots are currently being updated for the upcoming 1.1.1 release.
+>
+> If you'd like to try the latest changes before the release is published, you can download the latest version of the addon folder directly from the `main` branch on GitHub.
 
 
 <p align="center">
