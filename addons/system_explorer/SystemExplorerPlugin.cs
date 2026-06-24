@@ -13,7 +13,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 	// Enable only when investigating editor state/save issues.
 	private const bool DebugState = false;
-
+	private const int SystemNameMaxLength = 32;
 	private const int ContextAddFolder = 0;
 	private const int ContextAddScript = 1;
 	private const int ContextNewScript = 2;
@@ -25,11 +25,13 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const float ClickOpenDragThreshold = 6.0f;
 	private const float ScriptFilterRightIconClickablePadding = 12.0f;
+	private const float SystemNameEnterHintWidth = 54.0f;
+	private const float SystemNameEnterHintRightPadding = 50.0f;
 
 	private EditorDock _editorDock;
 	private VBoxContainer _dock;
 	private LineEdit _systemNameInput;
-	private Button _addSystemButton;
+	private Label _systemNameEnterHint;
 	private LineEdit _scriptFilterInput;
 	private Tree _tree;
 	private EditorFileDialog _fileDialog;
@@ -81,9 +83,11 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 	#endregion
 
+
 	#region Lifecycle and Dock Setup
 	public override void _EnterTree()
 	{
+		
 		DebugLogOperation("Enter Tree");
 
 		var editorTheme = EditorInterface.Singleton.GetEditorTheme();
@@ -149,11 +153,16 @@ public sealed class {{CLASS_NAME}}
 	{
 		_dock = new VBoxContainer { Name = "System Explorer" };
 
-		_systemNameInput = new LineEdit { PlaceholderText = "System name..." };
-		_addSystemButton = new Button { Text = "Add System" };
-		_scriptFilterInput = new LineEdit { PlaceholderText = "Filter scripts..." };
+		_systemNameInput = new LineEdit { 
+			PlaceholderText = "System Name", 
+			MaxLength = SystemNameMaxLength
+			};
+		_systemNameEnterHint = CreateSystemNameEnterHint();
+		_systemNameInput.AddChild(_systemNameEnterHint);
+		UpdateSystemNameEnterHintVisibility(_systemNameInput.Text);
+		_scriptFilterInput = new LineEdit { PlaceholderText = "Filter Scripts" };
 		UpdateScriptFilterSearchIconVisibility(_scriptFilterInput.Text);
-
+		
 		_tree = new Tree { HideRoot = true, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
 
 		_fileDialog = new EditorFileDialog
@@ -268,7 +277,7 @@ public sealed class {{CLASS_NAME}}
 		_missingScriptDialog.CustomAction += OnMissingScriptCustomAction;
 		_missingSceneDialog.Confirmed += OnMissingSceneRelinkPressed;
 		_missingSceneDialog.CustomAction += OnMissingSceneCustomAction;
-		_addSystemButton.Pressed += OnAddSystemPressed;
+		_systemNameInput.TextChanged += OnSystemNameTextChanged;
 		_systemNameInput.TextSubmitted += _ => OnAddSystemPressed();
 		_scriptFilterInput.TextChanged += OnScriptFilterTextChanged;
 		_scriptFilterInput.GuiInput += OnScriptFilterInputGuiInput;
@@ -288,7 +297,6 @@ public sealed class {{CLASS_NAME}}
 		_addFolderInput.TextSubmitted += _ => ConfirmAddFolderDialogFromEnter();
 
 		_dock.AddChild(_systemNameInput);
-		_dock.AddChild(_addSystemButton);
 		_dock.AddChild(_scriptFilterInput);
 		_dock.AddChild(_tree);
 		_dock.AddChild(_fileDialog);
@@ -302,6 +310,40 @@ public sealed class {{CLASS_NAME}}
 		_dock.AddChild(_renameDialog);
 		_dock.AddChild(_addFolderDialog);
 		_dock.AddChild(_createScriptDialog);
+	}
+
+	private Label CreateSystemNameEnterHint()
+	{
+		var enterHint = new Label
+		{//⏎↵
+			Text = "⏎ Enter",
+			HorizontalAlignment = HorizontalAlignment.Right,
+			VerticalAlignment = VerticalAlignment.Center,
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+			Visible = false
+		};
+
+		enterHint.AddThemeColorOverride("font_color", new Color(1.0f, 1.0f, 1.0f, 0.45f));
+		enterHint.SetAnchorsPreset(Control.LayoutPreset.RightWide);
+		enterHint.OffsetLeft = -SystemNameEnterHintWidth - SystemNameEnterHintRightPadding;
+		enterHint.OffsetRight = -SystemNameEnterHintRightPadding;
+		enterHint.OffsetTop = 0.0f;
+		enterHint.OffsetBottom = 0.0f;
+
+		return enterHint;
+	}
+
+	private void OnSystemNameTextChanged(string text)
+	{
+		UpdateSystemNameEnterHintVisibility(text);
+	}
+
+	private void UpdateSystemNameEnterHintVisibility(string text)
+	{
+		if (_systemNameEnterHint == null)
+			return;
+
+		_systemNameEnterHint.Visible = !string.IsNullOrWhiteSpace(text);
 	}
 
 	#endregion
@@ -806,6 +848,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 
 		_systemNameInput.Text = "";
+		UpdateSystemNameEnterHintVisibility(_systemNameInput.Text);
 		ForceExpandSystem(systemName);
 
 		if (SaveSystems())
