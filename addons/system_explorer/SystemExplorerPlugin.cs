@@ -24,11 +24,13 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextShowInFileManager = 7;
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const float ClickOpenDragThreshold = 6.0f;
+	private const float ScriptFilterRightIconClickablePadding = 12.0f;
 
 	private EditorDock _editorDock;
 	private VBoxContainer _dock;
 	private LineEdit _systemNameInput;
 	private Button _addSystemButton;
+	private LineEdit _scriptFilterInput;
 	private Tree _tree;
 	private EditorFileDialog _fileDialog;
 	private PopupMenu _contextMenu;
@@ -60,17 +62,22 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _pendingSceneLinkEntry = "";
 	private string _pendingMissingSceneEntry = "";
 	private string _pendingMissingScenePath = "";
+	private string _selectedScriptEntryFromFilter = "";
+	private bool _isFilteringScripts;
 
 	private Texture2D _scriptIcon;
 	private Texture2D _sceneIcon;
 	private Texture2D _systemIcon;
 	private Texture2D _folderIcon;
+	private Texture2D _scriptFilterSearchIcon;
+	private Texture2D _scriptFilterCloseIcon;
 	private Color _systemColor = Color.FromHtml("#6495ED");
 	private Color _folderColor = Color.FromHtml("#F2C252");
 
 	private readonly Dictionary<string, List<string>> _systems = new();
 	private readonly HashSet<string> _expandedItems = new();
 	private readonly HashSet<string> _forcedExpandedItems = new();
+	private readonly HashSet<string> _expandedItemsBeforeScriptFilter = new();
 
 	#endregion
 
@@ -84,6 +91,8 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_sceneIcon = editorTheme.GetIcon("PackedScene", "EditorIcons");
 		_systemIcon = editorTheme.GetIcon("Environment", "EditorIcons");
 		_folderIcon = editorTheme.GetIcon("Folder", "EditorIcons");
+		_scriptFilterSearchIcon = editorTheme.GetIcon("Search", "EditorIcons");
+		_scriptFilterCloseIcon = editorTheme.GetIcon("GuiClose", "EditorIcons");
 
 		EnsureScriptTemplateExists();
 		BuildDock();
@@ -109,7 +118,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-            @"using Godot;
+			@"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {
@@ -142,6 +151,8 @@ public sealed class {{CLASS_NAME}}
 
 		_systemNameInput = new LineEdit { PlaceholderText = "System name..." };
 		_addSystemButton = new Button { Text = "Add System" };
+		_scriptFilterInput = new LineEdit { PlaceholderText = "Filter scripts..." };
+		UpdateScriptFilterSearchIconVisibility(_scriptFilterInput.Text);
 
 		_tree = new Tree { HideRoot = true, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
 
@@ -259,6 +270,9 @@ public sealed class {{CLASS_NAME}}
 		_missingSceneDialog.CustomAction += OnMissingSceneCustomAction;
 		_addSystemButton.Pressed += OnAddSystemPressed;
 		_systemNameInput.TextSubmitted += _ => OnAddSystemPressed();
+		_scriptFilterInput.TextChanged += OnScriptFilterTextChanged;
+		_scriptFilterInput.GuiInput += OnScriptFilterInputGuiInput;
+		_scriptFilterInput.MouseExited += OnScriptFilterInputMouseExited;
 		_tree.ItemSelected += OnItemSelected;
 		_tree.GuiInput += OnTreeGuiInput;
 		_fileDialog.FileSelected += OnScriptFileSelected;
@@ -275,6 +289,7 @@ public sealed class {{CLASS_NAME}}
 
 		_dock.AddChild(_systemNameInput);
 		_dock.AddChild(_addSystemButton);
+		_dock.AddChild(_scriptFilterInput);
 		_dock.AddChild(_tree);
 		_dock.AddChild(_fileDialog);
 		_dock.AddChild(_relinkScriptDialog);
@@ -292,11 +307,18 @@ public sealed class {{CLASS_NAME}}
 	#endregion
 
 	#region Tree Building and Expansion State
-	private void BuildTree()
+	private void BuildTree(bool keepCurrentExpansionState = false)
 	{
+		if (IsScriptFilterActive())
+		{
+			BuildFilteredScriptTree(_scriptFilterInput.Text);
+			return;
+		}
+
 		DebugLogOperation("Build Tree", $"{_systems.Count} systems");
 
-		SaveExpansionState();
+		if (!keepCurrentExpansionState)
+			SaveExpansionState();
 		MergeForcedExpansionState();
 		NormalizeAllSystemEntries();
 
@@ -328,17 +350,13 @@ public sealed class {{CLASS_NAME}}
 					: CreateFolderPath(systemItem, folders, system.Key, folderPath);
 
 				TreeItem scriptItem = _tree.CreateItem(parent);
-				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
-				string scriptPath = GetScriptPathFromEntry(entry);
-				string scriptText = scriptPath.GetFile();
-				string tooltipText = $"{scriptPath}";
 
-				if (!string.IsNullOrWhiteSpace(linkedScenePath))
-				{
-					tooltipText += $"\n{linkedScenePath}";
-				}
+string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+string scriptText = GetScriptPathFromEntry(entry).GetFile();
 
-				scriptItem.SetTooltipText(0, tooltipText);
+scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
+
+
 				scriptItem.SetText(0, scriptText);
 				scriptItem.SetIcon(
 					0,
@@ -349,6 +367,19 @@ public sealed class {{CLASS_NAME}}
 		}
 
 		RestoreExpansionState(root);
+	}
+	private string GetScriptTooltipText(string entry)
+	{
+	string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+	string scriptPath = GetScriptPathFromEntry(entry);
+	string tooltipText = $"{scriptPath}";
+
+	if (!string.IsNullOrWhiteSpace(linkedScenePath))
+	{
+		tooltipText += $"\n{linkedScenePath}";
+	}
+
+	return tooltipText;
 	}
 
 	private void MergeForcedExpansionState()
@@ -488,6 +519,266 @@ public sealed class {{CLASS_NAME}}
 
 		return parent;
 	}
+
+	private void OnScriptFilterTextChanged(string filterText)
+	{
+		UpdateScriptFilterSearchIconVisibility(filterText);
+
+		if (!string.IsNullOrWhiteSpace(filterText))
+		{
+			if (!_isFilteringScripts)
+			{
+				SaveExpansionState();
+				_expandedItemsBeforeScriptFilter.Clear();
+
+				foreach (string metadata in _expandedItems)
+					_expandedItemsBeforeScriptFilter.Add(metadata);
+
+				_selectedScriptEntryFromFilter = "";
+				_isFilteringScripts = true;
+			}
+
+			BuildFilteredScriptTree(filterText);
+			return;
+		}
+
+		if (!_isFilteringScripts)
+			return;
+
+		ExitScriptFilterMode();
+	}
+
+	private void UpdateScriptFilterSearchIconVisibility(string filterText)
+	{
+		if (_scriptFilterInput == null)
+			return;
+
+		_scriptFilterInput.RightIcon = string.IsNullOrEmpty(filterText)
+			? _scriptFilterSearchIcon
+			: _scriptFilterCloseIcon;
+
+		if (string.IsNullOrEmpty(filterText))
+			ResetScriptFilterInputCursor();
+	}
+
+	private void OnScriptFilterInputGuiInput(InputEvent inputEvent)
+	{
+		if (_scriptFilterInput == null)
+			return;
+
+		if (inputEvent is InputEventMouseMotion mouseMotion)
+		{
+			UpdateScriptFilterInputCursor(mouseMotion.Position);
+			return;
+		}
+
+		if (string.IsNullOrEmpty(_scriptFilterInput.Text))
+			return;
+
+		if (inputEvent is not InputEventMouseButton mouseButton)
+			return;
+
+		if (mouseButton.ButtonIndex != MouseButton.Left || !mouseButton.Pressed)
+			return;
+
+		if (!IsScriptFilterRightIconClick(mouseButton.Position))
+			return;
+
+		ClearScriptFilterInput();
+		_scriptFilterInput.AcceptEvent();
+	}
+
+	private void OnScriptFilterInputMouseExited()
+	{
+		ResetScriptFilterInputCursor();
+	}
+
+	private void UpdateScriptFilterInputCursor(Vector2 localMousePosition)
+	{
+		if (_scriptFilterInput == null)
+			return;
+
+		bool isHoveringCloseIcon = !string.IsNullOrEmpty(_scriptFilterInput.Text)
+			&& _scriptFilterInput.RightIcon == _scriptFilterCloseIcon
+			&& IsScriptFilterRightIconClick(localMousePosition);
+
+		_scriptFilterInput.MouseDefaultCursorShape = isHoveringCloseIcon
+			? Control.CursorShape.Arrow
+			: Control.CursorShape.Ibeam;
+	}
+
+	private void ResetScriptFilterInputCursor()
+	{
+		if (_scriptFilterInput == null)
+			return;
+
+		_scriptFilterInput.MouseDefaultCursorShape = Control.CursorShape.Ibeam;
+	}
+
+	private bool IsScriptFilterRightIconClick(Vector2 localMousePosition)
+	{
+		Texture2D rightIcon = _scriptFilterInput.RightIcon;
+
+		if (rightIcon == null)
+			return false;
+
+		float clickableWidth = rightIcon.GetWidth() + ScriptFilterRightIconClickablePadding;
+		float controlWidth = _scriptFilterInput.Size.X;
+
+		return localMousePosition.X >= controlWidth - clickableWidth
+			&& localMousePosition.X <= controlWidth
+			&& localMousePosition.Y >= 0.0f
+			&& localMousePosition.Y <= _scriptFilterInput.Size.Y;
+	}
+
+	private void ClearScriptFilterInput()
+	{
+		if (_scriptFilterInput == null)
+			return;
+
+		_scriptFilterInput.Text = "";
+		OnScriptFilterTextChanged("");
+	}
+
+	private bool IsScriptFilterActive()
+	{
+		return _scriptFilterInput != null && !string.IsNullOrWhiteSpace(_scriptFilterInput.Text);
+	}
+
+	private void BuildFilteredScriptTree(string filterText)
+	{
+		NormalizeAllSystemEntries();
+
+		_tree.Clear();
+
+		TreeItem root = _tree.CreateItem();
+		string normalizedFilter = filterText.Trim().ToLowerInvariant();
+
+		if (string.IsNullOrWhiteSpace(normalizedFilter))
+			return;
+
+		foreach (ScriptFilterResult result in GetFilteredScriptResults(normalizedFilter))
+		{
+			TreeItem scriptItem = _tree.CreateItem(root);
+			string linkedScenePath = GetLinkedScenePathFromEntry(result.Entry);
+			string scriptPath = GetScriptPathFromEntry(result.Entry);
+scriptItem.SetText(0, scriptPath.GetFile());
+scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
+			
+			scriptItem.SetIcon(
+				0,
+				string.IsNullOrWhiteSpace(linkedScenePath) ? _scriptIcon : _sceneIcon
+			);
+			scriptItem.SetMetadata(0, $"script::{result.Entry}");
+		}
+	}
+
+	private List<ScriptFilterResult> GetFilteredScriptResults(string normalizedFilter)
+	{
+		List<ScriptFilterResult> results = new();
+
+		foreach (KeyValuePair<string, List<string>> system in _systems)
+		{
+			foreach (string entry in system.Value.Where(entry => !entry.StartsWith("folder::")))
+			{
+				string scriptPath = GetScriptPathFromEntry(entry);
+				string scriptName = scriptPath.GetFile();
+				string normalizedScriptName = scriptName.ToLowerInvariant();
+
+				if (!normalizedScriptName.Contains(normalizedFilter))
+					continue;
+
+				results.Add(
+					new ScriptFilterResult(
+						system.Key,
+						GetFolderPathFromEntry(entry),
+						entry,
+						scriptName
+					)
+				);
+			}
+		}
+
+		return results
+			.OrderBy(result => result.ScriptName.ToLowerInvariant().StartsWith(normalizedFilter) ? 0 : 1)
+			.ThenBy(result => result.ScriptName)
+			.ThenBy(result => result.SystemName)
+			.ThenBy(result => result.FolderPath)
+			.ToList();
+	}
+
+	private void ExitScriptFilterMode()
+	{
+		_isFilteringScripts = false;
+		_expandedItems.Clear();
+
+		foreach (string metadata in _expandedItemsBeforeScriptFilter)
+			_expandedItems.Add(metadata);
+
+		RevealScriptAfterFilter(_selectedScriptEntryFromFilter);
+		BuildTree(true);
+
+		if (!string.IsNullOrWhiteSpace(_selectedScriptEntryFromFilter))
+			SelectTreeItemByMetadata($"script::{_selectedScriptEntryFromFilter}");
+	}
+
+	private void RevealScriptAfterFilter(string entry)
+	{
+		if (string.IsNullOrWhiteSpace(entry))
+			return;
+
+		string systemName = FindSystemNameForEntry(entry);
+		string folderPath = GetFolderPathFromEntry(entry);
+
+		if (string.IsNullOrWhiteSpace(systemName))
+			return;
+
+		if (string.IsNullOrWhiteSpace(folderPath))
+			ForceExpandSystem(systemName);
+		else
+			ForceExpandFolderPath(systemName, folderPath);
+	}
+
+	private bool SelectTreeItemByMetadata(string metadata)
+	{
+		TreeItem root = _tree.GetRoot();
+
+		if (root == null)
+			return false;
+
+		return SelectTreeItemByMetadataRecursive(root, metadata);
+	}
+
+	private bool SelectTreeItemByMetadataRecursive(TreeItem item, string metadata)
+	{
+		TreeItem current = item;
+
+		while (current != null)
+		{
+			if (current.GetMetadata(0).AsString() == metadata)
+			{
+				current.Select(0);
+				_tree.ScrollToItem(current);
+				return true;
+			}
+
+			TreeItem child = current.GetFirstChild();
+
+			if (child != null && SelectTreeItemByMetadataRecursive(child, metadata))
+				return true;
+
+			current = current.GetNext();
+		}
+
+		return false;
+	}
+
+	private readonly record struct ScriptFilterResult(
+		string SystemName,
+		string FolderPath,
+		string Entry,
+		string ScriptName
+	);
 
 	#endregion
 
@@ -659,7 +950,12 @@ public sealed class {{CLASS_NAME}}
 
 	private void OnItemSelected()
 	{
-		OpenScriptFromTreeItem(_tree.GetSelected());
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (_isFilteringScripts && IsScriptItem(selectedItem))
+			_selectedScriptEntryFromFilter = selectedItem.GetMetadata(0).AsString().Replace("script::", "");
+
+		OpenScriptFromTreeItem(selectedItem);
 	}
 
 	private void OpenScriptFromTreeItem(TreeItem item)
@@ -793,6 +1089,8 @@ public sealed class {{CLASS_NAME}}
 			if (!entries.Contains(newEntry))
 				entries.Insert(index, newEntry);
 
+			UpdateSelectedScriptEntryFromFilter(oldEntry, newEntry);
+
 			DebugLogOperation("Relink Script Mutated", $"{oldEntry} -> {newEntry}");
 
 			return true;
@@ -812,6 +1110,8 @@ public sealed class {{CLASS_NAME}}
 
 				if (!entries.Contains(newEntry))
 					entries.Insert(index, newEntry);
+
+				UpdateSelectedScriptEntryFromFilter(oldEntry, newEntry);
 
 				DebugLogOperation(
 					"Relink Script Mutated After Recovery",
@@ -868,6 +1168,21 @@ public sealed class {{CLASS_NAME}}
 
 		if (mouseButton.ButtonIndex == MouseButton.Left)
 		{
+			if (_isFilteringScripts)
+			{
+				ClearDragState();
+
+				if (!mouseButton.Pressed && IsScriptItem(item))
+				{
+					item.Select(0);
+					_selectedScriptEntryFromFilter = item.GetMetadata(0).AsString().Replace("script::", "");
+					OpenScriptFromTreeItem(item);
+					_tree.AcceptEvent();
+				}
+
+				return;
+			}
+
 			if (mouseButton.Pressed && mouseButton.DoubleClick && IsScriptItem(item))
 			{
 				OpenLinkedSceneFromTreeItem(item);
@@ -930,16 +1245,37 @@ public sealed class {{CLASS_NAME}}
 		if (item == null)
 			return;
 
+		if (_isFilteringScripts)
+		{
+			if (!IsScriptItem(item))
+				return;
+
+			item.Select(0);
+
+			string filteredScriptMetadata = item.GetMetadata(0).AsString();
+			_selectedScriptEntryFromFilter = filteredScriptMetadata.Replace("script::", "");
+			OpenContextMenuForMetadata(filteredScriptMetadata);
+			_tree.AcceptEvent();
+			return;
+		}
+
 		item.Select(0);
 
 		string rightClickMetadata = item.GetMetadata(0).AsString();
+		OpenContextMenuForMetadata(rightClickMetadata);
+	}
 
-		_pendingRemoveMetadata = rightClickMetadata;
-		_pendingRenameMetadata = rightClickMetadata;
-		_pendingAddFolderMetadata = rightClickMetadata;
-		_pendingShowInFileManagerMetadata = rightClickMetadata;
+	private void OpenContextMenuForMetadata(string metadata)
+	{
+		if (string.IsNullOrWhiteSpace(metadata))
+			return;
 
-		BuildContextMenuForMetadata(rightClickMetadata);
+		_pendingRemoveMetadata = metadata;
+		_pendingRenameMetadata = metadata;
+		_pendingAddFolderMetadata = metadata;
+		_pendingShowInFileManagerMetadata = metadata;
+
+		BuildContextMenuForMetadata(metadata);
 
 		_contextMenu.Position = DisplayServer.MouseGetPosition();
 		_contextMenu.Popup();
@@ -996,12 +1332,17 @@ public sealed class {{CLASS_NAME}}
 		if (isSystem || isFolder)
 			_contextMenu.AddItem("New Folder", ContextAddFolder);
 
-		_contextMenu.AddItem("New Script", ContextNewScript);
-		_contextMenu.AddItem("Add Script", ContextAddScript);
+		if (!_isFilteringScripts)
+		{
+			_contextMenu.AddItem("New Script", ContextNewScript);
+			_contextMenu.AddItem("Add Script", ContextAddScript);
+		}
 
 		if (isScript)
 		{
+			if(!_isFilteringScripts){
 			_contextMenu.AddSeparator();
+			}
 
 			string entry = metadata.Replace("script::", "");
 
@@ -1018,7 +1359,7 @@ public sealed class {{CLASS_NAME}}
 		{
 			_contextMenu.AddSeparator();
 			_contextMenu.AddItem("Open File Path", ContextShowInFileManager);
-		} //Open File Path
+		}
 	}
 
 	private void SetContextMenuItemDisabled(int id, bool disabled)
@@ -2348,6 +2689,8 @@ public sealed class {{CLASS_NAME}}
 				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
 				string updatedEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath);
 
+				UpdateSelectedScriptEntryFromFilter(entry, updatedEntry);
+
 				updatedEntries.Add(updatedEntry);
 			}
 
@@ -2363,12 +2706,35 @@ public sealed class {{CLASS_NAME}}
 		return _systems.Values.Any(entries => entries.Contains(entry));
 	}
 
+	private void UpdateSelectedScriptEntryFromFilter(string oldEntry, string newEntry)
+	{
+		if (!_isFilteringScripts)
+			return;
+
+		if (_selectedScriptEntryFromFilter != oldEntry)
+			return;
+
+		_selectedScriptEntryFromFilter = newEntry;
+	}
+
+	private void ClearSelectedScriptEntryFromFilter(string removedEntry)
+	{
+		if (!_isFilteringScripts)
+			return;
+
+		if (_selectedScriptEntryFromFilter == removedEntry)
+			_selectedScriptEntryFromFilter = "";
+	}
+
 	private bool RemoveEntry(string entry)
 	{
 		foreach (string systemName in _systems.Keys.ToList())
 		{
 			if (_systems[systemName].Remove(entry))
+			{
+				ClearSelectedScriptEntryFromFilter(entry);
 				return true;
+			}
 		}
 
 		if (TryRecoverSystemsFromDisk("Remove Entry"))
@@ -2376,7 +2742,10 @@ public sealed class {{CLASS_NAME}}
 			foreach (string systemName in _systems.Keys.ToList())
 			{
 				if (_systems[systemName].Remove(entry))
+				{
+					ClearSelectedScriptEntryFromFilter(entry);
 					return true;
+				}
 			}
 		}
 
@@ -2422,6 +2791,15 @@ public sealed class {{CLASS_NAME}}
 			if (metadata.StartsWith("folder::"))
 				return metadata.Split("::")[1];
 
+			if (metadata.StartsWith("script::"))
+			{
+				string entry = metadata.Replace("script::", "");
+				string systemName = FindSystemNameForEntry(entry);
+
+				if (!string.IsNullOrWhiteSpace(systemName))
+					return systemName;
+			}
+
 			item = item.GetParent();
 		}
 
@@ -2438,6 +2816,12 @@ public sealed class {{CLASS_NAME}}
 
 			if (metadata.StartsWith("folder::"))
 				return metadata.Split("::")[2];
+
+			if (metadata.StartsWith("script::"))
+			{
+				string entry = metadata.Replace("script::", "");
+				return GetFolderPathFromEntry(entry);
+			}
 
 			item = item.GetParent();
 		}
@@ -2994,6 +3378,9 @@ public sealed class {{CLASS_NAME}}
 		if (!keyEvent.CtrlPressed)
 			return;
 
+		if (_isFilteringScripts)
+			return;
+
 		OpenRemoveDialogForSelectedItem();
 
 		GetViewport().SetInputAsHandled();
@@ -3074,7 +3461,6 @@ public sealed class {{CLASS_NAME}}
 			return;
 
 		DebugLog(label);
-
 		if (_systems.Count == 0)
 		{
 			DebugLog(" - <no systems>");
