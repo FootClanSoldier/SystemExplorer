@@ -62,6 +62,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _pendingMissingScenePath = "";
 	private string _selectedScriptEntryFromFilter = "";
 	private bool _isFilteringScripts;
+	private bool _ignoreNextScriptFilterReleaseOpen;
 
 	private Texture2D _scriptIcon;
 	private Texture2D _sceneIcon;
@@ -1250,13 +1251,34 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			{
 				ClearDragState();
 
+				if (mouseButton.Pressed && mouseButton.DoubleClick && IsScriptItem(item))
+				{
+					item.Select(0);
+					_selectedScriptEntryFromFilter = item.GetMetadata(0).AsString().Replace("script::", "");
+					_ignoreNextScriptFilterReleaseOpen = true;
+					OpenLinkedSceneFromTreeItem(item);
+					_tree.AcceptEvent();
+					return;
+				}
+
 				if (!mouseButton.Pressed && IsScriptItem(item))
 				{
 					item.Select(0);
 					_selectedScriptEntryFromFilter = item.GetMetadata(0).AsString().Replace("script::", "");
+
+					if (_ignoreNextScriptFilterReleaseOpen)
+					{
+						_ignoreNextScriptFilterReleaseOpen = false;
+						_tree.AcceptEvent();
+						return;
+					}
+
 					OpenScriptFromTreeItem(item);
 					_tree.AcceptEvent();
 				}
+
+				if (!mouseButton.Pressed)
+					_ignoreNextScriptFilterReleaseOpen = false;
 
 				return;
 			}
