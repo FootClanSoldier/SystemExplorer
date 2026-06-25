@@ -10,10 +10,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	#region Constants and Fields
 	private const string SavePath = "res://addons/system_explorer/systems.json";
 	private const string ScriptTemplatePath = "res://addons/system_explorer/script_template.txt";
-
+	
 	// Enable only when investigating editor state/save issues.
 	private const bool DebugState = false;
-	private const int SystemNameMaxLength = 32;
 	private const int ContextAddFolder = 0;
 	private const int ContextAddScript = 1;
 	private const int ContextNewScript = 2;
@@ -24,14 +23,11 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextShowInFileManager = 7;
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const float ClickOpenDragThreshold = 6.0f;
-	private const float ScriptFilterRightIconClickablePadding = 12.0f;
-	private const float SystemNameEnterHintWidth = 54.0f;
-	private const float SystemNameEnterHintRightPadding = 50.0f;
+	private const float RightIconClickablePadding = 12.0f;
 
 	private EditorDock _editorDock;
 	private VBoxContainer _dock;
 	private LineEdit _systemNameInput;
-	private Label _systemNameEnterHint;
 	private LineEdit _scriptFilterInput;
 	private Tree _tree;
 	private EditorFileDialog _fileDialog;
@@ -72,6 +68,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _systemIcon;
 	private Texture2D _folderIcon;
 	private Texture2D _scriptFilterSearchIcon;
+	private Texture2D _systemNameEnterIcon;
 	private Texture2D _scriptFilterCloseIcon;
 	private Color _systemColor = Color.FromHtml("#6495ED");
 	private Color _folderColor = Color.FromHtml("#F2C252");
@@ -97,6 +94,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_folderIcon = editorTheme.GetIcon("Folder", "EditorIcons");
 		_scriptFilterSearchIcon = editorTheme.GetIcon("Search", "EditorIcons");
 		_scriptFilterCloseIcon = editorTheme.GetIcon("GuiClose", "EditorIcons");
+		_systemNameEnterIcon = editorTheme.GetIcon("Add", "EditorIcons");
 
 		EnsureScriptTemplateExists();
 		BuildDock();
@@ -154,12 +152,9 @@ public sealed class {{CLASS_NAME}}
 		_dock = new VBoxContainer { Name = "System Explorer" };
 
 		_systemNameInput = new LineEdit { 
-			PlaceholderText = "System Name", 
-			MaxLength = SystemNameMaxLength
+			PlaceholderText = "System Name"
 			};
-		_systemNameEnterHint = CreateSystemNameEnterHint();
-		_systemNameInput.AddChild(_systemNameEnterHint);
-		UpdateSystemNameEnterHintVisibility(_systemNameInput.Text);
+		UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
 		_scriptFilterInput = new LineEdit { PlaceholderText = "Filter Scripts" };
 		UpdateScriptFilterSearchIconVisibility(_scriptFilterInput.Text);
 		
@@ -279,6 +274,8 @@ public sealed class {{CLASS_NAME}}
 		_missingSceneDialog.CustomAction += OnMissingSceneCustomAction;
 		_systemNameInput.TextChanged += OnSystemNameTextChanged;
 		_systemNameInput.TextSubmitted += _ => OnAddSystemPressed();
+		_systemNameInput.GuiInput += OnSystemNameInputGuiInput;
+		_systemNameInput.MouseExited += OnSystemNameInputMouseExited;
 		_scriptFilterInput.TextChanged += OnScriptFilterTextChanged;
 		_scriptFilterInput.GuiInput += OnScriptFilterInputGuiInput;
 		_scriptFilterInput.MouseExited += OnScriptFilterInputMouseExited;
@@ -312,38 +309,76 @@ public sealed class {{CLASS_NAME}}
 		_dock.AddChild(_createScriptDialog);
 	}
 
-	private Label CreateSystemNameEnterHint()
-	{
-		var enterHint = new Label
-		{//⏎↵
-			Text = "⏎ Enter",
-			HorizontalAlignment = HorizontalAlignment.Right,
-			VerticalAlignment = VerticalAlignment.Center,
-			MouseFilter = Control.MouseFilterEnum.Ignore,
-			Visible = false
-		};
-
-		enterHint.AddThemeColorOverride("font_color", new Color(1.0f, 1.0f, 1.0f, 0.45f));
-		enterHint.SetAnchorsPreset(Control.LayoutPreset.RightWide);
-		enterHint.OffsetLeft = -SystemNameEnterHintWidth - SystemNameEnterHintRightPadding;
-		enterHint.OffsetRight = -SystemNameEnterHintRightPadding;
-		enterHint.OffsetTop = 0.0f;
-		enterHint.OffsetBottom = 0.0f;
-
-		return enterHint;
-	}
-
 	private void OnSystemNameTextChanged(string text)
 	{
-		UpdateSystemNameEnterHintVisibility(text);
+		UpdateSystemNameEnterIconVisibility(text);
 	}
 
-	private void UpdateSystemNameEnterHintVisibility(string text)
+	private void UpdateSystemNameEnterIconVisibility(string text)
 	{
-		if (_systemNameEnterHint == null)
+		if (_systemNameInput == null)
 			return;
 
-		_systemNameEnterHint.Visible = !string.IsNullOrWhiteSpace(text);
+		_systemNameInput.RightIcon = !string.IsNullOrWhiteSpace(text)
+			? _systemNameEnterIcon
+			: null;
+
+		if (string.IsNullOrWhiteSpace(text))
+			ResetSystemNameInputCursor();
+	}
+
+	private void OnSystemNameInputGuiInput(InputEvent inputEvent)
+	{
+		if (_systemNameInput == null)
+			return;
+
+		if (inputEvent is InputEventMouseMotion mouseMotion)
+		{
+			UpdateSystemNameInputCursor(mouseMotion.Position);
+			return;
+		}
+
+		if (string.IsNullOrWhiteSpace(_systemNameInput.Text))
+			return;
+
+		if (inputEvent is not InputEventMouseButton mouseButton)
+			return;
+
+		if (mouseButton.ButtonIndex != MouseButton.Left || !mouseButton.Pressed)
+			return;
+
+		if (!IsLineEditRightIconClick(_systemNameInput, mouseButton.Position))
+			return;
+
+		OnAddSystemPressed();
+		_systemNameInput.AcceptEvent();
+	}
+
+	private void OnSystemNameInputMouseExited()
+	{
+		ResetSystemNameInputCursor();
+	}
+
+	private void UpdateSystemNameInputCursor(Vector2 localMousePosition)
+	{
+		if (_systemNameInput == null)
+			return;
+
+		bool isHoveringAddIcon = !string.IsNullOrWhiteSpace(_systemNameInput.Text)
+			&& _systemNameInput.RightIcon == _systemNameEnterIcon
+			&& IsLineEditRightIconClick(_systemNameInput, localMousePosition);
+
+		_systemNameInput.MouseDefaultCursorShape = isHoveringAddIcon
+			? Control.CursorShape.Arrow
+			: Control.CursorShape.Ibeam;
+	}
+
+	private void ResetSystemNameInputCursor()
+	{
+		if (_systemNameInput == null)
+			return;
+
+		_systemNameInput.MouseDefaultCursorShape = Control.CursorShape.Ibeam;
 	}
 
 	#endregion
@@ -623,7 +658,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 		if (mouseButton.ButtonIndex != MouseButton.Left || !mouseButton.Pressed)
 			return;
 
-		if (!IsScriptFilterRightIconClick(mouseButton.Position))
+		if (!IsLineEditRightIconClick(_scriptFilterInput, mouseButton.Position))
 			return;
 
 		ClearScriptFilterInput();
@@ -642,7 +677,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 
 		bool isHoveringCloseIcon = !string.IsNullOrEmpty(_scriptFilterInput.Text)
 			&& _scriptFilterInput.RightIcon == _scriptFilterCloseIcon
-			&& IsScriptFilterRightIconClick(localMousePosition);
+			&& IsLineEditRightIconClick(_scriptFilterInput, localMousePosition);
 
 		_scriptFilterInput.MouseDefaultCursorShape = isHoveringCloseIcon
 			? Control.CursorShape.Arrow
@@ -657,20 +692,20 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 		_scriptFilterInput.MouseDefaultCursorShape = Control.CursorShape.Ibeam;
 	}
 
-	private bool IsScriptFilterRightIconClick(Vector2 localMousePosition)
+	private static bool IsLineEditRightIconClick(LineEdit lineEdit, Vector2 localMousePosition)
 	{
-		Texture2D rightIcon = _scriptFilterInput.RightIcon;
+		Texture2D rightIcon = lineEdit.RightIcon;
 
 		if (rightIcon == null)
 			return false;
 
-		float clickableWidth = rightIcon.GetWidth() + ScriptFilterRightIconClickablePadding;
-		float controlWidth = _scriptFilterInput.Size.X;
+		float clickableWidth = rightIcon.GetWidth() + RightIconClickablePadding;
+		float controlWidth = lineEdit.Size.X;
 
 		return localMousePosition.X >= controlWidth - clickableWidth
 			&& localMousePosition.X <= controlWidth
 			&& localMousePosition.Y >= 0.0f
-			&& localMousePosition.Y <= _scriptFilterInput.Size.Y;
+			&& localMousePosition.Y <= lineEdit.Size.Y;
 	}
 
 	private void ClearScriptFilterInput()
@@ -848,7 +883,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 
 		_systemNameInput.Text = "";
-		UpdateSystemNameEnterHintVisibility(_systemNameInput.Text);
+		UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
 		ForceExpandSystem(systemName);
 
 		if (SaveSystems())
