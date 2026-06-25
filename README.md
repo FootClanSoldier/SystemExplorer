@@ -1,8 +1,3 @@
-> 🚧 Documentation WIP
->
-> Documentation and screenshots are currently being updated for the 1.2.0 release.
-
-
 <p align="center">
 	<a href="https://github.com/FootClanSoldier/SystemExplorer">
   <img src="icon.png" width="300" alt="System Explorer Logo">
@@ -32,10 +27,12 @@
 > Architecture-focused navigation plugin for Godot C# projects.
 ---
 
+
 # About
+
 System Explorer is a Godot C# editor plugin that provides an architecture-focused view of your project.
 
-Instead of navigating large projects through the FileSystem dock, you can organize scripts into custom systems and folders that reflect the architecture of your game.
+Instead of navigating large projects through the FileSystem dock, you can organize scripts into custom systems and folders that reflect the architecture of your game—without changing your physical project structure.
 
 <p align="center">
   <img src="screenshots/overview.png" alt="System Explorer Overview">
@@ -55,9 +52,7 @@ Game
             └── Modules
 ```
 
-While this works well for storing files, it can become cumbersome when navigating architecture.
-
-System Explorer lets you create a higher-level view:
+System Explorer lets you navigate your project from a higher-level architectural perspective instead:
 
 ```text
 Core
@@ -67,125 +62,61 @@ Player
 UI
 ```
 
-making it easier to jump between systems and understand project structure.
-
-Rather than organizing code by where files happen to live on disk, System Explorer allows you to organize code according to how your game is actually structured.
+Organize your code according to how your game is structured, not simply where files happen to live on disk.
 
 ---
 
 # Features
 
-System Explorer is designed to provide an architecture-focused view of large Godot C# projects.
-
-Instead of navigating deep folder structures through the FileSystem dock, you can organize scripts into systems and folders that reflect how your game is actually structured.
-
----
-
 ## Organization
 
-<img src="screenshots/organization.png" alt="Systems">
+<img src="screenshots/demo.gif" alt="Systems">
 
-System Explorer supports:
-
-* Create systems
-* Create folders
-* Add existing scripts
-* Create new scripts
-* Rename items
-* Remove items
-* Drag & drop organization
-
-Systems and folders are virtual organization layers and do not require changes to your physical project structure.
+- Create systems and folders
+- Create new scripts or add existing ones
+- Rename and remove items
+- Drag & drop organization
+- Virtual organization that doesn't modify your project structure
 
 ---
 
 ## Navigation
 
-Navigate your project from an architectural perspective rather than relying solely on file locations.
-
-Features include:
-
-* Architecture-focused project navigation
-* Quick script access
-* Open File Path
-* Reopen already selected scripts
-* Expansion state persistence
-
-This makes it easier to move between major systems such as:
-
-```text
-Core
-GameFlow
-Sound
-Player
-UI
-```
-
-without navigating through deep directory trees.
+- Architecture-focused project navigation
+- Filter scripts across every system
+- Open scripts with a single click
+- Reopen already selected scripts
+- Open File Path
+- Expansion state persistence
 
 ---
 
 ## Scene Integration
 
-Connect C# architecture directly to the Godot scenes that use those scripts.
+Connect your architecture directly to the scenes that use those scripts.
 
-Features include:
-
-* Link scripts to scenes
-* Unlink scene associations
-* Open linked scenes directly
-* Scene recovery support if scenes are moved or deleted
-
-Double-clicking a linked script automatically opens both the script and its associated scene.
+- Link scripts to scenes
+- Single-click opens the script
+- Double-click opens both the script and its linked scene
+- Unlink scene associations
+- Automatic recovery if linked scenes are moved or deleted
 
 Scene links are stored in `systems.json` and persist between editor sessions.
 
 ---
 
-## Workflow Improvements
+## Workflow
+
 Several quality-of-life features help speed up common workflows:
 
-* Script templates
-* Script tooltips
-* Context menus
-* Keyboard shortcuts
-* Expansion state persistence
-
-### Keyboard Workflow
-
-Several dialogs and input fields support confirming actions by pressing **Enter**.
-
-This currently applies to:
-
-* Rename dialogs
-* Delete confirmation dialogs
-* Create Folder dialogs
-* Add System input field
-
-When entering a new system name, pressing **Enter** performs the same action as clicking the **Add System** button.
-
-### Quick Navigation
-
-* **Shift + Click** a system or folder to instantly expand or collapse its contents.
-* **Shift + Delete** opens the delete dialog for the selected item.
-* Expansion state is automatically remembered between common operations.
-
-### Context Menus
-
-Right-click systems, folders, and scripts for quick actions.
-
-Available actions include:
-
-* New Folder
-* New Script
-* Add Script
-* Link to Scene
-* Unlink from Scene
-* Rename
-* Remove
-* Open File Path
-
-These workflow improvements help reduce unnecessary mouse movement and make navigating larger projects faster.
+- Press **Enter** to confirm dialogs and create new systems
+- Click the **+** button inside the System Name field to create a system
+- Context menus for common actions
+- Script templates
+- Script tooltips
+- **Shift + Click** expands or collapses entire branches
+- **ctrl+ Delete** opens the delete dialog
+- Expansion state is automatically preserved between common operations
 
 ---
 
@@ -288,30 +219,19 @@ They typically disappear after rebuilding or reopening the project.
 
 # Future Ideas
 
-* Custom icons
-* Multiple architecture views
-* Advanced search
-* Namespace generation helpers
-* Beautify systems
-* Beautify folders
-* Beautify scripts
-
----
-
-# Notes
-
-System Explorer is not intended to replace Godot's FileSystem dock.
-
-The goal is to provide a higher-level architectural view of your project, making it easier to navigate large C# codebases and organize systems according to how the game is structured rather than how files are stored on disk.
-
-For more detailed usage information and future advanced features, dedicated documentation may be added separately from the README.
+- Multiple architecture views
+- Namespace refactoring
+- Custom icons
+- Beautify systems
+- Beautify folders
+- Beautify scripts
 
 ---
 
 # Feedback
 
-System Explorer has reached a point where it provides a solid foundation for navigating and organizing larger Godot C# projects.
-Future updates will primarily be driven by real-world usage, bug reports, and community feedback.
+Feedback, suggestions, bug reports, and feature requests are always welcome.
 
-Feedback, suggestions, bug reports, and feature requests are always welcome and appreciated.
+Future development will primarily be driven by real-world usage and community feedback.
 
+---
