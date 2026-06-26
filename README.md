@@ -85,7 +85,6 @@ Organize your code according to how your game is structured, not simply where fi
 - Architecture-focused project navigation
 - Filter scripts across every system
 - Open scripts with a single click
-- Reopen already selected scripts
 - Open File Path
 - Expansion state persistence
 
