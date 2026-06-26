@@ -604,6 +604,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 
 		if (!string.IsNullOrWhiteSpace(filterText))
 		{
+			if (!EnsureSystemsLoadedForScriptFilter("Script Filter Started"))
+				return;
+
 			if (!_isFilteringScripts)
 			{
 				SaveExpansionState();
@@ -714,8 +717,17 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 		if (_scriptFilterInput == null)
 			return;
 
+		if (string.IsNullOrEmpty(_scriptFilterInput.Text))
+			return;
+
+		// Setting LineEdit.Text from code does not reliably run the same path
+		// as user input in the editor, so clear must explicitly update the icon
+		// and exit script filter mode.
 		_scriptFilterInput.Text = "";
-		OnScriptFilterTextChanged("");
+		UpdateScriptFilterSearchIconVisibility("");
+
+		if (_isFilteringScripts)
+			ExitScriptFilterMode();
 	}
 
 	private bool IsScriptFilterActive()
@@ -723,8 +735,36 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 		return _scriptFilterInput != null && !string.IsNullOrWhiteSpace(_scriptFilterInput.Text);
 	}
 
+	private bool EnsureSystemsLoadedForScriptFilter(string reason)
+	{
+		if (_systems.Count > 0)
+			return true;
+
+		if (!FileAccess.FileExists(SavePath))
+			return false;
+
+		DebugLogOperation(
+			"Script Filter Recovery Guard",
+			$"Reason='{reason}', In-memory systems were empty while filtering."
+		);
+
+		bool recovered = TryRecoverSystemsFromDisk(reason);
+
+		if (!recovered)
+		{
+			GD.PushWarning(
+				"System Explorer could not filter scripts because the in-memory system list was empty and recovery from disk failed."
+			);
+		}
+
+		return recovered;
+	}
+
 	private void BuildFilteredScriptTree(string filterText)
 	{
+		if (!EnsureSystemsLoadedForScriptFilter("Build Filtered Script Tree"))
+			return;
+
 		NormalizeAllSystemEntries();
 
 		_tree.Clear();
@@ -788,6 +828,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 	private void ExitScriptFilterMode()
 	{
 		_isFilteringScripts = false;
+		EnsureSystemsLoadedForScriptFilter("Script Filter Exited");
 		_expandedItems.Clear();
 
 		foreach (string metadata in _expandedItemsBeforeScriptFilter)
