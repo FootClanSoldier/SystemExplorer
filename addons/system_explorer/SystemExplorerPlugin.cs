@@ -1280,6 +1280,12 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 	#region Tree Input and Context Menu
 	private void OnTreeGuiInput(InputEvent inputEvent)
 	{
+		if (inputEvent is InputEventKey keyEvent)
+		{
+			HandleTreeKeyboardInput(keyEvent);
+			return;
+		}
+
 		if (inputEvent is not InputEventMouseButton mouseButton)
 			return;
 
@@ -1324,11 +1330,21 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				return;
 			}
 
-			if (mouseButton.Pressed && mouseButton.DoubleClick && IsScriptItem(item))
+			if (mouseButton.Pressed && mouseButton.DoubleClick)
 			{
-				OpenLinkedSceneFromTreeItem(item);
-				_tree.AcceptEvent();
-				return;
+				if (IsScriptItem(item))
+				{
+					OpenLinkedSceneFromTreeItem(item);
+					_tree.AcceptEvent();
+					return;
+				}
+
+				if (ToggleExpandedIfSystemOrFolder(item))
+				{
+					ClearDragState();
+					_tree.AcceptEvent();
+					return;
+				}
 			}
 
 			if (IsShiftPressed(mouseButton))
@@ -1406,6 +1422,77 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		OpenContextMenuForMetadata(rightClickMetadata);
 	}
 
+	private void HandleTreeKeyboardInput(InputEventKey keyEvent)
+	{
+		if (!keyEvent.Pressed || keyEvent.Echo)
+			return;
+
+		if (!IsCtrlShiftCollapseCommand(keyEvent))
+			return;
+
+		bool hadSystemsLoaded = _systems.Count > 0;
+
+		if (!EnsureSystemsLoadedForTreeOperation("Collapse Entire Tree"))
+			return;
+
+		if (!hadSystemsLoaded)
+			BuildTree(keepCurrentExpansionState: true);
+
+		CollapseEntireTree();
+		_tree.AcceptEvent();
+	}
+
+	private static bool IsCtrlShiftCollapseCommand(InputEventKey keyEvent)
+	{
+		bool isCtrlKey = keyEvent.Keycode == Key.Ctrl || keyEvent.PhysicalKeycode == Key.Ctrl;
+		bool isShiftKey = keyEvent.Keycode == Key.Shift || keyEvent.PhysicalKeycode == Key.Shift;
+
+		return (isCtrlKey && keyEvent.ShiftPressed) || (isShiftKey && keyEvent.CtrlPressed);
+	}
+
+	private void CollapseEntireTree()
+	{
+		_expandedItems.Clear();
+		_forcedExpandedItems.Clear();
+		_expandedItemsBeforeScriptFilter.Clear();
+
+		if (_tree == null)
+			return;
+
+		TreeItem root = _tree.GetRoot();
+
+		if (root == null)
+			return;
+
+		// The tree uses HideRoot = true, so collapsing the hidden root makes every
+		// visible item disappear. Collapse only the root's children instead.
+		root.Collapsed = false;
+
+		TreeItem firstVisibleItem = root.GetFirstChild();
+
+		if (firstVisibleItem == null)
+			return;
+
+		CollapseTreeItemsRecursive(firstVisibleItem);
+	}
+
+	private static void CollapseTreeItemsRecursive(TreeItem item)
+	{
+		TreeItem current = item;
+
+		while (current != null)
+		{
+			current.Collapsed = true;
+
+			TreeItem child = current.GetFirstChild();
+
+			if (child != null)
+				CollapseTreeItemsRecursive(child);
+
+			current = current.GetNext();
+		}
+	}
+
 	private void OpenContextMenuForMetadata(string metadata)
 	{
 		if (string.IsNullOrWhiteSpace(metadata))
@@ -1427,17 +1514,18 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return mouseButton.ShiftPressed || Input.IsKeyPressed(Key.Shift);
 	}
 
-	private static void ToggleExpandedIfSystemOrFolder(TreeItem item)
+	private static bool ToggleExpandedIfSystemOrFolder(TreeItem item)
 	{
 		if (item == null)
-			return;
+			return false;
 
 		string metadata = item.GetMetadata(0).AsString();
 
 		if (!metadata.StartsWith("system::") && !metadata.StartsWith("folder::"))
-			return;
+			return false;
 
 		item.Collapsed = !item.Collapsed;
+		return true;
 	}
 
 	private bool IsSelectedScriptItem(TreeItem item)
@@ -3203,6 +3291,31 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		{
 			return null;
 		}
+	}
+
+	private bool EnsureSystemsLoadedForTreeOperation(string reason)
+	{
+		if (_systems.Count > 0)
+			return true;
+
+		if (!FileAccess.FileExists(SavePath))
+			return false;
+
+		DebugLogOperation(
+			"Tree Operation Recovery Guard",
+			$"Reason='{reason}', In-memory systems were empty before a tree operation."
+		);
+
+		bool recovered = TryRecoverSystemsFromDisk(reason);
+
+		if (!recovered)
+		{
+			GD.PushWarning(
+				$"System Explorer could not complete '{reason}' because the in-memory system list was empty and recovery from disk failed."
+			);
+		}
+
+		return recovered;
 	}
 
 	private bool EnsureSystemAvailable(string systemName, string reason)
