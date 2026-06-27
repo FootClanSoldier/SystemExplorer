@@ -1464,8 +1464,6 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (root == null)
 			return;
 
-		// The tree uses HideRoot = true, so collapsing the hidden root makes every
-		// visible item disappear. Collapse only the root's children instead.
 		root.Collapsed = false;
 
 		TreeItem firstVisibleItem = root.GetFirstChild();
@@ -1474,6 +1472,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			return;
 
 		CollapseTreeItemsRecursive(firstVisibleItem);
+		_tree.DeselectAll();
 	}
 
 	private static void CollapseTreeItemsRecursive(TreeItem item)
