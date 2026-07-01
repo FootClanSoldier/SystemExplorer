@@ -1215,6 +1215,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			_selectedScriptEntryFromFilter = selectedItem.GetMetadata(0).AsString().Replace("script::", "");
 
 		OpenScriptFromTreeItem(selectedItem);
+		OpenSceneFromTreeItem(selectedItem);
 	}
 
 	private void OpenScriptFromTreeItem(TreeItem item)
