@@ -28,6 +28,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextAddScene = 8;
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const string SceneEntryMarker = "scene::";
+	private const string LockedEntryMarker = "||locked";
 	private const float ClickOpenDragThreshold = 6.0f;
 	private const float RightIconClickablePadding = 12.0f;
 
@@ -36,6 +37,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private LineEdit _systemNameInput;
 	private LineEdit _scriptFilterInput;
 	private Tree _tree;
+	private Control _focusReleaseTarget;
 	private EditorFileDialog _fileDialog;
 	private PopupMenu _contextMenu;
 	private ConfirmationDialog _removeDialog;
@@ -132,6 +134,7 @@ private void LoadEditorIcons()
 	_scriptFilterSearchIcon = GetEditorIcon(editorTheme, "Search");
 	_scriptFilterCloseIcon = GetEditorIcon(editorTheme, "GuiClose");
 	_systemNameEnterIcon = GetEditorIcon(editorTheme, "Add");
+	//_lockIcon = GetEditorIcon(editorTheme, "Lock");
 
 	_contextFolderIcon = GetEditorIcon(editorTheme, "Folder");
 	_contextNewScriptIcon = GetEditorIcon(editorTheme, "Script");
@@ -194,6 +197,31 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 		_dock = null;
 	}
 
+	private void HandleGlobalLockShortcut(InputEvent inputEvent)
+	{
+		if (inputEvent is not InputEventKey keyEvent)
+			return;
+
+		if (!keyEvent.Pressed || keyEvent.Echo || !IsCtrlLockCommand(keyEvent))
+			return;
+
+		if (_tree == null || _tree.GetSelected() == null)
+			return;
+
+		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
+
+		if (IsTextInputFocused(focusedControl))
+			return;
+
+		ToggleSelectedItemLock();
+		GetViewport().SetInputAsHandled();
+	}
+
+	private static bool IsTextInputFocused(Control focusedControl)
+	{
+		return focusedControl is LineEdit || focusedControl is TextEdit;
+	}
+
 	private void BuildDock()
 	{
 		_dock = new VBoxContainer { Name = "System Explorer" };
@@ -206,6 +234,17 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 		UpdateScriptFilterSearchIconVisibility(_scriptFilterInput.Text);
 		
 		_tree = new Tree { HideRoot = true, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
+		ConfigureTreeColumns();
+
+		_focusReleaseTarget = new Control
+		{
+			Name = "Focus Release Target",
+			FocusMode = Control.FocusModeEnum.All,
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+			CustomMinimumSize = Vector2.Zero,
+			SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
+			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin
+		};
 
 		_fileDialog = new EditorFileDialog
 		{
@@ -346,6 +385,7 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 		_dock.AddChild(_systemNameInput);
 		_dock.AddChild(_scriptFilterInput);
 		_dock.AddChild(_tree);
+		_dock.AddChild(_focusReleaseTarget);
 		_dock.AddChild(_fileDialog);
 		_dock.AddChild(_relinkScriptDialog);
 		_dock.AddChild(_linkSceneDialog);
@@ -358,6 +398,15 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 		_dock.AddChild(_renameDialog);
 		_dock.AddChild(_addFolderDialog);
 		_dock.AddChild(_createScriptDialog);
+	}
+
+	private void ConfigureTreeColumns()
+	{
+		if (_tree == null)
+			return;
+
+		_tree.Columns = 1;
+		_tree.SetColumnExpand(0, true);
 	}
 
 	private void OnSystemNameTextChanged(string text)
@@ -464,10 +513,11 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 			systemItem.Collapsed = true;
 
 			Dictionary<string, TreeItem> folders = new();
+			Dictionary<string, bool> lockedFolders = GetLockedFoldersForSystem(system.Value);
 
 			foreach (string entry in system.Value.Where(entry => entry.StartsWith("folder::")))
 			{
-				CreateFolderPath(systemItem, folders, system.Key, entry.Replace("folder::", ""));
+				CreateFolderPath(systemItem, folders, system.Key, GetFolderPathFromFolderEntry(entry), lockedFolders);
 			}
 
 			foreach (string entry in system.Value.Where(entry => !entry.StartsWith("folder::")))
@@ -475,14 +525,14 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 				string folderPath = GetFolderPathFromEntry(entry);
 				TreeItem parent = string.IsNullOrWhiteSpace(folderPath)
 					? systemItem
-					: CreateFolderPath(systemItem, folders, system.Key, folderPath);
+					: CreateFolderPath(systemItem, folders, system.Key, folderPath, lockedFolders);
 
 				if (IsSceneEntry(entry))
 				{
 					TreeItem sceneItem = _tree.CreateItem(parent);
 					string scenePath = GetScenePathFromEntry(entry);
 
-					sceneItem.SetText(0, scenePath.GetFile());
+					sceneItem.SetText(0, GetLockedDisplayName(scenePath.GetFile(), entry));
 					sceneItem.SetIcon(0, _sceneIcon);
 					sceneItem.SetTooltipText(0, scenePath);
 					sceneItem.SetMetadata(0, $"sceneLink::{entry}");
@@ -496,7 +546,7 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 
 				scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 
-				scriptItem.SetText(0, scriptText);
+				scriptItem.SetText(0, GetLockedDisplayName(scriptText, entry));
 				scriptItem.SetIcon(
 					0,
 					string.IsNullOrWhiteSpace(linkedScenePath) ? _scriptIcon : _sceneIcon
@@ -507,6 +557,26 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 
 		RestoreExpansionState(root);
 	}
+	private static string GetLockedDisplayName(string displayName, string entry)
+	{
+		return IsEntryLocked(entry) ? $"{displayName}  🔒" : displayName;
+	}
+
+	private static Dictionary<string, bool> GetLockedFoldersForSystem(List<string> entries)
+	{
+		Dictionary<string, bool> lockedFolders = new();
+
+		foreach (string entry in entries.Where(entry => entry.StartsWith("folder::")))
+		{
+			string folderPath = GetFolderPathFromFolderEntry(entry);
+
+			if (!string.IsNullOrWhiteSpace(folderPath))
+				lockedFolders[folderPath] = IsEntryLocked(entry);
+		}
+
+		return lockedFolders;
+	}
+
 	private string GetScriptTooltipText(string entry)
 	{
 	string linkedScenePath = GetLinkedScenePathFromEntry(entry);
@@ -630,7 +700,8 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 		TreeItem systemItem,
 		Dictionary<string, TreeItem> folders,
 		string systemName,
-		string folderPath
+		string folderPath,
+		Dictionary<string, bool> lockedFolders = null
 	)
 	{
 		string[] parts = folderPath.Split("/", System.StringSplitOptions.RemoveEmptyEntries);
@@ -645,7 +716,10 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 			if (!folders.ContainsKey(currentPath))
 			{
 				TreeItem folderItem = _tree.CreateItem(parent);
-				folderItem.SetText(0, part);
+				bool isLocked = lockedFolders != null
+					&& lockedFolders.TryGetValue(currentPath, out bool locked)
+					&& locked;
+				folderItem.SetText(0, isLocked ? GetLockedDisplayName(part, LockedEntryMarker) : part);
 				folderItem.SetIcon(0, _folderIcon);
 				folderItem.SetIconModulate(0, _folderColor);
 				folderItem.SetMetadata(0, $"folder::{systemName}::{currentPath}");
@@ -841,7 +915,7 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 			TreeItem scriptItem = _tree.CreateItem(root);
 			string linkedScenePath = GetLinkedScenePathFromEntry(result.Entry);
 			string scriptPath = GetScriptPathFromEntry(result.Entry);
-scriptItem.SetText(0, scriptPath.GetFile());
+scriptItem.SetText(0, GetLockedDisplayName(scriptPath.GetFile(), result.Entry));
 scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			
 			scriptItem.SetIcon(
@@ -1212,7 +1286,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		TreeItem selectedItem = _tree.GetSelected();
 
 		if (_isFilteringScripts && IsScriptItem(selectedItem))
-			_selectedScriptEntryFromFilter = selectedItem.GetMetadata(0).AsString().Replace("script::", "");
+			_selectedScriptEntryFromFilter = GetEntryFromMetadata(selectedItem.GetMetadata(0).AsString());
 
 		OpenScriptFromTreeItem(selectedItem);
 		OpenSceneFromTreeItem(selectedItem);
@@ -1228,7 +1302,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!metadata.StartsWith("script::"))
 			return;
 
-		string entry = metadata.Replace("script::", "");
+		string entry = GetEntryFromMetadata(metadata);
 		string scriptPath = GetScriptPathFromEntry(entry);
 
 		OpenScriptOrMissingDialog(entry, scriptPath);
@@ -1254,6 +1328,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 
 		EditorInterface.Singleton.OpenSceneFromPath(scenePath);
+		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 	}
 
 	private void OpenScriptOrMissingDialog(string entry, string scriptPath)
@@ -1273,6 +1348,15 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 
 		EditorInterface.Singleton.EditScript(script);
+		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+	}
+
+	private void ReleaseTreeFocusAfterNavigation()
+	{
+		if (_focusReleaseTarget == null)
+			return;
+
+		_focusReleaseTarget.GrabFocus();
 	}
 
 	private void OpenMissingScriptDialog(string entry, string scriptPath)
@@ -1337,7 +1421,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		string oldEntry = _pendingMissingScriptEntry;
 		string folderPath = GetFolderPathFromEntry(oldEntry);
 		string linkedScenePath = GetLinkedScenePathFromEntry(oldEntry);
-		string newEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath);
+		string newEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath, IsEntryLocked(oldEntry));
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
@@ -1356,6 +1440,48 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		OpenScriptOrMissingDialog(newEntry, newScriptPath);
 	}
 
+	private bool ReplaceEntryInSystem(string systemName, string oldEntry, string newEntry, string operationName)
+	{
+		if (string.IsNullOrWhiteSpace(systemName))
+			return false;
+
+		if (!EnsureSystemsLoadedForTreeOperation(operationName))
+			return false;
+
+		if (!TryReplaceEntryInSystem(systemName, oldEntry, newEntry, operationName))
+		{
+			if (!TryRecoverSystemsFromDisk(operationName))
+				return false;
+
+			return TryReplaceEntryInSystem(systemName, oldEntry, newEntry, $"{operationName} After Recovery");
+		}
+
+		return true;
+	}
+
+	private bool TryReplaceEntryInSystem(string systemName, string oldEntry, string newEntry, string operationName)
+	{
+		if (!EnsureSystemAvailable(systemName, operationName))
+			return false;
+
+		List<string> entries = _systems[systemName];
+		int index = FindEntryIndex(entries, oldEntry);
+
+		if (index < 0)
+			return false;
+
+		entries.RemoveAt(index);
+
+		if (!entries.Contains(newEntry))
+			entries.Insert(index, newEntry);
+
+		UpdateSelectedScriptEntryFromFilter(oldEntry, newEntry);
+
+		DebugLogOperation(operationName, $"{systemName}: {oldEntry} -> {newEntry}");
+
+		return true;
+	}
+
 	private bool ReplaceEntry(string oldEntry, string newEntry)
 	{
 		if (!EnsureSystemsLoadedForTreeOperation("Replace Entry"))
@@ -1365,6 +1491,12 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		{
 			List<string> entries = _systems[systemName];
 			int index = entries.IndexOf(oldEntry);
+
+			if (index < 0 && oldEntry.StartsWith("folder::"))
+			{
+				string oldFolderPath = GetFolderPathFromFolderEntry(oldEntry);
+				index = entries.FindIndex(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == oldFolderPath);
+			}
 
 			if (index < 0)
 				continue;
@@ -1387,6 +1519,12 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			{
 				List<string> entries = _systems[systemName];
 				int index = entries.IndexOf(oldEntry);
+
+				if (index < 0 && oldEntry.StartsWith("folder::"))
+				{
+					string oldFolderPath = GetFolderPathFromFolderEntry(oldEntry);
+					index = entries.FindIndex(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == oldFolderPath);
+				}
 
 				if (index < 0)
 					continue;
@@ -1457,6 +1595,16 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		Vector2 mousePosition = _tree.GetLocalMousePosition();
 		TreeItem item = _tree.GetItemAtPosition(mousePosition);
 
+		if (mouseButton.ButtonIndex == MouseButton.Middle)
+		{
+			if (!mouseButton.Pressed || item == null)
+				return;
+
+			ToggleItemLock(item, selectToggledItemAfterBuild: false);
+			_tree.AcceptEvent();
+			return;
+		}
+
 		if (mouseButton.ButtonIndex == MouseButton.Left)
 		{
 			if (_isFilteringScripts)
@@ -1466,7 +1614,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				if (mouseButton.Pressed && mouseButton.DoubleClick && IsScriptItem(item))
 				{
 					item.Select(0);
-					_selectedScriptEntryFromFilter = item.GetMetadata(0).AsString().Replace("script::", "");
+					_selectedScriptEntryFromFilter = GetEntryFromMetadata(item.GetMetadata(0).AsString());
 					_ignoreNextScriptFilterReleaseOpen = true;
 					OpenLinkedSceneFromTreeItem(item);
 					_tree.AcceptEvent();
@@ -1476,7 +1624,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				if (!mouseButton.Pressed && IsScriptItem(item))
 				{
 					item.Select(0);
-					_selectedScriptEntryFromFilter = item.GetMetadata(0).AsString().Replace("script::", "");
+					_selectedScriptEntryFromFilter = GetEntryFromMetadata(item.GetMetadata(0).AsString());
 
 					if (_ignoreNextScriptFilterReleaseOpen)
 					{
@@ -1576,7 +1724,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			item.Select(0);
 
 			string filteredScriptMetadata = item.GetMetadata(0).AsString();
-			_selectedScriptEntryFromFilter = filteredScriptMetadata.Replace("script::", "");
+			_selectedScriptEntryFromFilter = GetEntryFromMetadata(filteredScriptMetadata);
 			OpenContextMenuForMetadata(filteredScriptMetadata);
 			_tree.AcceptEvent();
 			return;
@@ -1593,6 +1741,13 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!keyEvent.Pressed || keyEvent.Echo)
 			return;
 
+		if (IsCtrlLockCommand(keyEvent))
+		{
+			ToggleSelectedItemLock();
+			_tree.AcceptEvent();
+			return;
+		}
+
 		if (!IsCtrlShiftCollapseCommand(keyEvent))
 			return;
 
@@ -1606,6 +1761,93 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		CollapseEntireTree();
 		_tree.AcceptEvent();
+	}
+
+	private static bool IsCtrlLockCommand(InputEventKey keyEvent)
+	{
+		return keyEvent.CtrlPressed
+			&& !keyEvent.ShiftPressed
+			&& !keyEvent.AltPressed
+			&& (keyEvent.Keycode == Key.L || keyEvent.PhysicalKeycode == Key.L);
+	}
+
+	private void ToggleSelectedItemLock()
+	{
+		ToggleItemLock(_tree.GetSelected());
+	}
+
+	private void ToggleItemLock(TreeItem item, bool selectToggledItemAfterBuild = true)
+	{
+		if (item == null)
+			return;
+
+		string metadata = item.GetMetadata(0).AsString();
+		string selectedMetadataBeforeToggle = _tree.GetSelected()?.GetMetadata(0).AsString() ?? "";
+
+		if (!IsLockableMetadata(metadata))
+			return;
+
+		if (!EnsureSystemsLoadedForTreeOperation("Toggle Item Lock"))
+			return;
+
+		string oldEntry = GetLockableEntryFromMetadata(metadata);
+
+		if (string.IsNullOrWhiteSpace(oldEntry))
+			return;
+
+		string newEntry = SetEntryLocked(oldEntry, !IsEntryLocked(oldEntry));
+		bool replacedEntry = metadata.StartsWith("folder::")
+			? ReplaceEntryInSystem(GetSystemNameFromMetadata(metadata), oldEntry, newEntry, "Toggle Folder Lock")
+			: ReplaceEntry(oldEntry, newEntry);
+
+		if (!replacedEntry)
+		{
+			DebugLogOperation("Toggle Item Lock cancelled: mutation failed", oldEntry);
+			return;
+		}
+
+		if (SaveSystems())
+		{
+			SaveExpansionState();
+			BuildTree(keepCurrentExpansionState: true);
+
+			string metadataToSelect = selectToggledItemAfterBuild
+				? GetMetadataAfterLockToggle(metadata, newEntry)
+				: selectedMetadataBeforeToggle;
+
+			if (!string.IsNullOrWhiteSpace(metadataToSelect))
+				SelectTreeItemByMetadata(metadataToSelect);
+		}
+	}
+
+	private static string GetMetadataAfterLockToggle(string metadata, string newEntry)
+	{
+		if (!metadata.StartsWith("folder::"))
+			return $"{GetMetadataPrefix(metadata)}{newEntry}";
+
+		string systemName = GetSystemNameFromMetadata(metadata);
+		string folderPath = GetFolderPathFromFolderEntry(newEntry);
+
+		return string.IsNullOrWhiteSpace(systemName) || string.IsNullOrWhiteSpace(folderPath)
+			? metadata
+			: $"folder::{systemName}::{folderPath}";
+	}
+
+	private static string GetMetadataPrefix(string metadata)
+	{
+		if (metadata.StartsWith("script::"))
+			return "script::";
+
+		if (metadata.StartsWith("sceneLink::"))
+			return "sceneLink::";
+
+		if (metadata.StartsWith("folder::"))
+		{
+			string systemName = GetSystemNameFromMetadata(metadata);
+			return string.IsNullOrWhiteSpace(systemName) ? "" : $"folder::{systemName}::";
+		}
+
+		return "";
 	}
 
 	private static bool IsCtrlShiftCollapseCommand(InputEventKey keyEvent)
@@ -1750,7 +1992,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			if (!_isFilteringScripts)
 				_contextMenu.AddSeparator();
 
-			string entry = metadata.Replace("script::", "");
+			string entry = GetEntryFromMetadata(metadata);
 
 			if (string.IsNullOrWhiteSpace(GetLinkedScenePathFromEntry(entry)))
 			{
@@ -1836,7 +2078,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		if (_pendingShowInFileManagerMetadata.StartsWith("script::"))
 		{
-			string entry = _pendingShowInFileManagerMetadata.Replace("script::", "");
+			string entry = GetEntryFromMetadata(_pendingShowInFileManagerMetadata);
 			path = GetScriptPathFromEntry(entry);
 			missingEntry = entry;
 		}
@@ -1996,7 +2238,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!_pendingRenameMetadata.StartsWith("script::"))
 			return;
 
-		string entry = _pendingRenameMetadata.Replace("script::", "");
+		string entry = GetEntryFromMetadata(_pendingRenameMetadata);
 		if (!IsScriptEntryValidOrOpenMissingDialog(entry))
 			return;
 
@@ -2021,7 +2263,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!_pendingRenameMetadata.StartsWith("script::"))
 			return;
 
-		string entry = _pendingRenameMetadata.Replace("script::", "");
+		string entry = GetEntryFromMetadata(_pendingRenameMetadata);
 		UpdateLinkedScenePath(entry, "");
 	}
 
@@ -2035,7 +2277,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!metadata.StartsWith("script::"))
 			return;
 
-		string entry = metadata.Replace("script::", "");
+		string entry = GetEntryFromMetadata(metadata);
 
 		if (!IsScriptEntryValidOrOpenMissingDialog(entry))
 			return;
@@ -2056,6 +2298,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 
 		EditorInterface.Singleton.OpenSceneFromPath(linkedScenePath);
+		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 	}
 
 	private bool IsScriptEntryValidOrOpenMissingDialog(string entry)
@@ -2155,7 +2398,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			return false;
 
 		string folderPath = GetFolderPathFromEntry(oldEntry);
-		string newEntry = BuildSceneEntry(folderPath, newScenePath);
+		string newEntry = BuildSceneEntry(folderPath, newScenePath, IsEntryLocked(oldEntry));
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
@@ -2179,7 +2422,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		string folderPath = GetFolderPathFromEntry(oldEntry);
 		string scriptPath = GetScriptPathFromEntry(oldEntry);
-		string newEntry = BuildScriptEntry(folderPath, scriptPath, linkedScenePath);
+		string newEntry = BuildScriptEntry(folderPath, scriptPath, linkedScenePath, IsEntryLocked(oldEntry));
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
@@ -2289,6 +2532,18 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		if (!EnsureSystemsLoadedForTreeOperation("Drag Move"))
 			return;
+
+		if (IsDragSourceLockedBySelfOrParentFolder(draggedMetadata))
+		{
+			DebugLogOperation("Drag Move cancelled: dragged item or parent folder is locked", draggedMetadata);
+			return;
+		}
+
+		if (IsDropTargetSortingLocked(targetMetadata))
+		{
+			DebugLogOperation("Drag Move cancelled: target folder contents are locked", targetMetadata);
+			return;
+		}
 
 		bool moved = false;
 
@@ -2443,8 +2698,13 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 
 		string newEntry = IsSceneEntry(draggedEntry)
-			? BuildSceneEntry(targetFolderPath, draggedPath)
-			: BuildScriptEntry(targetFolderPath, draggedPath, GetLinkedScenePathFromEntry(draggedEntry));
+			? BuildSceneEntry(targetFolderPath, draggedPath, IsEntryLocked(draggedEntry))
+			: BuildScriptEntry(
+				targetFolderPath,
+				draggedPath,
+				GetLinkedScenePathFromEntry(draggedEntry),
+				IsEntryLocked(draggedEntry)
+			);
 
 		bool sameSystem = sourceSystemName == targetSystemName;
 		bool sameLocation = sameSystem && draggedEntry == newEntry;
@@ -2536,8 +2796,8 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		List<string> entries = _systems[draggedSystemName];
 
-		int draggedIndex = entries.IndexOf(draggedEntry);
-		int targetIndex = entries.IndexOf(targetEntry);
+		int draggedIndex = FindEntryIndex(entries, draggedEntry);
+		int targetIndex = FindEntryIndex(entries, targetEntry);
 
 		if (draggedIndex < 0 || targetIndex < 0 || draggedIndex == targetIndex)
 			return false;
@@ -2552,7 +2812,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		entries.RemoveAt(draggedIndex);
 
-		targetIndex = entries.IndexOf(targetEntry);
+		targetIndex = FindEntryIndex(entries, targetEntry);
 
 		if (targetIndex < 0)
 			return false;
@@ -2566,6 +2826,17 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return true;
 	}
 
+	private static int FindEntryIndex(List<string> entries, string entryToFind)
+	{
+		int index = entries.IndexOf(entryToFind);
+
+		if (index >= 0 || !entryToFind.StartsWith("folder::"))
+			return index;
+
+		string folderPath = GetFolderPathFromFolderEntry(entryToFind);
+		return entries.FindIndex(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath);
+	}
+
 	private static bool IsSystemEntryMetadata(string metadata)
 	{
 		return metadata.StartsWith("folder::") || IsScriptOrSceneMetadata(metadata);
@@ -2574,6 +2845,11 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 	private static bool IsScriptOrSceneMetadata(string metadata)
 	{
 		return metadata.StartsWith("script::") || metadata.StartsWith("sceneLink::");
+	}
+
+	private static bool IsLockableMetadata(string metadata)
+	{
+		return metadata.StartsWith("folder::") || IsScriptOrSceneMetadata(metadata);
 	}
 
 	private static bool IsValidScriptOrSceneDropTargetMetadata(string metadata)
@@ -2614,7 +2890,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		if (metadata.StartsWith("script::"))
 		{
-			string entry = metadata.Replace("script::", "");
+			string entry = GetEntryFromMetadata(metadata);
 			return FindSystemNameForEntry(entry);
 		}
 
@@ -2641,25 +2917,41 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 	private static string GetEntryFromMetadata(string metadata)
 	{
 		if (metadata.StartsWith("script::"))
-			return metadata.Replace("script::", "");
+			return metadata.Substring("script::".Length);
 
 		if (metadata.StartsWith("sceneLink::"))
 			return metadata.Substring("sceneLink::".Length);
 
 		if (metadata.StartsWith("folder::"))
 		{
-			string[] parts = metadata.Split("::");
-			return parts.Length >= 3 ? $"folder::{parts[2]}" : "";
+			string folderPath = GetFolderPathFromMetadata(metadata);
+			return string.IsNullOrWhiteSpace(folderPath) ? "" : BuildFolderEntry(folderPath);
 		}
 
 		return "";
+	}
+
+	private string GetLockableEntryFromMetadata(string metadata)
+	{
+		if (!metadata.StartsWith("folder::"))
+			return GetEntryFromMetadata(metadata);
+
+		string systemName = GetSystemNameFromMetadata(metadata);
+		string folderPath = GetFolderPathFromMetadata(metadata);
+
+		if (!EnsureSystemAvailable(systemName, "Resolve Folder Lock Entry"))
+			return "";
+
+		return _systems[systemName]
+			.FirstOrDefault(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath)
+			?? BuildFolderEntry(folderPath);
 	}
 
 	private static string GetParentFolderPathFromEntryMetadata(string metadata)
 	{
 		if (metadata.StartsWith("script::"))
 		{
-			string entry = metadata.Replace("script::", "");
+			string entry = GetEntryFromMetadata(metadata);
 			return GetFolderPathFromEntry(entry);
 		}
 
@@ -2768,7 +3060,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 		else if (_pendingRenameMetadata.StartsWith("script::"))
 		{
-			string entry = _pendingRenameMetadata.Replace("script::", "");
+			string entry = GetEntryFromMetadata(_pendingRenameMetadata);
 			string scriptPath = GetScriptPathFromEntry(entry);
 
 			_renameInput.Text = scriptPath.GetFile().GetBaseName();
@@ -2841,7 +3133,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		if (metadata.StartsWith("script::"))
 		{
-			string entry = metadata.Replace("script::", "");
+			string entry = GetEntryFromMetadata(metadata);
 			bool removed = RemoveEntry(entry);
 			DebugLogOperation(removed ? "Remove Script Mutated" : "Remove Script failed", entry);
 			return removed;
@@ -2869,7 +3161,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 	{
 		if (metadata.StartsWith("script::"))
 		{
-			string entry = metadata.Replace("script::", "");
+			string entry = GetEntryFromMetadata(metadata);
 			return new List<string> { GetScriptPathFromEntry(entry) };
 		}
 
@@ -3113,18 +3405,22 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		foreach (string entry in _systems[systemName])
 		{
-			if (entry == $"folder::{oldFolderPath}")
+			if (entry.StartsWith("folder::"))
 			{
-				updatedEntries.Add($"folder::{newFolderPath}");
-				continue;
-			}
+				string folderEntryPath = GetFolderPathFromFolderEntry(entry);
 
-			if (entry.StartsWith($"folder::{oldFolderPath}/"))
-			{
-				updatedEntries.Add(
-					entry.Replace($"folder::{oldFolderPath}/", $"folder::{newFolderPath}/")
-				);
-				continue;
+				if (folderEntryPath == oldFolderPath)
+				{
+					updatedEntries.Add(BuildFolderEntry(newFolderPath, IsEntryLocked(entry)));
+					continue;
+				}
+
+				if (folderEntryPath.StartsWith($"{oldFolderPath}/"))
+				{
+					string childFolderPath = folderEntryPath.Replace($"{oldFolderPath}/", $"{newFolderPath}/");
+					updatedEntries.Add(BuildFolderEntry(childFolderPath, IsEntryLocked(entry)));
+					continue;
+				}
 			}
 
 			if (entry.StartsWith($"{oldFolderPath}|"))
@@ -3157,7 +3453,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!EnsureSystemsLoadedForTreeOperation("Rename Script"))
 			return false;
 
-		string entry = metadata.Replace("script::", "");
+		string entry = GetEntryFromMetadata(metadata);
 		string oldScriptPath = GetScriptPathFromEntry(entry);
 
 		if (!FileAccess.FileExists(oldScriptPath))
@@ -3298,7 +3594,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				}
 
 				string folderPath = GetFolderPathFromEntry(entry);
-				string updatedEntry = BuildSceneEntry(folderPath, newScenePath);
+				string updatedEntry = BuildSceneEntry(folderPath, newScenePath, IsEntryLocked(entry));
 
 				updatedEntries.Add(updatedEntry);
 			}
@@ -3335,7 +3631,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				string folderPath = GetFolderPathFromEntry(entry);
 
 				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
-				string updatedEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath);
+				string updatedEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath, IsEntryLocked(entry));
 
 				UpdateSelectedScriptEntryFromFilter(entry, updatedEntry);
 
@@ -3419,7 +3715,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!EnsureSystemAvailable(systemName, "Remove Folder"))
 			return false;
 
-		bool removedFolderEntry = _systems[systemName].Remove($"folder::{folderPath}");
+		int removedFolderEntries = _systems[systemName].RemoveAll(
+			entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath
+		);
 
 		int removedChildEntries = _systems[systemName].RemoveAll(
 			entry =>
@@ -3428,7 +3726,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				|| entry.StartsWith($"folder::{folderPath}/")
 		);
 
-		return removedFolderEntry || removedChildEntries > 0;
+		return removedFolderEntries > 0 || removedChildEntries > 0;
 	}
 
 	private string GetSelectedSystemName()
@@ -3447,7 +3745,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 			if (metadata.StartsWith("script::"))
 			{
-				string entry = metadata.Replace("script::", "");
+				string entry = GetEntryFromMetadata(metadata);
 				string systemName = FindSystemNameForEntry(entry);
 
 				if (!string.IsNullOrWhiteSpace(systemName))
@@ -3482,7 +3780,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 			if (metadata.StartsWith("script::"))
 			{
-				string entry = metadata.Replace("script::", "");
+				string entry = GetEntryFromMetadata(metadata);
 				return GetFolderPathFromEntry(entry);
 			}
 
@@ -3519,6 +3817,20 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		string[] parts = metadata.Split("::");
 		return parts.Length >= 3 ? parts[2] : "";
+	}
+
+	private static string BuildFolderEntry(string folderPath, bool locked = false)
+	{
+		string entry = $"folder::{folderPath}";
+		return locked ? AddLockMarker(entry) : entry;
+	}
+
+	private static string GetFolderPathFromFolderEntry(string entry)
+	{
+		if (string.IsNullOrWhiteSpace(entry) || !entry.StartsWith("folder::"))
+			return "";
+
+		return RemoveLockMarker(entry).Substring("folder::".Length);
 	}
 
 	private static string GetFolderPathFromEntry(string entry)
@@ -3562,33 +3874,39 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return pathPart.StartsWith(SceneEntryMarker);
 	}
 
-	private static string BuildSceneEntry(string folderPath, string scenePath)
+	private static string BuildSceneEntry(string folderPath, string scenePath, bool locked = false)
 	{
 		string sceneEntry = $"{SceneEntryMarker}{scenePath}";
-		return string.IsNullOrWhiteSpace(folderPath) ? sceneEntry : $"{folderPath}|{sceneEntry}";
+		string entry = string.IsNullOrWhiteSpace(folderPath) ? sceneEntry : $"{folderPath}|{sceneEntry}";
+		return locked ? AddLockMarker(entry) : entry;
 	}
 
 	private static string GetLinkedScenePathFromEntry(string entry)
 	{
-		if (string.IsNullOrWhiteSpace(entry) || !entry.Contains(LinkedSceneMarker))
+		string entryWithoutLock = RemoveLockMarker(entry);
+
+		if (string.IsNullOrWhiteSpace(entryWithoutLock) || !entryWithoutLock.Contains(LinkedSceneMarker))
 			return "";
 
-		string[] parts = entry.Split(LinkedSceneMarker, System.StringSplitOptions.None);
+		string[] parts = entryWithoutLock.Split(LinkedSceneMarker, System.StringSplitOptions.None);
 		return parts.Length >= 2 ? parts[1] : "";
 	}
 
 	private static string GetEntryWithoutLinkedScene(string entry)
 	{
-		if (string.IsNullOrWhiteSpace(entry) || !entry.Contains(LinkedSceneMarker))
-			return entry;
+		string entryWithoutLock = RemoveLockMarker(entry);
 
-		return entry.Split(LinkedSceneMarker, System.StringSplitOptions.None)[0];
+		if (string.IsNullOrWhiteSpace(entryWithoutLock) || !entryWithoutLock.Contains(LinkedSceneMarker))
+			return entryWithoutLock;
+
+		return entryWithoutLock.Split(LinkedSceneMarker, System.StringSplitOptions.None)[0];
 	}
 
 	private static string BuildScriptEntry(
 		string folderPath,
 		string scriptPath,
-		string linkedScenePath = ""
+		string linkedScenePath = "",
+		bool locked = false
 	)
 	{
 		string entry = string.IsNullOrWhiteSpace(folderPath)
@@ -3598,7 +3916,128 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (!string.IsNullOrWhiteSpace(linkedScenePath))
 			entry += $"{LinkedSceneMarker}{linkedScenePath}";
 
-		return entry;
+		return locked ? AddLockMarker(entry) : entry;
+	}
+
+	private static bool IsEntryLocked(string entry)
+	{
+		return !string.IsNullOrWhiteSpace(entry) && entry.EndsWith(LockedEntryMarker);
+	}
+
+	private bool IsDragSourceLockedBySelfOrParentFolder(string metadata)
+	{
+		if (string.IsNullOrWhiteSpace(metadata))
+			return false;
+
+		if (IsScriptOrSceneMetadata(metadata) && IsEntryLocked(GetEntryFromMetadata(metadata)))
+			return true;
+
+		if (metadata.StartsWith("folder::") && IsFolderLocked(metadata))
+			return true;
+
+		return IsInsideLockedFolder(metadata, includeSelf: false);
+	}
+
+	private bool IsDropTargetSortingLocked(string metadata)
+	{
+		if (string.IsNullOrWhiteSpace(metadata))
+			return false;
+
+		if (IsScriptOrSceneMetadata(metadata) && IsEntryLocked(GetEntryFromMetadata(metadata)))
+			return true;
+
+		// Dropping directly on a locked folder is still allowed so files can be added to it.
+		// Dropping on items inside that folder is treated as sorting and is blocked.
+		if (metadata.StartsWith("folder::") && IsFolderLocked(metadata))
+			return false;
+
+		return IsInsideLockedFolder(metadata, includeSelf: true);
+	}
+
+	private bool IsInsideLockedFolder(string metadata, bool includeSelf)
+	{
+		string systemName = GetSystemNameFromEntryMetadata(metadata);
+		string folderPath = metadata.StartsWith("folder::")
+			? GetFolderPathFromMetadata(metadata)
+			: GetFolderPathFromEntry(GetEntryFromMetadata(metadata));
+
+		if (string.IsNullOrWhiteSpace(systemName) || string.IsNullOrWhiteSpace(folderPath))
+			return false;
+
+		if (!includeSelf && metadata.StartsWith("folder::"))
+		{
+			if (!folderPath.Contains("/"))
+				return false;
+
+			folderPath = folderPath.Substring(0, folderPath.LastIndexOf('/'));
+		}
+
+		foreach (string ancestorPath in GetFolderPathAndAncestors(folderPath))
+		{
+			if (IsFolderEntryLocked(systemName, ancestorPath))
+				return true;
+		}
+
+		return false;
+	}
+
+	private bool IsFolderLocked(string metadata)
+	{
+		string systemName = GetSystemNameFromMetadata(metadata);
+		string folderPath = GetFolderPathFromMetadata(metadata);
+
+		return IsFolderEntryLocked(systemName, folderPath);
+	}
+
+	private bool IsFolderEntryLocked(string systemName, string folderPath)
+	{
+		if (string.IsNullOrWhiteSpace(systemName) || string.IsNullOrWhiteSpace(folderPath))
+			return false;
+
+		if (!EnsureSystemAvailable(systemName, "Check Folder Lock"))
+			return false;
+
+		string folderEntry = _systems[systemName]
+			.FirstOrDefault(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath);
+
+		return IsEntryLocked(folderEntry);
+	}
+
+	private static IEnumerable<string> GetFolderPathAndAncestors(string folderPath)
+	{
+		string currentPath = folderPath;
+
+		while (!string.IsNullOrWhiteSpace(currentPath))
+		{
+			yield return currentPath;
+
+			if (!currentPath.Contains("/"))
+				yield break;
+
+			currentPath = currentPath.Substring(0, currentPath.LastIndexOf('/'));
+		}
+	}
+
+	private static string SetEntryLocked(string entry, bool locked)
+	{
+		string entryWithoutLock = RemoveLockMarker(entry);
+		return locked ? AddLockMarker(entryWithoutLock) : entryWithoutLock;
+	}
+
+	private static string AddLockMarker(string entry)
+	{
+		if (string.IsNullOrWhiteSpace(entry) || IsEntryLocked(entry))
+			return entry;
+
+		return $"{entry}{LockedEntryMarker}";
+	}
+
+	private static string RemoveLockMarker(string entry)
+	{
+		if (string.IsNullOrWhiteSpace(entry) || !entry.EndsWith(LockedEntryMarker))
+			return entry;
+
+		return entry.Substring(0, entry.Length - LockedEntryMarker.Length);
 	}
 
 	private void NormalizeAllSystemEntries()
@@ -3614,7 +4053,8 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		List<string> explicitFolders = entries
 			.Where(entry => entry.StartsWith("folder::"))
-			.Distinct()
+			.GroupBy(GetFolderPathFromFolderEntry)
+			.Select(group => BuildFolderEntry(group.Key, group.Any(IsEntryLocked)))
 			.ToList();
 
 		List<string> scripts = entries
@@ -3642,13 +4082,13 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		foreach (string folderEntry in explicitFolders)
 		{
-			if (!normalized.Contains(folderEntry))
+			if (!normalized.Any(existing => GetFolderPathFromFolderEntry(existing) == GetFolderPathFromFolderEntry(folderEntry)))
 				normalized.Add(folderEntry);
 		}
 
 		foreach (string folderEntry in requiredFolders)
 		{
-			if (!normalized.Contains(folderEntry))
+			if (!normalized.Any(existing => GetFolderPathFromFolderEntry(existing) == GetFolderPathFromFolderEntry(folderEntry)))
 				normalized.Add(folderEntry);
 		}
 
@@ -3966,20 +4406,27 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 					continue;
 				}
 
-				string scriptPath = GetScriptPathFromEntry(entry);
+				bool isSceneEntry = IsSceneEntry(entry);
+				string path = isSceneEntry ? GetScenePathFromEntry(entry) : GetScriptPathFromEntry(entry);
 				string folderPath = GetFolderPathFromEntry(entry);
 				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
 
-				Dictionary<string, string> scriptEntry =
-					new() { ["name"] = scriptPath.GetFile(), ["path"] = scriptPath };
+				Dictionary<string, object> serializedEntry =
+					new() { ["name"] = path.GetFile(), ["path"] = path };
+
+				if (isSceneEntry)
+					serializedEntry["type"] = "scene";
 
 				if (!string.IsNullOrWhiteSpace(folderPath))
-					scriptEntry["folderPath"] = folderPath;
+					serializedEntry["folderPath"] = folderPath;
 
 				if (!string.IsNullOrWhiteSpace(linkedScenePath))
-					scriptEntry["linkedScenePath"] = linkedScenePath;
+					serializedEntry["linkedScenePath"] = linkedScenePath;
 
-				serializedEntries.Add(scriptEntry);
+				if (IsEntryLocked(entry))
+					serializedEntry["locked"] = true;
+
+				serializedEntries.Add(serializedEntry);
 			}
 
 			serializedSystems[system.Key] = serializedEntries;
@@ -4025,13 +4472,25 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 					continue;
 
 				string folderPath = GetJsonString(entryElement, "folderPath");
-				string scriptPath = GetJsonString(entryElement, "path");
+				string path = GetJsonString(entryElement, "path");
 				string linkedScenePath = GetJsonString(entryElement, "linkedScenePath");
+				string entryType = GetJsonString(entryElement, "type");
+				bool locked = GetJsonBool(entryElement, "locked");
 
-				if (string.IsNullOrWhiteSpace(scriptPath))
+				if (string.IsNullOrWhiteSpace(path))
 					continue;
 
-				entries.Add(BuildScriptEntry(folderPath, scriptPath, linkedScenePath));
+				if (entryType == "scene" || path.StartsWith(SceneEntryMarker))
+				{
+					string scenePath = path.StartsWith(SceneEntryMarker)
+						? path.Substring(SceneEntryMarker.Length)
+						: path;
+
+					entries.Add(BuildSceneEntry(folderPath, scenePath, locked));
+					continue;
+				}
+
+				entries.Add(BuildScriptEntry(folderPath, path, linkedScenePath, locked));
 			}
 
 			systems[systemProperty.Name] = entries;
@@ -4040,17 +4499,35 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return systems;
 	}
 
-	private static string GetJsonString(JsonElement element, string propertyName)
+	private static bool GetJsonBool(JsonElement element, string propertyName)
 	{
-		if (element.TryGetProperty(propertyName, out JsonElement value))
-			return value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+		if (TryGetJsonProperty(element, propertyName, out JsonElement value))
+		{
+			if (value.ValueKind == JsonValueKind.True)
+				return true;
+
+			if (value.ValueKind == JsonValueKind.String)
+				return value.GetString()?.ToLowerInvariant() == "true";
+		}
+
+		return false;
+	}
+
+	private static bool TryGetJsonProperty(JsonElement element, string propertyName, out JsonElement value)
+	{
+		if (element.TryGetProperty(propertyName, out value))
+			return true;
 
 		string pascalName = char.ToUpperInvariant(propertyName[0]) + propertyName.Substring(1);
+		return element.TryGetProperty(pascalName, out value);
+	}
 
-		if (element.TryGetProperty(pascalName, out value))
-			return value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+	private static string GetJsonString(JsonElement element, string propertyName)
+	{
+		if (!TryGetJsonProperty(element, propertyName, out JsonElement value))
+			return "";
 
-		return "";
+		return value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
 	}
 
 	private void LoadSystems()
@@ -4093,6 +4570,8 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	public override void _Input(InputEvent inputEvent)
 	{
+		HandleGlobalLockShortcut(inputEvent);
+
 		if (inputEvent is not InputEventKey keyEvent)
 			return;
 
