@@ -1494,14 +1494,6 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				return;
 			}
 
-			if (mouseButton.Pressed && IsSceneItem(item))
-			{
-				item.Select(0);
-				OpenSceneFromTreeItem(item);
-				_tree.AcceptEvent();
-				return;
-			}
-
 			if (mouseButton.Pressed && mouseButton.DoubleClick)
 			{
 				if (IsScriptItem(item))
@@ -1537,7 +1529,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				_draggedSourceFolderPath = item == null ? "" : GetFolderPathFromTreeItem(item);
 				_leftMousePressPosition = mousePosition;
 				_leftMousePressedMetadata = _draggedMetadata;
-				_leftMousePressedOnSelectedScript = IsSelectedScriptItem(item);
+				_leftMousePressedOnSelectedScript = IsSelectedScriptOrSceneItem(item);
 			}
 			else
 			{
@@ -1556,6 +1548,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				if (isClick)
 				{
 					OpenScriptFromTreeItem(item);
+					OpenSceneFromTreeItem(item);
 					ClearDragState();
 					return;
 				}
@@ -1699,7 +1692,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return true;
 	}
 
-	private bool IsSelectedScriptItem(TreeItem item)
+	private bool IsSelectedScriptOrSceneItem(TreeItem item)
 	{
 		if (item == null)
 			return false;
@@ -1709,7 +1702,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		string metadata = item.GetMetadata(0).AsString();
 
-		return metadata.StartsWith("script::");
+		return IsScriptOrSceneMetadata(metadata);
 	}
 
 	private static bool IsScriptItem(TreeItem item)
@@ -2309,11 +2302,11 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			moved = MoveSystem(draggedMetadata, targetMetadata);
 		}
 		else if (
-			draggedMetadata.StartsWith("script::")
-			&& IsValidScriptDropTargetMetadata(targetMetadata)
+			IsScriptOrSceneMetadata(draggedMetadata)
+			&& IsValidScriptOrSceneDropTargetMetadata(targetMetadata)
 		)
 		{
-			moved = MoveScriptToDropTarget(draggedMetadata, targetItem);
+			moved = MoveScriptOrSceneToDropTarget(draggedMetadata, targetItem);
 		}
 		else if (
 			draggedMetadata != targetMetadata
@@ -2380,9 +2373,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return true;
 	}
 
-	private bool MoveScriptToDropTarget(string draggedMetadata, TreeItem targetItem)
+	private bool MoveScriptOrSceneToDropTarget(string draggedMetadata, TreeItem targetItem)
 	{
-		if (!EnsureSystemsLoadedForTreeOperation("Move Script"))
+		if (!EnsureSystemsLoadedForTreeOperation("Move Script/Scene"))
 			return false;
 
 		if (targetItem == null)
@@ -2390,13 +2383,13 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		string targetMetadata = targetItem.GetMetadata(0).AsString();
 
-		if (!IsValidScriptDropTargetMetadata(targetMetadata))
+		if (!IsValidScriptOrSceneDropTargetMetadata(targetMetadata))
 			return false;
 
 		string draggedEntry = GetEntryFromMetadata(draggedMetadata);
-		string draggedScriptPath = GetScriptPathFromEntry(draggedEntry);
+		string draggedPath = GetPathFromEntry(draggedEntry);
 
-		if (string.IsNullOrWhiteSpace(draggedEntry) || string.IsNullOrWhiteSpace(draggedScriptPath))
+		if (string.IsNullOrWhiteSpace(draggedEntry) || string.IsNullOrWhiteSpace(draggedPath))
 			return false;
 
 		string sourceSystemName = _draggedSourceSystemName;
@@ -2406,7 +2399,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		string targetSystemName = GetSystemNameFromTreeItem(targetItem);
 		string targetFolderPath = GetDropFolderPathFromTargetItem(targetItem);
-		string targetEntry = targetMetadata.StartsWith("script::")
+		string targetEntry = IsScriptOrSceneMetadata(targetMetadata)
 			? GetEntryFromMetadata(targetMetadata)
 			: "";
 
@@ -2415,7 +2408,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			|| string.IsNullOrWhiteSpace(targetSystemName)
 		)
 		{
-			TryRecoverSystemsFromDisk("Move Script Resolve Systems");
+			TryRecoverSystemsFromDisk("Move Script/Scene Resolve Systems");
 
 			if (string.IsNullOrWhiteSpace(sourceSystemName))
 				sourceSystemName = FindSystemNameForEntry(draggedEntry);
@@ -2424,10 +2417,8 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				targetSystemName = GetSystemNameFromTreeItem(targetItem);
 		}
 
-		if (!EnsureSystemsAvailable(new[] { sourceSystemName, targetSystemName }, "Move Script"))
-		{
+		if (!EnsureSystemsAvailable(new[] { sourceSystemName, targetSystemName }, "Move Script/Scene"))
 			return false;
-		}
 
 		List<string> sourceEntries = _systems[sourceSystemName];
 		List<string> targetEntries = _systems[targetSystemName];
@@ -2436,7 +2427,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		if (sourceIndex < 0)
 		{
-			if (!TryRecoverSystemsFromDisk("Move Script Source Entry"))
+			if (!TryRecoverSystemsFromDisk("Move Script/Scene Source Entry"))
 				return false;
 
 			if (!_systems.ContainsKey(sourceSystemName) || !_systems.ContainsKey(targetSystemName))
@@ -2450,28 +2441,29 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				return false;
 		}
 
-		string linkedScenePath = GetLinkedScenePathFromEntry(draggedEntry);
-		string newEntry = BuildScriptEntry(targetFolderPath, draggedScriptPath, linkedScenePath);
+		string newEntry = IsSceneEntry(draggedEntry)
+			? BuildSceneEntry(targetFolderPath, draggedPath)
+			: BuildScriptEntry(targetFolderPath, draggedPath, GetLinkedScenePathFromEntry(draggedEntry));
 
 		bool sameSystem = sourceSystemName == targetSystemName;
 		bool sameLocation = sameSystem && draggedEntry == newEntry;
 
-		if (sameLocation && !targetMetadata.StartsWith("script::"))
+		if (sameLocation && !IsScriptOrSceneMetadata(targetMetadata))
 			return false;
 
-		if (sameLocation && targetMetadata.StartsWith("script::") && draggedEntry == targetEntry)
+		if (sameLocation && IsScriptOrSceneMetadata(targetMetadata) && draggedEntry == targetEntry)
 			return false;
 
-		int targetIndexBeforeRemove = targetMetadata.StartsWith("script::")
+		int targetIndexBeforeRemove = IsScriptOrSceneMetadata(targetMetadata)
 			? targetEntries.IndexOf(targetEntry)
 			: -1;
 
-		if (targetMetadata.StartsWith("script::") && targetIndexBeforeRemove < 0)
+		if (IsScriptOrSceneMetadata(targetMetadata) && targetIndexBeforeRemove < 0)
 			return false;
 
 		sourceEntries.RemoveAt(sourceIndex);
 
-		if (targetMetadata.StartsWith("script::"))
+		if (IsScriptOrSceneMetadata(targetMetadata))
 		{
 			if (sameSystem)
 				targetEntries = sourceEntries;
@@ -2503,7 +2495,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			ForceExpandFolderPath(targetSystemName, targetFolderPath);
 
 		DebugLogOperation(
-			"Move Script Mutated",
+			"Move Script/Scene Mutated",
 			$"{sourceSystemName}:{draggedEntry} -> {targetSystemName}:{newEntry}"
 		);
 
@@ -2575,15 +2567,19 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private static bool IsSystemEntryMetadata(string metadata)
 	{
-		return metadata.StartsWith("folder::") || metadata.StartsWith("script::") || metadata.StartsWith("sceneLink::");
+		return metadata.StartsWith("folder::") || IsScriptOrSceneMetadata(metadata);
 	}
 
-	private static bool IsValidScriptDropTargetMetadata(string metadata)
+	private static bool IsScriptOrSceneMetadata(string metadata)
+	{
+		return metadata.StartsWith("script::") || metadata.StartsWith("sceneLink::");
+	}
+
+	private static bool IsValidScriptOrSceneDropTargetMetadata(string metadata)
 	{
 		return metadata.StartsWith("system::")
 			|| metadata.StartsWith("folder::")
-			|| metadata.StartsWith("script::")
-			|| metadata.StartsWith("sceneLink::");
+			|| IsScriptOrSceneMetadata(metadata);
 	}
 
 	private static int GetAppendIndexForScriptDrop(List<string> entries, string targetFolderPath)
