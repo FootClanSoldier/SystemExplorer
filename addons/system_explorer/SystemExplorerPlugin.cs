@@ -11,8 +11,12 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string SavePath = "res://addons/system_explorer/systems.json";
 	private const string ScriptTemplatePath = "res://addons/system_explorer/script_template.txt";
 	
+	// Enable or disable icons in the context menu
+	private const bool EnableContextMenuIcons = true;
+	
 	// Enable only when investigating editor state/save issues.
 	private const bool DebugState = false;
+	
 	private const int ContextAddFolder = 0;
 	private const int ContextAddScript = 1;
 	private const int ContextNewScript = 2;
@@ -21,7 +25,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextLinkScene = 5;
 	private const int ContextUnlinkScene = 6;
 	private const int ContextShowInFileManager = 7;
+	private const int ContextAddScene = 8;
 	private const string LinkedSceneMarker = "||linkedScene::";
+	private const string SceneEntryMarker = "scene::";
 	private const float ClickOpenDragThreshold = 6.0f;
 	private const float RightIconClickablePadding = 12.0f;
 
@@ -41,6 +47,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private EditorFileDialog _createScriptDialog;
 	private EditorFileDialog _relinkScriptDialog;
 	private EditorFileDialog _linkSceneDialog;
+	private EditorFileDialog _addSceneDialog;
 	private EditorFileDialog _relinkSceneDialog;
 	private ConfirmationDialog _missingScriptDialog;
 	private ConfirmationDialog _missingSceneDialog;
@@ -68,6 +75,14 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _sceneIcon;
 	private Texture2D _systemIcon;
 	private Texture2D _folderIcon;
+	private Texture2D _contextFolderIcon;
+	private Texture2D _contextNewScriptIcon;
+	private Texture2D _contextAddScriptIcon;
+	private Texture2D _contextLinkSceneIcon;
+	private Texture2D _contextUnlinkSceneIcon;
+	private Texture2D _contextRenameIcon;
+	private Texture2D _contextRemoveIcon;
+	private Texture2D _contextShowInFileSystemIcon;
 	private Texture2D _scriptFilterSearchIcon;
 	private Texture2D _systemNameEnterIcon;
 	private Texture2D _scriptFilterCloseIcon;
@@ -88,15 +103,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		
 		DebugLogOperation("Enter Tree");
 
-		var editorTheme = EditorInterface.Singleton.GetEditorTheme();
-		_scriptIcon = editorTheme.GetIcon("CSharpScript", "EditorIcons");
-		_sceneIcon = editorTheme.GetIcon("PackedScene", "EditorIcons");
-		_systemIcon = editorTheme.GetIcon("Environment", "EditorIcons");
-		_folderIcon = editorTheme.GetIcon("Folder", "EditorIcons");
-		_scriptFilterSearchIcon = editorTheme.GetIcon("Search", "EditorIcons");
-		_scriptFilterCloseIcon = editorTheme.GetIcon("GuiClose", "EditorIcons");
-		_systemNameEnterIcon = editorTheme.GetIcon("Add", "EditorIcons");
-
+		LoadEditorIcons();
 		EnsureScriptTemplateExists();
 		BuildDock();
 		LoadSystems();
@@ -114,6 +121,27 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		DebugLogStateSnapshot("Enter Tree Complete");
 	}
+private void LoadEditorIcons()
+{
+	var editorTheme = EditorInterface.Singleton.GetEditorTheme();
+
+	_scriptIcon = GetEditorIcon(editorTheme, "CSharpScript");
+	_sceneIcon = GetEditorIcon(editorTheme, "PackedScene");
+	_systemIcon = GetEditorIcon(editorTheme, "Environment");
+	_folderIcon = GetEditorIcon(editorTheme, "Folder");
+	_scriptFilterSearchIcon = GetEditorIcon(editorTheme, "Search");
+	_scriptFilterCloseIcon = GetEditorIcon(editorTheme, "GuiClose");
+	_systemNameEnterIcon = GetEditorIcon(editorTheme, "Add");
+
+	_contextFolderIcon = GetEditorIcon(editorTheme, "Folder");
+	_contextNewScriptIcon = GetEditorIcon(editorTheme, "Script");
+	_contextAddScriptIcon = GetEditorIcon(editorTheme, "ScriptCreate");
+	_contextLinkSceneIcon = GetEditorIcon(editorTheme, "PackedScene");
+	_contextUnlinkSceneIcon = GetEditorIcon(editorTheme, "Unlinked");
+	_contextRenameIcon = GetEditorIcon(editorTheme, "Rename");
+	_contextRemoveIcon = GetEditorIcon(editorTheme, "Remove");
+	_contextShowInFileSystemIcon = GetEditorIcon(editorTheme, "Filesystem");
+}
 
 	private void EnsureScriptTemplateExists()
 	{
@@ -132,6 +160,24 @@ public sealed class {{CLASS_NAME}}
 		file.StoreString(defaultTemplate);
 
 		EditorInterface.Singleton.GetResourceFilesystem().Scan();
+	}
+private static Texture2D GetEditorIcon(Theme theme, string iconName)
+{
+	if (!theme.HasIcon(iconName, "EditorIcons"))
+		return null;
+
+	return theme.GetIcon(iconName, "EditorIcons");
+}
+
+	private void AddContextMenuIconItem(string label, int id, Texture2D icon)
+	{
+		if (!EnableContextMenuIcons || icon == null)
+		{
+			_contextMenu.AddItem(label, id);
+			return;
+		}
+
+		_contextMenu.AddIconItem(icon, label, id);
 	}
 
 	public override void _ExitTree()
@@ -189,6 +235,13 @@ public sealed class {{CLASS_NAME}}
 			Title = "Link Godot Scene"
 		};
 
+		_addSceneDialog = new EditorFileDialog
+		{
+			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
+			Access = EditorFileDialog.AccessEnum.Resources,
+			Title = "Add Godot Scene"
+		};
+
 		_relinkSceneDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
@@ -200,15 +253,10 @@ public sealed class {{CLASS_NAME}}
 		_createScriptDialog.Filters = new[] { "*.cs ; C# Scripts" };
 		_relinkScriptDialog.Filters = new[] { "*.cs ; C# Scripts" };
 		_linkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
+		_addSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
 		_relinkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
-
+		
 		_contextMenu = new PopupMenu();
-		_contextMenu.AddItem("New Folder", ContextAddFolder);
-		_contextMenu.AddItem("New Script", ContextNewScript);
-		_contextMenu.AddItem("Add Script", ContextAddScript);
-		_contextMenu.AddSeparator();
-		_contextMenu.AddItem("Rename", ContextRename);
-		_contextMenu.AddItem("Remove", ContextRemove);
 
 		_removeDialog = new ConfirmationDialog
 		{
@@ -268,6 +316,7 @@ public sealed class {{CLASS_NAME}}
 		_createScriptDialog.FileSelected += OnCreateScriptFileSelected;
 		_relinkScriptDialog.FileSelected += OnRelinkScriptFileSelected;
 		_linkSceneDialog.FileSelected += OnLinkSceneFileSelected;
+		_addSceneDialog.FileSelected += OnSceneFileSelected;
 		_relinkSceneDialog.FileSelected += OnRelinkSceneFileSelected;
 		_missingScriptDialog.Confirmed += OnMissingScriptRelinkPressed;
 		_missingScriptDialog.CustomAction += OnMissingScriptCustomAction;
@@ -300,6 +349,7 @@ public sealed class {{CLASS_NAME}}
 		_dock.AddChild(_fileDialog);
 		_dock.AddChild(_relinkScriptDialog);
 		_dock.AddChild(_linkSceneDialog);
+		_dock.AddChild(_addSceneDialog);
 		_dock.AddChild(_relinkSceneDialog);
 		_dock.AddChild(_contextMenu);
 		_dock.AddChild(_removeDialog);
@@ -427,13 +477,24 @@ public sealed class {{CLASS_NAME}}
 					? systemItem
 					: CreateFolderPath(systemItem, folders, system.Key, folderPath);
 
+				if (IsSceneEntry(entry))
+				{
+					TreeItem sceneItem = _tree.CreateItem(parent);
+					string scenePath = GetScenePathFromEntry(entry);
+
+					sceneItem.SetText(0, scenePath.GetFile());
+					sceneItem.SetIcon(0, _sceneIcon);
+					sceneItem.SetTooltipText(0, scenePath);
+					sceneItem.SetMetadata(0, $"sceneLink::{entry}");
+					continue;
+				}
+
 				TreeItem scriptItem = _tree.CreateItem(parent);
 
-string linkedScenePath = GetLinkedScenePathFromEntry(entry);
-string scriptText = GetScriptPathFromEntry(entry).GetFile();
+				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+				string scriptText = GetScriptPathFromEntry(entry).GetFile();
 
-scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
-
+				scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 
 				scriptItem.SetText(0, scriptText);
 				scriptItem.SetIcon(
@@ -797,7 +858,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		foreach (KeyValuePair<string, List<string>> system in _systems)
 		{
-			foreach (string entry in system.Value.Where(entry => !entry.StartsWith("folder::")))
+			foreach (string entry in system.Value.Where(entry => !entry.StartsWith("folder::") && !IsSceneEntry(entry)))
 			{
 				string scriptPath = GetScriptPathFromEntry(entry);
 				string scriptName = scriptPath.GetFile();
@@ -914,6 +975,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			return;
 		}
 
+		if (FileAccess.FileExists(SavePath) && !EnsureSystemsLoadedForTreeOperation("Add System"))
+			return;
+
 		if (!_systems.ContainsKey(systemName))
 		{
 			_systems[systemName] = new List<string>();
@@ -971,6 +1035,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		);
 
 		if (string.IsNullOrWhiteSpace(systemName) || string.IsNullOrWhiteSpace(folderName))
+			return false;
+
+		if (!EnsureSystemsLoadedForTreeOperation("Add Folder"))
 			return false;
 
 		if (!EnsureSystemAvailable(systemName, "Add Folder"))
@@ -1046,6 +1113,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (DebugState)
 			PrintScriptCreationDebugInfo(path, systemName, folderPath);
 
+		if (!EnsureSystemsLoadedForTreeOperation("Add Script"))
+			return false;
+
 		if (!EnsureSystemAvailable(systemName, "Add Script"))
 			return false;
 
@@ -1061,6 +1131,75 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		else
 		{
 			DebugLogOperation("Add Script skipped: already exists", entry);
+		}
+
+		ForceExpandForSelectedTreeLocation();
+
+		return true;
+	}
+
+	private void OnAddScenePressed()
+	{
+
+		string systemName = GetSelectedSystemName();
+
+		if (string.IsNullOrWhiteSpace(systemName))
+		{
+			GD.PushWarning("Select a system or folder before adding a scene.");
+			return;
+		}
+
+		_addSceneDialog.PopupCenteredRatio(0.8f);
+	}
+
+	private void OnSceneFileSelected(string path)
+	{
+		DebugLogOperation("Add Existing Scene Selected", path);
+
+		if (!AddSceneToSelectedTreeLocation(path))
+		{
+			DebugLogOperation("Add Existing Scene cancelled: mutation failed", path);
+			return;
+		}
+
+		if (SaveSystems())
+			BuildTree();
+	}
+
+	private bool AddSceneToSelectedTreeLocation(string path)
+	{
+		if (!EnsureSystemsLoadedForTreeOperation("Add Scene"))
+			return false;
+
+		string systemName = GetSelectedSystemName();
+		string folderPath = GetSelectedFolderPath();
+
+		DebugLogOperation(
+			"Add Scene Target",
+			$"Path='{path}', System='{systemName}', Folder='{folderPath}'"
+		);
+
+		if (string.IsNullOrWhiteSpace(systemName))
+		{
+			GD.PushWarning("Select a system or folder before adding a scene.");
+			DebugLogOperation("Add Scene failed: no selected system", path);
+			return false;
+		}
+
+		if (!EnsureSystemAvailable(systemName, "Add Scene"))
+			return false;
+
+		List<string> entries = _systems[systemName];
+		string entry = BuildSceneEntry(folderPath, path);
+
+		if (!entries.Contains(entry))
+		{
+			entries.Add(entry);
+			DebugLogOperation("Add Scene Mutated", entry);
+		}
+		else
+		{
+			DebugLogOperation("Add Scene skipped: already exists", entry);
 		}
 
 		ForceExpandForSelectedTreeLocation();
@@ -1092,6 +1231,28 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		string scriptPath = GetScriptPathFromEntry(entry);
 
 		OpenScriptOrMissingDialog(entry, scriptPath);
+	}
+
+	private void OpenSceneFromTreeItem(TreeItem item)
+	{
+		if (item == null)
+			return;
+
+		string metadata = item.GetMetadata(0).AsString();
+
+		if (!metadata.StartsWith("sceneLink::"))
+			return;
+
+		string entry = metadata.Substring("sceneLink::".Length);
+		string scenePath = GetScenePathFromEntry(entry);
+
+		if (!FileAccess.FileExists(scenePath))
+		{
+			OpenMissingSceneDialog(entry, scenePath);
+			return;
+		}
+
+		EditorInterface.Singleton.OpenSceneFromPath(scenePath);
 	}
 
 	private void OpenScriptOrMissingDialog(string entry, string scriptPath)
@@ -1196,6 +1357,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool ReplaceEntry(string oldEntry, string newEntry)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Replace Entry"))
+			return false;
+
 		foreach (string systemName in _systems.Keys.ToList())
 		{
 			List<string> entries = _systems[systemName];
@@ -1327,6 +1491,14 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 				if (!mouseButton.Pressed)
 					_ignoreNextScriptFilterReleaseOpen = false;
 
+				return;
+			}
+
+			if (mouseButton.Pressed && IsSceneItem(item))
+			{
+				item.Select(0);
+				OpenSceneFromTreeItem(item);
+				_tree.AcceptEvent();
 				return;
 			}
 
@@ -1549,6 +1721,15 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return metadata.StartsWith("script::");
 	}
 
+	private static bool IsSceneItem(TreeItem item)
+	{
+		if (item == null)
+			return false;
+
+		string metadata = item.GetMetadata(0).AsString();
+		return metadata.StartsWith("sceneLink::");
+	}
+
 	private void BuildContextMenuForMetadata(string metadata)
 	{
 		_contextMenu.Clear();
@@ -1556,37 +1737,45 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		bool isSystem = metadata.StartsWith("system::");
 		bool isFolder = metadata.StartsWith("folder::");
 		bool isScript = metadata.StartsWith("script::");
+		bool isScene = metadata.StartsWith("sceneLink::");
 
 		if (isSystem || isFolder)
-			_contextMenu.AddItem("New Folder", ContextAddFolder);
+		{
+			AddContextMenuIconItem("New Folder", ContextAddFolder, _contextFolderIcon);
+		}
 
 		if (!_isFilteringScripts)
 		{
-			_contextMenu.AddItem("New Script", ContextNewScript);
-			_contextMenu.AddItem("Add Script", ContextAddScript);
+			AddContextMenuIconItem("New Script", ContextNewScript, _contextNewScriptIcon);
+			AddContextMenuIconItem("Add Script", ContextAddScript, _contextAddScriptIcon);
+			AddContextMenuIconItem("Add Scene", ContextAddScene, _sceneIcon);
 		}
 
 		if (isScript)
 		{
-			if(!_isFilteringScripts){
-			_contextMenu.AddSeparator();
-			}
+			if (!_isFilteringScripts)
+				_contextMenu.AddSeparator();
 
 			string entry = metadata.Replace("script::", "");
 
 			if (string.IsNullOrWhiteSpace(GetLinkedScenePathFromEntry(entry)))
-				_contextMenu.AddItem("Link to Scene", ContextLinkScene);
+			{
+				AddContextMenuIconItem("Link to Scene", ContextLinkScene, _contextLinkSceneIcon);
+			}
 			else
-				_contextMenu.AddItem("Unlink from Scene", ContextUnlinkScene);
+			{
+				AddContextMenuIconItem("Unlink from Scene", ContextUnlinkScene, _contextUnlinkSceneIcon);
+			}
 		}
 
 		_contextMenu.AddSeparator();
-		_contextMenu.AddItem("Rename", ContextRename);
-		_contextMenu.AddItem("Remove", ContextRemove);
-		if (isScript)
+		AddContextMenuIconItem("Rename", ContextRename, _contextRenameIcon);
+		AddContextMenuIconItem("Remove", ContextRemove, _contextRemoveIcon);
+
+		if (isScript || isScene)
 		{
 			_contextMenu.AddSeparator();
-			_contextMenu.AddItem("Open File Path", ContextShowInFileManager);
+			AddContextMenuIconItem("Open File Path", ContextShowInFileManager, _contextShowInFileSystemIcon);
 		}
 	}
 
@@ -1610,6 +1799,10 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 			case ContextAddScript:
 				OnAddScriptPressed();
+				break;
+
+			case ContextAddScene:
+				OnAddScenePressed();
 				break;
 
 			case ContextNewScript:
@@ -1644,27 +1837,45 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (string.IsNullOrWhiteSpace(_pendingShowInFileManagerMetadata))
 			return;
 
-		if (!_pendingShowInFileManagerMetadata.StartsWith("script::"))
-			return;
+		string path = "";
+		string missingEntry = "";
 
-		string entry = _pendingShowInFileManagerMetadata.Replace("script::", "");
-		string scriptPath = GetScriptPathFromEntry(entry);
-
-		if (!FileAccess.FileExists(scriptPath))
+		if (_pendingShowInFileManagerMetadata.StartsWith("script::"))
 		{
-			OpenMissingScriptDialog(entry, scriptPath);
+			string entry = _pendingShowInFileManagerMetadata.Replace("script::", "");
+			path = GetScriptPathFromEntry(entry);
+			missingEntry = entry;
+		}
+		else if (_pendingShowInFileManagerMetadata.StartsWith("sceneLink::"))
+		{
+			string entry = _pendingShowInFileManagerMetadata.Substring("sceneLink::".Length);
+			path = GetScenePathFromEntry(entry);
+			missingEntry = entry;
+		}
+		else
+		{
 			return;
 		}
 
-		string globalScriptPath = ProjectSettings.GlobalizePath(scriptPath);
-
-		if (string.IsNullOrWhiteSpace(globalScriptPath))
+		if (!FileAccess.FileExists(path))
 		{
-			GD.PushWarning($"Could not resolve script path: {scriptPath}");
+			if (_pendingShowInFileManagerMetadata.StartsWith("sceneLink::"))
+				OpenMissingSceneDialog(missingEntry, path);
+			else
+				OpenMissingScriptDialog(missingEntry, path);
+
 			return;
 		}
 
-		OS.ShellShowInFileManager(globalScriptPath, false);
+		string globalPath = ProjectSettings.GlobalizePath(path);
+
+		if (string.IsNullOrWhiteSpace(globalPath))
+		{
+			GD.PushWarning($"Could not resolve file path: {path}");
+			return;
+		}
+
+		OS.ShellShowInFileManager(globalPath, false);
 	}
 
 	private void OpenRemoveDialog()
@@ -1692,6 +1903,12 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			_removeDialog.Title = "Remove Script";
 			_removeDialog.DialogText = "Remove selected script from System Explorer?";
 			_removeFromFilesystemCheckBox.Text = "Also delete script from FileSystem";
+		}
+		else if (_pendingRemoveMetadata.StartsWith("sceneLink::"))
+		{
+			_removeDialog.Title = "Remove Scene";
+			_removeDialog.DialogText = "Remove selected scene from System Explorer?";
+			_removeFromFilesystemCheckBox.Text = "Also delete scene from FileSystem";
 		}
 		else
 		{
@@ -1903,6 +2120,15 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		string entry = _pendingMissingSceneEntry;
 		_missingSceneDialog.Hide();
 		ClearMissingSceneState();
+
+		if (IsSceneEntry(entry))
+		{
+			if (RemoveEntry(entry) && SaveSystems())
+				BuildTree();
+
+			return;
+		}
+
 		UpdateLinkedScenePath(entry, "");
 	}
 
@@ -1913,6 +2139,13 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		string entry = _pendingMissingSceneEntry;
 		ClearMissingSceneState();
+
+		if (IsSceneEntry(entry))
+		{
+			UpdateScenePath(entry, newScenePath);
+			return;
+		}
+
 		UpdateLinkedScenePath(entry, newScenePath);
 	}
 
@@ -1922,8 +2155,34 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		_pendingMissingScenePath = "";
 	}
 
+	private bool UpdateScenePath(string oldEntry, string newScenePath)
+	{
+		if (!EnsureSystemsLoadedForTreeOperation("Update Scene"))
+			return false;
+
+		string folderPath = GetFolderPathFromEntry(oldEntry);
+		string newEntry = BuildSceneEntry(folderPath, newScenePath);
+
+		if (!ReplaceEntry(oldEntry, newEntry))
+		{
+			DebugLogOperation(
+				"Update Scene cancelled: mutation failed",
+				$"{oldEntry} -> {newEntry}"
+			);
+			return false;
+		}
+
+		if (SaveSystems())
+			BuildTree();
+
+		return true;
+	}
+
 	private bool UpdateLinkedScenePath(string oldEntry, string linkedScenePath)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Update Linked Scene"))
+			return false;
+
 		string folderPath = GetFolderPathFromEntry(oldEntry);
 		string scriptPath = GetScriptPathFromEntry(oldEntry);
 		string newEntry = BuildScriptEntry(folderPath, scriptPath, linkedScenePath);
@@ -1959,6 +2218,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			DebugLogOperation("Create Script cancelled: file exists", path);
 			return;
 		}
+
+		if (!EnsureSystemsLoadedForTreeOperation("Create Script"))
+			return;
 
 		string className = path.GetFile().GetBaseName();
 		string content = BuildScriptContent(className);
@@ -2031,6 +2293,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			return;
 		}
 
+		if (!EnsureSystemsLoadedForTreeOperation("Drag Move"))
+			return;
+
 		bool moved = false;
 
 		if (draggedMetadata.StartsWith("system::") && targetMetadata.StartsWith("system::"))
@@ -2074,6 +2339,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool MoveSystem(string draggedMetadata, string targetMetadata)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Move System"))
+			return false;
+
 		string draggedSystemName = draggedMetadata.Replace("system::", "");
 		string targetSystemName = targetMetadata.Replace("system::", "");
 
@@ -2114,6 +2382,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool MoveScriptToDropTarget(string draggedMetadata, TreeItem targetItem)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Move Script"))
+			return false;
+
 		if (targetItem == null)
 			return false;
 
@@ -2241,6 +2512,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool MoveSystemEntry(string draggedMetadata, string targetMetadata)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Move Entry"))
+			return false;
+
 		string draggedSystemName = GetSystemNameFromEntryMetadata(draggedMetadata);
 		string targetSystemName = GetSystemNameFromEntryMetadata(targetMetadata);
 
@@ -2301,14 +2575,15 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private static bool IsSystemEntryMetadata(string metadata)
 	{
-		return metadata.StartsWith("folder::") || metadata.StartsWith("script::");
+		return metadata.StartsWith("folder::") || metadata.StartsWith("script::") || metadata.StartsWith("sceneLink::");
 	}
 
 	private static bool IsValidScriptDropTargetMetadata(string metadata)
 	{
 		return metadata.StartsWith("system::")
 			|| metadata.StartsWith("folder::")
-			|| metadata.StartsWith("script::");
+			|| metadata.StartsWith("script::")
+			|| metadata.StartsWith("sceneLink::");
 	}
 
 	private static int GetAppendIndexForScriptDrop(List<string> entries, string targetFolderPath)
@@ -2346,6 +2621,12 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			return FindSystemNameForEntry(entry);
 		}
 
+		if (metadata.StartsWith("sceneLink::"))
+		{
+			string entry = metadata.Substring("sceneLink::".Length);
+			return FindSystemNameForEntry(entry);
+		}
+
 		return "";
 	}
 
@@ -2365,6 +2646,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (metadata.StartsWith("script::"))
 			return metadata.Replace("script::", "");
 
+		if (metadata.StartsWith("sceneLink::"))
+			return metadata.Substring("sceneLink::".Length);
+
 		if (metadata.StartsWith("folder::"))
 		{
 			string[] parts = metadata.Split("::");
@@ -2379,6 +2663,12 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (metadata.StartsWith("script::"))
 		{
 			string entry = metadata.Replace("script::", "");
+			return GetFolderPathFromEntry(entry);
+		}
+
+		if (metadata.StartsWith("sceneLink::"))
+		{
+			string entry = metadata.Substring("sceneLink::".Length);
 			return GetFolderPathFromEntry(entry);
 		}
 
@@ -2442,7 +2732,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		if (targetMetadata.StartsWith("folder::"))
 			return GetFolderPathFromMetadata(targetMetadata);
 
-		if (targetMetadata.StartsWith("script::"))
+		if (targetMetadata.StartsWith("script::") || targetMetadata.StartsWith("sceneLink::"))
 			return GetFolderPathFromEntry(GetEntryFromMetadata(targetMetadata));
 
 		return "";
@@ -2486,6 +2776,13 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 			_renameInput.Text = scriptPath.GetFile().GetBaseName();
 		}
+		else if (_pendingRenameMetadata.StartsWith("sceneLink::"))
+		{
+			string entry = _pendingRenameMetadata.Substring("sceneLink::".Length);
+			string scenePath = GetScenePathFromEntry(entry);
+
+			_renameInput.Text = scenePath.GetFile().GetBaseName();
+		}
 		else
 		{
 			return;
@@ -2504,8 +2801,8 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			return;
 
 		bool removeFromFilesystem = _removeFromFilesystemCheckBox.ButtonPressed;
-		List<string> scriptPathsToDelete = removeFromFilesystem
-			? GetScriptPathsForRemoveMetadata(_pendingRemoveMetadata)
+		List<string> filePathsToDelete = removeFromFilesystem
+			? GetFilePathsForRemoveMetadata(_pendingRemoveMetadata)
 			: new List<string>();
 
 		if (!RemoveMetadata(_pendingRemoveMetadata))
@@ -2515,7 +2812,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		}
 
 		if (removeFromFilesystem)
-			DeleteScriptFiles(scriptPathsToDelete);
+			DeleteFiles(filePathsToDelete);
 
 		_pendingRemoveMetadata = "";
 		_removeFromFilesystemCheckBox.ButtonPressed = false;
@@ -2530,6 +2827,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 	private bool RemoveMetadata(string metadata)
 	{
 		DebugLogOperation("Remove Mutation Requested", metadata);
+
+		if (!EnsureSystemsLoadedForTreeOperation("Remove Item"))
+			return false;
 
 		if (metadata.StartsWith("system::"))
 		{
@@ -2550,6 +2850,14 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			return removed;
 		}
 
+		if (metadata.StartsWith("sceneLink::"))
+		{
+			string entry = metadata.Substring("sceneLink::".Length);
+			bool removed = RemoveEntry(entry);
+			DebugLogOperation(removed ? "Remove Scene Mutated" : "Remove Scene failed", entry);
+			return removed;
+		}
+
 		if (metadata.StartsWith("folder::"))
 		{
 			bool removed = RemoveFolder(metadata);
@@ -2560,12 +2868,18 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return false;
 	}
 
-	private List<string> GetScriptPathsForRemoveMetadata(string metadata)
+	private List<string> GetFilePathsForRemoveMetadata(string metadata)
 	{
 		if (metadata.StartsWith("script::"))
 		{
 			string entry = metadata.Replace("script::", "");
 			return new List<string> { GetScriptPathFromEntry(entry) };
+		}
+
+		if (metadata.StartsWith("sceneLink::"))
+		{
+			string entry = metadata.Substring("sceneLink::".Length);
+			return new List<string> { GetScenePathFromEntry(entry) };
 		}
 
 		if (metadata.StartsWith("system::"))
@@ -2577,7 +2891,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 			return _systems[systemName]
 				.Where(entry => !entry.StartsWith("folder::"))
-				.Select(GetScriptPathFromEntry)
+				.Select(GetPathFromEntry)
 				.Distinct()
 				.ToList();
 		}
@@ -2603,7 +2917,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 							entry.StartsWith($"{folderPath}|") || entry.StartsWith($"{folderPath}/")
 						)
 				)
-				.Select(GetScriptPathFromEntry)
+				.Select(GetPathFromEntry)
 				.Distinct()
 				.ToList();
 		}
@@ -2611,13 +2925,13 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return new List<string>();
 	}
 
-	private void DeleteScriptFiles(List<string> scriptPaths)
+	private void DeleteFiles(List<string> filePaths)
 	{
-		foreach (string scriptPath in scriptPaths.Distinct())
-			DeleteScriptFile(scriptPath);
+		foreach (string filePath in filePaths.Distinct())
+			DeleteFile(filePath);
 	}
 
-	private void DeleteScriptFile(string scriptPath)
+	private void DeleteFile(string scriptPath)
 	{
 		if (string.IsNullOrWhiteSpace(scriptPath))
 			return;
@@ -2632,7 +2946,7 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 		if (error != Error.Ok)
 		{
-			GD.PushWarning($"Could not delete script file: {scriptPath}");
+			GD.PushWarning($"Could not delete file: {scriptPath}");
 			return;
 		}
 
@@ -2675,6 +2989,10 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		else if (_pendingRenameMetadata.StartsWith("script::"))
 		{
 			renamed = RenameScript(_pendingRenameMetadata, newName);
+		}
+		else if (_pendingRenameMetadata.StartsWith("sceneLink::"))
+		{
+			renamed = RenameScene(_pendingRenameMetadata, newName);
 		}
 
 		if (!renamed)
@@ -2745,6 +3063,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool RenameSystem(string oldName, string newName)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Rename System"))
+			return false;
+
 		if (!EnsureSystemAvailable(oldName, "Rename System"))
 			return false;
 
@@ -2771,6 +3092,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		string[] parts = metadata.Split("::");
 
 		if (parts.Length < 3)
+			return false;
+
+		if (!EnsureSystemsLoadedForTreeOperation("Rename Folder"))
 			return false;
 
 		string systemName = parts[1];
@@ -2833,6 +3157,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool RenameScript(string metadata, string newName)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Rename Script"))
+			return false;
+
 		string entry = metadata.Replace("script::", "");
 		string oldScriptPath = GetScriptPathFromEntry(entry);
 
@@ -2890,8 +3217,104 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return true;
 	}
 
+	private bool RenameScene(string metadata, string newName)
+	{
+		if (!EnsureSystemsLoadedForTreeOperation("Rename Scene"))
+			return false;
+
+		string entry = metadata.Substring("sceneLink::".Length);
+		string oldScenePath = GetScenePathFromEntry(entry);
+
+		if (!FileAccess.FileExists(oldScenePath))
+		{
+			GD.PushWarning($"File does not exist: {oldScenePath}");
+			DebugLogOperation("Rename Scene failed: file missing", oldScenePath);
+			return false;
+		}
+
+		if (newName.Contains("/") || newName.Contains("\\"))
+		{
+			GD.PushWarning("Scene rename only supports changing the file name, not the folder path.");
+			DebugLogOperation("Rename Scene failed: invalid name", newName);
+			return false;
+		}
+
+		string newFileName = newName.EndsWith(".tscn") ? newName : $"{newName}.tscn";
+		string folderPath = oldScenePath.GetBaseDir();
+		string newScenePath = $"{folderPath}/{newFileName}";
+
+		if (oldScenePath == newScenePath)
+			return false;
+
+		if (FileAccess.FileExists(newScenePath))
+		{
+			GD.PushWarning($"File already exists: {newScenePath}");
+			DebugLogOperation("Rename Scene failed: target exists", newScenePath);
+			return false;
+		}
+
+		Error error = DirAccess.RenameAbsolute(oldScenePath, newScenePath);
+
+		if (error != Error.Ok)
+		{
+			GD.PushWarning($"Could not rename scene: {oldScenePath} -> {newScenePath}");
+			DebugLogOperation(
+				"Rename Scene failed: filesystem rename error",
+				$"{oldScenePath} -> {newScenePath} ({error})"
+			);
+			return false;
+		}
+
+		if (!DoesAnySystemContainEntry(entry))
+			TryRecoverSystemsFromDisk("Rename Scene");
+
+		UpdateSceneEntries(oldScenePath, newScenePath);
+
+		EditorInterface.Singleton.GetResourceFilesystem().Scan();
+
+		DebugLogOperation("Rename Scene Mutated", $"{oldScenePath} -> {newScenePath}");
+
+		return true;
+	}
+
+	private void UpdateSceneEntries(string oldScenePath, string newScenePath)
+	{
+		if (!EnsureSystemsLoadedForTreeOperation("Update Scene Entries"))
+			return;
+
+		foreach (string systemName in _systems.Keys.ToList())
+		{
+			List<string> updatedEntries = new();
+
+			foreach (string entry in _systems[systemName])
+			{
+				if (entry.StartsWith("folder::"))
+				{
+					updatedEntries.Add(entry);
+					continue;
+				}
+
+				if (!IsSceneEntry(entry) || GetScenePathFromEntry(entry) != oldScenePath)
+				{
+					updatedEntries.Add(entry);
+					continue;
+				}
+
+				string folderPath = GetFolderPathFromEntry(entry);
+				string updatedEntry = BuildSceneEntry(folderPath, newScenePath);
+
+				updatedEntries.Add(updatedEntry);
+			}
+
+			_systems[systemName] = updatedEntries.Distinct().ToList();
+		}
+	}
+
 	private void UpdateScriptEntries(string oldScriptPath, string newScriptPath)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Update Script Entries"))
+			return;
+
 		foreach (string systemName in _systems.Keys.ToList())
 		{
 			List<string> updatedEntries = new();
@@ -2956,6 +3379,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool RemoveEntry(string entry)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Remove Entry"))
+			return false;
+
 		foreach (string systemName in _systems.Keys.ToList())
 		{
 			if (_systems[systemName].Remove(entry))
@@ -2982,6 +3408,9 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 
 	private bool RemoveFolder(string metadata)
 	{
+		if (!EnsureSystemsLoadedForTreeOperation("Remove Folder"))
+			return false;
+
 		string[] parts = metadata.Split("::");
 
 		if (parts.Length < 3)
@@ -3028,6 +3457,15 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 					return systemName;
 			}
 
+			if (metadata.StartsWith("sceneLink::"))
+			{
+				string entry = metadata.Substring("sceneLink::".Length);
+				string systemName = FindSystemNameForEntry(entry);
+
+				if (!string.IsNullOrWhiteSpace(systemName))
+					return systemName;
+			}
+
 			item = item.GetParent();
 		}
 
@@ -3048,6 +3486,12 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 			if (metadata.StartsWith("script::"))
 			{
 				string entry = metadata.Replace("script::", "");
+				return GetFolderPathFromEntry(entry);
+			}
+
+			if (metadata.StartsWith("sceneLink::"))
+			{
+				string entry = metadata.Substring("sceneLink::".Length);
 				return GetFolderPathFromEntry(entry);
 			}
 
@@ -3092,6 +3536,39 @@ scriptItem.SetTooltipText(0, GetScriptTooltipText(result.Entry));
 		return entryWithoutLinkedScene.Contains("|")
 		  ? entryWithoutLinkedScene.Split("|")[1]
 		  : entryWithoutLinkedScene;
+	}
+
+	private static string GetScenePathFromEntry(string entry)
+	{
+		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);
+		string pathPart = entryWithoutLinkedScene.Contains("|")
+			? entryWithoutLinkedScene.Split("|")[1]
+			: entryWithoutLinkedScene;
+
+		return pathPart.StartsWith(SceneEntryMarker)
+			? pathPart.Substring(SceneEntryMarker.Length)
+			: pathPart;
+	}
+
+	private static string GetPathFromEntry(string entry)
+	{
+		return IsSceneEntry(entry) ? GetScenePathFromEntry(entry) : GetScriptPathFromEntry(entry);
+	}
+
+	private static bool IsSceneEntry(string entry)
+	{
+		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);
+		string pathPart = entryWithoutLinkedScene.Contains("|")
+			? entryWithoutLinkedScene.Split("|")[1]
+			: entryWithoutLinkedScene;
+
+		return pathPart.StartsWith(SceneEntryMarker);
+	}
+
+	private static string BuildSceneEntry(string folderPath, string scenePath)
+	{
+		string sceneEntry = $"{SceneEntryMarker}{scenePath}";
+		return string.IsNullOrWhiteSpace(folderPath) ? sceneEntry : $"{folderPath}|{sceneEntry}";
 	}
 
 	private static string GetLinkedScenePathFromEntry(string entry)
