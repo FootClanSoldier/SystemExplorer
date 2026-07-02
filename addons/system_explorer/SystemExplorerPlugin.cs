@@ -13,8 +13,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string SavePath = ResourcesFolderPath + "/systems.json";
 	private const string ScriptTemplatePath = ResourcesFolderPath + "/script_template.txt";
 	
-	// Enable or disable icons in the context menu
-	private const bool EnableContextMenuIcons = true;
 	
 	// Enable only when investigating editor state/save issues.
 	private const bool DebugState = false;
@@ -110,6 +108,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		
 		DebugLogOperation("Enter Tree");
 
+		EnsureProjectSettings();
 		LoadEditorIcons();
 		EnsureResourcesFolderExists();
 		EnsureScriptTemplateExists();
@@ -205,17 +204,6 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 
 	return theme.GetIcon(iconName, "EditorIcons");
 }
-
-	private void AddContextMenuIconItem(string label, int id, Texture2D icon)
-	{
-		if (!EnableContextMenuIcons || icon == null)
-		{
-			_contextMenu.AddItem(label, id);
-			return;
-		}
-
-		_contextMenu.AddIconItem(icon, label, id);
-	}
 
 	public override void _ExitTree()
 	{
