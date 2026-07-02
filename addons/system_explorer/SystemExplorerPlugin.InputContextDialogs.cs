@@ -512,7 +512,7 @@ public partial class SystemExplorerPlugin
 		{
 			_removeDialog.Title = "Remove Folder";
 			_removeDialog.DialogText = "Remove selected folder from System Explorer?";
-			_removeFromFilesystemCheckBox.Text = "Also delete scripts from FileSystem";
+			_removeFromFilesystemCheckBox.Text = "Also delete files from FileSystem";
 		}
 		else if (_pendingRemoveMetadata.StartsWith("script::"))
 		{

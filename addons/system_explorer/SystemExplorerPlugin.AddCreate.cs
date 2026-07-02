@@ -123,13 +123,13 @@ public partial class SystemExplorerPlugin
 		_fileDialog.PopupCenteredRatio(0.8f);
 	}
 
-	private void OnScriptFileSelected(string path)
+	private void OnScriptFilesSelected(string[] paths)
 	{
-		DebugLogOperation("Add Existing Script Selected", path);
+		DebugLogOperation("Add Existing Scripts Selected", string.Join(", ", paths));
 
-		if (!AddScriptToSelectedTreeLocation(path))
+		if (!AddScriptsToSelectedTreeLocation(paths))
 		{
-			DebugLogOperation("Add Existing Script cancelled: mutation failed", path);
+			DebugLogOperation("Add Existing Scripts cancelled: mutation failed", string.Join(", ", paths));
 			return;
 		}
 
@@ -139,23 +139,39 @@ public partial class SystemExplorerPlugin
 
 	private bool AddScriptToSelectedTreeLocation(string path)
 	{
+		return AddScriptsToSelectedTreeLocation(new[] { path });
+	}
+
+	private bool AddScriptsToSelectedTreeLocation(IEnumerable<string> paths)
+	{
+		List<string> scriptPaths = paths
+			.Where(path => !string.IsNullOrWhiteSpace(path))
+			.Distinct()
+			.ToList();
+
+		if (scriptPaths.Count == 0)
+			return false;
+
 		string systemName = GetSelectedSystemName();
 		string folderPath = GetSelectedFolderPath();
 
 		DebugLogOperation(
 			"Add Script Target",
-			$"Path='{path}', System='{systemName}', Folder='{folderPath}'"
+			$"Paths='{string.Join(", ", scriptPaths)}', System='{systemName}', Folder='{folderPath}'"
 		);
 
 		if (string.IsNullOrWhiteSpace(systemName))
 		{
 			GD.PushWarning("Select a system or folder before adding a script.");
-			DebugLogOperation("Add Script failed: no selected system", path);
+			DebugLogOperation("Add Script failed: no selected system", string.Join(", ", scriptPaths));
 			return false;
 		}
 
 		if (DebugState)
-			PrintScriptCreationDebugInfo(path, systemName, folderPath);
+		{
+			foreach (string path in scriptPaths)
+				PrintScriptCreationDebugInfo(path, systemName, folderPath);
+		}
 
 		if (!EnsureSystemsLoadedForTreeOperation("Add Script"))
 			return false;
@@ -164,22 +180,28 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		List<string> entries = _systems[systemName];
+		bool mutated = false;
 
-		string entry = string.IsNullOrWhiteSpace(folderPath) ? path : $"{folderPath}|{path}";
-
-		if (!entries.Contains(entry))
+		foreach (string path in scriptPaths)
 		{
-			entries.Add(entry);
-			DebugLogOperation("Add Script Mutated", entry);
-		}
-		else
-		{
-			DebugLogOperation("Add Script skipped: already exists", entry);
+			string entry = string.IsNullOrWhiteSpace(folderPath) ? path : $"{folderPath}|{path}";
+
+			if (!entries.Contains(entry))
+			{
+				entries.Add(entry);
+				mutated = true;
+				DebugLogOperation("Add Script Mutated", entry);
+			}
+			else
+			{
+				DebugLogOperation("Add Script skipped: already exists", entry);
+			}
 		}
 
-		ForceExpandForSelectedTreeLocation();
+		if (mutated)
+			ForceExpandTreeLocation(systemName, folderPath);
 
-		return true;
+		return mutated;
 	}
 
 	private void OnAddScenePressed()
@@ -196,13 +218,13 @@ public partial class SystemExplorerPlugin
 		_addSceneDialog.PopupCenteredRatio(0.8f);
 	}
 
-	private void OnSceneFileSelected(string path)
+	private void OnSceneFilesSelected(string[] paths)
 	{
-		DebugLogOperation("Add Existing Scene Selected", path);
+		DebugLogOperation("Add Existing Scenes Selected", string.Join(", ", paths));
 
-		if (!AddSceneToSelectedTreeLocation(path))
+		if (!AddScenesToSelectedTreeLocation(paths))
 		{
-			DebugLogOperation("Add Existing Scene cancelled: mutation failed", path);
+			DebugLogOperation("Add Existing Scenes cancelled: mutation failed", string.Join(", ", paths));
 			return;
 		}
 
@@ -212,6 +234,19 @@ public partial class SystemExplorerPlugin
 
 	private bool AddSceneToSelectedTreeLocation(string path)
 	{
+		return AddScenesToSelectedTreeLocation(new[] { path });
+	}
+
+	private bool AddScenesToSelectedTreeLocation(IEnumerable<string> paths)
+	{
+		List<string> scenePaths = paths
+			.Where(path => !string.IsNullOrWhiteSpace(path))
+			.Distinct()
+			.ToList();
+
+		if (scenePaths.Count == 0)
+			return false;
+
 		if (!EnsureSystemsLoadedForTreeOperation("Add Scene"))
 			return false;
 
@@ -220,13 +255,13 @@ public partial class SystemExplorerPlugin
 
 		DebugLogOperation(
 			"Add Scene Target",
-			$"Path='{path}', System='{systemName}', Folder='{folderPath}'"
+			$"Paths='{string.Join(", ", scenePaths)}', System='{systemName}', Folder='{folderPath}'"
 		);
 
 		if (string.IsNullOrWhiteSpace(systemName))
 		{
 			GD.PushWarning("Select a system or folder before adding a scene.");
-			DebugLogOperation("Add Scene failed: no selected system", path);
+			DebugLogOperation("Add Scene failed: no selected system", string.Join(", ", scenePaths));
 			return false;
 		}
 
@@ -234,21 +269,39 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		List<string> entries = _systems[systemName];
-		string entry = BuildSceneEntry(folderPath, path);
+		bool mutated = false;
 
-		if (!entries.Contains(entry))
+		foreach (string path in scenePaths)
 		{
-			entries.Add(entry);
-			DebugLogOperation("Add Scene Mutated", entry);
+			string entry = BuildSceneEntry(folderPath, path);
+
+			if (!entries.Contains(entry))
+			{
+				entries.Add(entry);
+				mutated = true;
+				DebugLogOperation("Add Scene Mutated", entry);
+			}
+			else
+			{
+				DebugLogOperation("Add Scene skipped: already exists", entry);
+			}
 		}
+
+		if (mutated)
+			ForceExpandTreeLocation(systemName, folderPath);
+
+		return mutated;
+	}
+
+	private void ForceExpandTreeLocation(string systemName, string folderPath)
+	{
+		if (string.IsNullOrWhiteSpace(systemName))
+			return;
+
+		if (string.IsNullOrWhiteSpace(folderPath))
+			ForceExpandSystem(systemName);
 		else
-		{
-			DebugLogOperation("Add Scene skipped: already exists", entry);
-		}
-
-		ForceExpandForSelectedTreeLocation();
-
-		return true;
+			ForceExpandFolderPath(systemName, folderPath);
 	}
 
 	#endregion

@@ -33,9 +33,9 @@ public partial class SystemExplorerPlugin
 
 		_fileDialog = new EditorFileDialog
 		{
-			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
+			FileMode = EditorFileDialog.FileModeEnum.OpenFiles,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Select C# Script"
+			Title = "Select C# Script(s)"
 		};
 
 		_createScriptDialog = new EditorFileDialog
@@ -61,9 +61,9 @@ public partial class SystemExplorerPlugin
 
 		_addSceneDialog = new EditorFileDialog
 		{
-			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
+			FileMode = EditorFileDialog.FileModeEnum.OpenFiles,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Add Godot Scene"
+			Title = "Add Godot Scene(s)"
 		};
 
 		_relinkSceneDialog = new EditorFileDialog
@@ -140,7 +140,7 @@ public partial class SystemExplorerPlugin
 		_createScriptDialog.FileSelected += OnCreateScriptFileSelected;
 		_relinkScriptDialog.FileSelected += OnRelinkScriptFileSelected;
 		_linkSceneDialog.FileSelected += OnLinkSceneFileSelected;
-		_addSceneDialog.FileSelected += OnSceneFileSelected;
+		_addSceneDialog.FilesSelected += OnSceneFilesSelected;
 		_relinkSceneDialog.FileSelected += OnRelinkSceneFileSelected;
 		_missingScriptDialog.Confirmed += OnMissingScriptRelinkPressed;
 		_missingScriptDialog.CustomAction += OnMissingScriptCustomAction;
@@ -156,7 +156,7 @@ public partial class SystemExplorerPlugin
 		_tree.ItemSelected += OnItemSelected;
 		_tree.GuiInput += OnTreeGuiInput;
 		_tree.MouseExited += OnTreeMouseExited;
-		_fileDialog.FileSelected += OnScriptFileSelected;
+		_fileDialog.FilesSelected += OnScriptFilesSelected;
 		_contextMenu.IdPressed += OnContextMenuIdPressed;
 		_removeDialog.Confirmed += OnRemoveConfirmed;
 		_removeDialog.WindowInput += OnRemoveDialogWindowInput;
