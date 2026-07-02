@@ -8,8 +8,10 @@ using System.Text.Json;
 public partial class SystemExplorerPlugin : EditorPlugin
 {
 	#region Constants and Fields
-	private const string SavePath = "res://addons/system_explorer/Resources/systems.json";
-	private const string ScriptTemplatePath = "res://addons/system_explorer/Resources/script_template.txt";
+	private const string PluginFolderPath = "res://addons/system_explorer";
+	private const string ResourcesFolderPath = PluginFolderPath + "/Resources";
+	private const string SavePath = ResourcesFolderPath + "/systems.json";
+	private const string ScriptTemplatePath = ResourcesFolderPath + "/script_template.txt";
 	
 	// Enable or disable icons in the context menu
 	private const bool EnableContextMenuIcons = true;
@@ -107,6 +109,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		DebugLogOperation("Enter Tree");
 
 		LoadEditorIcons();
+		EnsureResourcesFolderExists();
 		EnsureScriptTemplateExists();
 		BuildDock();
 		LoadSystems();
@@ -146,8 +149,37 @@ private void LoadEditorIcons()
 	_contextShowInFileSystemIcon = GetEditorIcon(editorTheme, "Filesystem");
 }
 
+	private bool EnsureResourcesFolderExists()
+	{
+		if (DirAccess.DirExistsAbsolute(ResourcesFolderPath))
+			return true;
+
+		using DirAccess pluginDirectory = DirAccess.Open(PluginFolderPath);
+
+		if (pluginDirectory == null)
+		{
+			GD.PushWarning($"System Explorer could not open plugin folder '{PluginFolderPath}' to create the Resources folder.");
+			return false;
+		}
+
+		Error error = pluginDirectory.MakeDir("Resources");
+
+		if (error != Error.Ok && !DirAccess.DirExistsAbsolute(ResourcesFolderPath))
+		{
+			GD.PushWarning($"System Explorer could not create Resources folder at '{ResourcesFolderPath}'. Error: {error}.");
+			return false;
+		}
+
+		EditorInterface.Singleton.GetResourceFilesystem().Scan();
+		DebugLogOperation("Resources Folder Created", ResourcesFolderPath);
+		return true;
+	}
+
 	private void EnsureScriptTemplateExists()
 	{
+		if (!EnsureResourcesFolderExists())
+			return;
+
 		if (FileAccess.FileExists(ScriptTemplatePath))
 			return;
 

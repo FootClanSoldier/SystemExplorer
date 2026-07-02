@@ -35,6 +35,9 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
+		if (!EnsureResourcesFolderExists())
+			return false;
+
 		NormalizeAllSystemEntries();
 
 		string json = SerializeSystems();
