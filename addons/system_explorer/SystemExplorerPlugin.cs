@@ -34,6 +34,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string SystemLockEntry = "systemLock::locked";
 	private const float ClickOpenDragThreshold = 6.0f;
 	private const float RightIconClickablePadding = 12.0f;
+	private static readonly Color DragDropTargetHighlightColor = new(1.0f, 1.0f, 1.0f, 0.16f);
 
 	private EditorDock _editorDock;
 	private VBoxContainer _dock;
@@ -64,6 +65,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _draggedMetadata = "";
 	private string _draggedSourceSystemName = "";
 	private string _draggedSourceFolderPath = "";
+	private TreeItem _dragDropHighlightedItem;
 	private bool _leftMousePressedOnSelectedScript;
 	private Vector2 _leftMousePressPosition;
 	private string _leftMousePressedMetadata = "";

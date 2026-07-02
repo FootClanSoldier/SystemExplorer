@@ -539,8 +539,82 @@ public partial class SystemExplorerPlugin
 		return "";
 	}
 
+	private void UpdateDragDropTargetHighlight()
+	{
+		if (_tree == null || string.IsNullOrWhiteSpace(_draggedMetadata))
+		{
+			ClearDragDropTargetHighlight();
+			return;
+		}
+
+		Vector2 mousePosition = _tree.GetLocalMousePosition();
+
+		if (_leftMousePressPosition.DistanceTo(mousePosition) <= ClickOpenDragThreshold)
+		{
+			ClearDragDropTargetHighlight();
+			return;
+		}
+
+		TreeItem targetItem = _tree.GetItemAtPosition(mousePosition);
+
+		if (!CanHighlightDragDropTarget(_draggedMetadata, targetItem))
+		{
+			ClearDragDropTargetHighlight();
+			return;
+		}
+
+		if (_dragDropHighlightedItem == targetItem)
+			return;
+
+		ClearDragDropTargetHighlight();
+
+		_dragDropHighlightedItem = targetItem;
+		_dragDropHighlightedItem.SetCustomBgColor(0, DragDropTargetHighlightColor);
+	}
+
+	private void ClearDragDropTargetHighlight()
+	{
+		if (_dragDropHighlightedItem == null)
+			return;
+
+		if (GodotObject.IsInstanceValid(_dragDropHighlightedItem))
+			_dragDropHighlightedItem.ClearCustomBgColor(0);
+
+		_dragDropHighlightedItem = null;
+	}
+
+	private bool CanHighlightDragDropTarget(string draggedMetadata, TreeItem targetItem)
+	{
+		if (targetItem == null || string.IsNullOrWhiteSpace(draggedMetadata))
+			return false;
+
+		string targetMetadata = targetItem.GetMetadata(0).AsString();
+
+		if (string.IsNullOrWhiteSpace(targetMetadata) || draggedMetadata == targetMetadata)
+			return false;
+
+		if (IsDragSourceLockedBySelfOrParentFolder(draggedMetadata))
+			return false;
+
+		if (IsDropTargetSortingLocked(targetMetadata))
+			return false;
+
+		if (draggedMetadata.StartsWith("system::"))
+			return targetMetadata.StartsWith("system::");
+
+		if (IsScriptOrSceneMetadata(draggedMetadata))
+			return IsValidScriptOrSceneDropTargetMetadata(targetMetadata);
+
+		return IsSystemEntryMetadata(draggedMetadata)
+			&& IsSystemEntryMetadata(targetMetadata)
+			&& GetSystemNameFromEntryMetadata(draggedMetadata) == GetSystemNameFromEntryMetadata(targetMetadata)
+			&& GetParentFolderPathFromEntryMetadata(draggedMetadata) == GetParentFolderPathFromEntryMetadata(targetMetadata);
+	}
+
 	private void ClearDragState()
 	{
+		ClearDragDropTargetHighlight();
+
 		_draggedMetadata = "";
 		_draggedSourceSystemName = "";
 		_draggedSourceFolderPath = "";

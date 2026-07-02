@@ -46,6 +46,7 @@ public partial class SystemExplorerPlugin
 		if (inputEvent is InputEventMouseMotion)
 		{
 			UpdateHoveredTreeItemLockVisibility();
+			UpdateDragDropTargetHighlight();
 			return;
 		}
 
@@ -142,6 +143,7 @@ public partial class SystemExplorerPlugin
 
 			if (mouseButton.Pressed)
 			{
+				ClearDragDropTargetHighlight();
 				_draggedMetadata = item?.GetMetadata(0).AsString() ?? "";
 				_draggedSourceSystemName = item == null ? "" : GetSystemNameFromTreeItem(item);
 				_draggedSourceFolderPath = item == null ? "" : GetFolderPathFromTreeItem(item);
@@ -171,6 +173,7 @@ public partial class SystemExplorerPlugin
 					return;
 				}
 
+				ClearDragDropTargetHighlight();
 				MoveDraggedItem(_draggedMetadata, item);
 
 				ClearDragState();
@@ -207,6 +210,8 @@ public partial class SystemExplorerPlugin
 
 	private void OnTreeMouseExited()
 	{
+		ClearDragDropTargetHighlight();
+
 		if (string.IsNullOrWhiteSpace(_hoveredTreeItemMetadata))
 			return;
 
