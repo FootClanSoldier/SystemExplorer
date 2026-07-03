@@ -25,17 +25,29 @@
 </p>
 
 > Architecture-focused navigation plugin for Godot C# projects.
+
 ---
 
 <p align="center">
   <img src="screenshots/overview.png" alt="System Explorer Overview">
 </p>
 
+## Contents
+
+- [About](#about)
+- [Why](#why)
+- [Features](#features)
+- [Installation](#installation)
+- [Script Templates](#script-templates)
+- [Data Storage](#data-storage)
+- [Known Issues](#known-issues)
+- [Future Ideas](#future-ideas)
+
 # About
 
-System Explorer is a Godot C# editor plugin that provides an architecture-focused view of your project.
+System Explorer is a Godot C# editor plugin that lets you organize your project from an architectural perspective instead of relying solely on the FileSystem dock.
 
-Instead of navigating large projects through the FileSystem dock, you can organize scripts into custom systems and folders that reflect the architecture of your game—without changing your physical project structure.
+Create custom systems and folders, organize scripts and scene links, and navigate large codebases without changing your physical project structure.
 
 ---
 
@@ -61,7 +73,7 @@ Player
 UI
 ```
 
-Organize your code according to how your game is structured, not simply where files happen to live on disk.
+Organize your code around your game's architecture, not simply where files happen to live on disk.
 
 ---
 
@@ -69,12 +81,12 @@ Organize your code according to how your game is structured, not simply where fi
 
 ## Organization
 
-<img src="screenshots/demo.gif" alt="Systems">
-
 - Create systems and folders
 - Create new scripts or add existing ones
+- Add multiple scripts or scenes in a single operation
 - Rename and remove items
-- Drag & drop organization
+- Organize systems, folders, scripts, and scenes using drag & drop
+- Lock systems, folders, scripts, and scene links to prevent accidental drag & drop
 - Virtual organization that doesn't modify your project structure
 
 ---
@@ -84,7 +96,7 @@ Organize your code according to how your game is structured, not simply where fi
 - Architecture-focused project navigation
 - Filter scripts across every system
 - Open scripts with a single click
-- Open File Path
+- Open containing folder
 - Expansion state persistence
 
 ---
@@ -93,7 +105,7 @@ Organize your code according to how your game is structured, not simply where fi
 
 Connect your architecture directly to the scenes that use those scripts.
 
-- Link scripts to scenes
+- Link scripts to their corresponding scenes
 - Single-click opens the script
 - Double-click opens both the script and its linked scene
 - Unlink scene associations
@@ -109,11 +121,15 @@ Several quality-of-life features help speed up common workflows:
 
 - Press **Enter** to confirm dialogs and create new systems
 - Click the **+** button inside the System Name field to create a system
-- Context menus for common actions
-- Script templates
+- Context menus with optional icons
+- Project Settings support for plugin options
 - Script tooltips
-- **Shift + Click** expands or collapses entire branches
-- **ctrl+ Delete** opens the delete dialog
+- **Double-click** systems and folders to expand or collapse them
+- **Ctrl + Click** expands or collapses systems and folders with a single click
+- **Ctrl + Shift** collapses the entire tree when a system or folder is selected
+- **Middle Mouse Button** while hovering an item locks or unlocks it
+- **Ctrl + L** locks or unlocks the selected item
+- **Ctrl + Delete** opens the delete dialog
 - Expansion state is automatically preserved between common operations
 
 ---
@@ -160,7 +176,7 @@ Project
 New scripts are generated using:
 
 ```text
-addons/system_explorer/script_template.txt
+addons/system_explorer/Resources/script_template.txt
 ```
 
 You can customize this template to match your coding style, namespaces, project structure, or preferred class layout.
@@ -196,10 +212,12 @@ If no template file is found, System Explorer falls back to a built-in default t
 System Explorer stores its configuration in:
 
 ```text
-addons/system_explorer/systems.json
+addons/system_explorer/Resources/systems.json
 ```
 
-This file can safely be committed to source control.
+This file stores all System Explorer data, including systems, folders, scene links, and plugin state.
+
+It can safely be committed to source control.
 
 ---
 
@@ -231,5 +249,3 @@ They typically disappear after rebuilding or reopening the project.
 Feedback, suggestions, bug reports, and feature requests are always welcome.
 
 Future development will primarily be driven by real-world usage and community feedback.
-
-
