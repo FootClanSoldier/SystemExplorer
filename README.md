@@ -16,7 +16,7 @@
   </a>
 
   <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
-    <img src="https://img.shields.io/badge/Version-1.2.1-green" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.3.0-green" alt="Version">
   </a>
 
   <a href="./LICENSE">
