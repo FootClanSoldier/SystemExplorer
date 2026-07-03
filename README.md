@@ -29,8 +29,12 @@
 ---
 
 <p align="center">
-  <img src="screenshots/overview.png" alt="System Explorer Overview">
+  <a href="#contents">
+    <img src="screenshots/overview.png" alt="System Explorer Overview">
+  </a>
 </p>
+
+<a id="contents"></a>
 
 ## Contents
 
