@@ -6,12 +6,15 @@ public partial class SystemExplorerPlugin
 	#region Project Settings
 	private const string ProjectSettingsPath = "addons/system_explorer";
 	private const string EnableContextMenuIconsSetting = ProjectSettingsPath + "/enable_context_menu_icons";
+	private const string EnableQuickActionsSetting = ProjectSettingsPath + "/enable_quick_actions";
 
 	private bool EnableContextMenuIcons => GetBoolProjectSetting(EnableContextMenuIconsSetting, true);
+	private bool EnableQuickActions => GetBoolProjectSetting(EnableQuickActionsSetting, false);
 
 	private void EnsureProjectSettings()
 	{
 		EnsureBoolProjectSetting(EnableContextMenuIconsSetting, true);
+		EnsureBoolProjectSetting(EnableQuickActionsSetting, false);
 	}
 
 	private static bool GetBoolProjectSetting(string settingPath, bool defaultValue)

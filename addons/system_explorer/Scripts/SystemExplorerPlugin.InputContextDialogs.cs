@@ -279,7 +279,7 @@ public partial class SystemExplorerPlugin
 
 		_pendingRemoveMetadata = metadata;
 		_pendingRenameMetadata = metadata;
-		_pendingAddFolderMetadata = metadata;
+		_pendingAddFolderMetadata = GetAddFolderTargetMetadata(metadata);
 		_pendingShowInFileManagerMetadata = metadata;
 
 		BuildContextMenuForMetadata(metadata);
@@ -291,6 +291,23 @@ public partial class SystemExplorerPlugin
 	private static bool IsShiftPressed(InputEventMouseButton mouseButton)
 	{
 		return mouseButton.ShiftPressed || Input.IsKeyPressed(Key.Shift);
+	}
+
+	private string GetAddFolderTargetMetadata(string metadata)
+	{
+		if (string.IsNullOrWhiteSpace(metadata) || !metadata.StartsWith("script::"))
+			return metadata;
+
+		string entry = GetEntryFromMetadata(metadata);
+		string systemName = FindSystemNameForEntry(entry);
+
+		if (string.IsNullOrWhiteSpace(systemName))
+			return metadata;
+
+		string folderPath = GetFolderPathFromEntry(entry);
+		return string.IsNullOrWhiteSpace(folderPath)
+			? $"system::{systemName}"
+			: $"folder::{systemName}::{folderPath}";
 	}
 
 	private static bool ToggleExpandedIfSystemOrFolder(TreeItem item)
@@ -346,27 +363,42 @@ public partial class SystemExplorerPlugin
 	private void BuildContextMenuForMetadata(string metadata)
 	{
 		_contextMenu.Clear();
+		_contextNewSubmenu.Clear();
+		_contextAddSubmenu.Clear();
+		_contextQuickActionsSubmenu.Clear();
 
 		bool isSystem = metadata.StartsWith("system::");
 		bool isFolder = metadata.StartsWith("folder::");
 		bool isScript = metadata.StartsWith("script::");
 		bool isScene = metadata.StartsWith("sceneLink::");
+		bool canShowNewAndAdd = !_isFilteringScripts;
+		bool canShowQuickActions = EnableQuickActions && isScript;
+		bool useReversedSubmenuIcons = ShouldUseReversedContextSubmenuIcons();
 
-		if (isSystem || isFolder)
+		UpdateContextSubmenuDirectionIcons(
+			useReversedSubmenuIcons,
+			GetContextSubmenuDirectionIcon(canShowNewAndAdd)
+		);
+
+		if (canShowNewAndAdd)
 		{
-			AddContextMenuIconItem("New Folder", ContextAddFolder, _contextFolderIcon);
+			AddContextSubmenuItem("New", _contextNewSubmenu, useReversedSubmenuIcons);
+			AddContextSubmenuIconItem(_contextNewSubmenu, "Script", ContextNewScript, _contextNewScriptIcon);
+			AddContextSubmenuIconItem(_contextNewSubmenu, "Folder", ContextAddFolder, _contextFolderIcon);
+			AddContextSubmenuItem("Add", _contextAddSubmenu, useReversedSubmenuIcons);
+			AddContextSubmenuIconItem(_contextAddSubmenu, "Scripts", ContextAddScript, _contextAddScriptIcon);
+			AddContextSubmenuIconItem(_contextAddSubmenu, "Scenes", ContextAddScene, _sceneIcon);
 		}
 
-		if (!_isFilteringScripts)
+		if (canShowQuickActions)
 		{
-			AddContextMenuIconItem("New Script", ContextNewScript, _contextNewScriptIcon);
-			AddContextMenuIconItem("Add Scripts", ContextAddScript, _contextAddScriptIcon);
-			AddContextMenuIconItem("Add Scenes", ContextAddScene, _sceneIcon);
+			AddContextSubmenuItem("Quick Actions", _contextQuickActionsSubmenu, useReversedSubmenuIcons, GetContextQuickActionsSubmenuItemIcon(useReversedSubmenuIcons));
+			AddContextSubmenuIconItem(_contextQuickActionsSubmenu, "Refactor Namespace", ContextRefactorNamespace, _contextRefactorNamespaceIcon);
 		}
 
 		if (isScript)
 		{
-			if (!_isFilteringScripts)
+			if (canShowNewAndAdd || canShowQuickActions)
 				_contextMenu.AddSeparator();
 
 			string entry = GetEntryFromMetadata(metadata);
@@ -380,8 +412,10 @@ public partial class SystemExplorerPlugin
 				AddContextMenuIconItem("Unlink from Scene", ContextUnlinkScene, _contextUnlinkSceneIcon);
 			}
 		}
-
-		_contextMenu.AddSeparator();
+		if (!(_isFilteringScripts && isScene))
+		{
+   		 _contextMenu.AddSeparator();
+		}
 		AddContextMenuIconItem("Rename", ContextRename, _contextRenameIcon);
 		AddContextMenuIconItem("Remove", ContextRemove, _contextRemoveIcon);
 
@@ -390,6 +424,118 @@ public partial class SystemExplorerPlugin
 			_contextMenu.AddSeparator();
 			AddContextMenuIconItem("Open File Path", ContextShowInFileManager, _contextShowInFileSystemIcon);
 		}
+	}
+
+	private void AddContextSubmenuItem(string label, PopupMenu submenu, bool useReversedIcons)
+	{
+		AddContextSubmenuItem(label, submenu, useReversedIcons, GetContextSubmenuItemIcon(useReversedIcons));
+	}
+
+	private void AddContextSubmenuItem(string label, PopupMenu submenu, bool useReversedIcons, Texture2D icon)
+	{
+		_contextMenu.AddSubmenuNodeItem(label, submenu);
+
+		int index = _contextMenu.ItemCount - 1;
+
+		if (EnableContextMenuIcons && icon != null)
+			_contextMenu.SetItemIcon(index, icon);
+	}
+
+	private Texture2D GetContextSubmenuItemIcon(bool useReversedIcons)
+	{
+		if (useReversedIcons && _contextCategoryArrowLeftIcon != null)
+			return _contextCategoryArrowLeftIcon;
+
+		return _contextCategoryAddIcon;
+	}
+
+	private Texture2D GetContextQuickActionsSubmenuItemIcon(bool useReversedIcons)
+	{
+		if (useReversedIcons && _contextCategoryArrowLeftIcon != null)
+			return _contextCategoryArrowLeftIcon;
+
+		return _contextQuickActionsIcon;
+	}
+
+	private Texture2D GetContextSubmenuDirectionIcon(bool hasCreationSubmenus)
+	{
+		if (hasCreationSubmenus && _contextCategoryAddIcon != null)
+			return _contextCategoryAddIcon;
+
+		return _contextQuickActionsIcon;
+	}
+
+	private void UpdateContextSubmenuDirectionIcons(bool useReversedIcons, Texture2D submenuDirectionIcon)
+	{
+		_contextMenu.RemoveThemeIconOverride("submenu");
+		_contextMenu.RemoveThemeIconOverride("submenu_mirrored");
+
+		if (!EnableContextMenuIcons || !useReversedIcons || submenuDirectionIcon == null)
+			return;
+
+		_contextMenu.AddThemeIconOverride("submenu", submenuDirectionIcon);
+		_contextMenu.AddThemeIconOverride("submenu_mirrored", submenuDirectionIcon);
+	}
+
+	private bool ShouldUseReversedContextSubmenuIcons()
+	{
+		if (!IsDockOnRightSide())
+			return false;
+
+		return !HasEnoughRoomForContextSubmenuToOpenRight();
+	}
+
+	private bool HasEnoughRoomForContextSubmenuToOpenRight()
+	{
+		Control baseControl = EditorInterface.Singleton?.GetBaseControl();
+
+		if (_dock == null || baseControl == null || !_dock.IsInsideTree() || !baseControl.IsInsideTree())
+			return false;
+
+		Rect2 editorRect = baseControl.GetGlobalRect();
+
+		if (editorRect.Size.X <= 0.0f)
+			return false;
+
+		// PopupMenu does not expose the final submenu opening direction before it is shown.
+		// Estimate the space required by the main context menu plus one submenu so the
+		// right-dock icon layout only reverses when Godot is likely to open the submenu left.
+		const float EstimatedMainMenuWidth = 180.0f;
+		const float EstimatedSubmenuWidth = 170.0f;
+		const float SafetyPadding = 16.0f;
+
+		float mouseX = _dock.GetGlobalMousePosition().X;
+		float requiredRightEdge = mouseX + EstimatedMainMenuWidth + EstimatedSubmenuWidth + SafetyPadding;
+		float editorRightEdge = editorRect.Position.X + editorRect.Size.X;
+
+		return requiredRightEdge <= editorRightEdge;
+	}
+
+	private bool IsDockOnRightSide()
+	{
+		Control baseControl = EditorInterface.Singleton?.GetBaseControl();
+
+		if (_dock == null || baseControl == null || !_dock.IsInsideTree() || !baseControl.IsInsideTree())
+			return false;
+
+		Rect2 dockRect = _dock.GetGlobalRect();
+		Rect2 editorRect = baseControl.GetGlobalRect();
+
+		if (dockRect.Size.X <= 0.0f || editorRect.Size.X <= 0.0f)
+			return false;
+
+		return dockRect.GetCenter().X > editorRect.GetCenter().X;
+	}
+
+	private void AddContextSubmenuIconItem(PopupMenu submenu, string label, int id, Texture2D icon)
+	{
+		if (!EnableContextMenuIcons || icon == null)
+		{
+			submenu.AddItem(label, id);
+			return;
+		}
+
+		submenu.AddIconItem(icon, label, id);
 	}
 
 	private void SetContextMenuItemDisabled(int id, bool disabled)
@@ -441,6 +587,10 @@ public partial class SystemExplorerPlugin
 
 			case ContextShowInFileManager:
 				ShowPendingScriptInFileManager();
+				break;
+
+			case ContextRefactorNamespace:
+				OpenRefactorNamespaceDialog();
 				break;
 		}
 	}
@@ -597,6 +747,23 @@ public partial class SystemExplorerPlugin
 
 		_addFolderDialog.Hide();
 		OnAddFolderConfirmed();
+	}
+
+	private void OnRefactorNamespaceDialogWindowInput(InputEvent inputEvent)
+	{
+		if (!IsEnterPressed(inputEvent))
+			return;
+
+		ConfirmRefactorNamespaceDialogFromEnter();
+	}
+
+	private void ConfirmRefactorNamespaceDialogFromEnter()
+	{
+		if (_refactorNamespaceDialog == null || !_refactorNamespaceDialog.Visible)
+			return;
+
+		_refactorNamespaceDialog.Hide();
+		OnRefactorNamespaceConfirmed();
 	}
 
 	private static bool IsEnterPressed(InputEvent inputEvent)

@@ -26,6 +26,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextUnlinkScene = 6;
 	private const int ContextShowInFileManager = 7;
 	private const int ContextAddScene = 8;
+	private const int ContextRefactorNamespace = 9;
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const string SceneEntryMarker = "scene::";
 	private const string LockedEntryMarker = "||locked";
@@ -42,12 +43,18 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Control _focusReleaseTarget;
 	private EditorFileDialog _fileDialog;
 	private PopupMenu _contextMenu;
+	private PopupMenu _contextNewSubmenu;
+	private PopupMenu _contextAddSubmenu;
+	private PopupMenu _contextQuickActionsSubmenu;
 	private ConfirmationDialog _removeDialog;
 	private CheckBox _removeFromFilesystemCheckBox;
 	private AcceptDialog _renameDialog;
 	private LineEdit _renameInput;
 	private AcceptDialog _addFolderDialog;
 	private LineEdit _addFolderInput;
+	private AcceptDialog _refactorNamespaceDialog;
+	private LineEdit _oldNamespaceInput;
+	private LineEdit _newNamespaceInput;
 	private EditorFileDialog _createScriptDialog;
 	private EditorFileDialog _relinkScriptDialog;
 	private EditorFileDialog _linkSceneDialog;
@@ -60,6 +67,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _pendingRenameMetadata = "";
 	private string _pendingAddFolderMetadata = "";
 	private string _pendingShowInFileManagerMetadata = "";
+	private string _pendingRefactorNamespaceMetadata = "";
 	private string _draggedMetadata = "";
 	private string _draggedSourceSystemName = "";
 	private string _draggedSourceFolderPath = "";
@@ -89,6 +97,10 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _contextRenameIcon;
 	private Texture2D _contextRemoveIcon;
 	private Texture2D _contextShowInFileSystemIcon;
+	private Texture2D _contextCategoryAddIcon;
+	private Texture2D _contextCategoryArrowLeftIcon;
+	private Texture2D _contextQuickActionsIcon;
+	private Texture2D _contextRefactorNamespaceIcon;
 	private Texture2D _scriptFilterSearchIcon;
 	private Texture2D _systemNameEnterIcon;
 	private Texture2D _scriptFilterCloseIcon;
@@ -148,6 +160,10 @@ private void LoadEditorIcons()
 	_contextRenameIcon = GetEditorIcon(editorTheme, "Rename");
 	_contextRemoveIcon = GetEditorIcon(editorTheme, "Remove");
 	_contextShowInFileSystemIcon = GetEditorIcon(editorTheme, "Filesystem");
+	_contextCategoryAddIcon = GetEditorIcon(editorTheme, "Add");
+	_contextCategoryArrowLeftIcon = GetEditorIcon(editorTheme, "ArrowLeft");
+	_contextQuickActionsIcon = GetEditorIcon(editorTheme, "Tools");
+	_contextRefactorNamespaceIcon = GetEditorIcon(editorTheme, "Rename");
 }
 
 	private bool EnsureResourcesFolderExists()

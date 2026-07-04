@@ -81,6 +81,12 @@ public partial class SystemExplorerPlugin
 		_relinkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
 		
 		_contextMenu = new PopupMenu();
+		_contextNewSubmenu = new PopupMenu { Name = "ContextNewSubmenu" };
+		_contextAddSubmenu = new PopupMenu { Name = "ContextAddSubmenu" };
+		_contextQuickActionsSubmenu = new PopupMenu { Name = "ContextQuickActionsSubmenu" };
+		_contextMenu.AddChild(_contextNewSubmenu);
+		_contextMenu.AddChild(_contextAddSubmenu);
+		_contextMenu.AddChild(_contextQuickActionsSubmenu);
 
 		_removeDialog = new ConfirmationDialog
 		{
@@ -137,6 +143,38 @@ public partial class SystemExplorerPlugin
 		_addFolderInput = new LineEdit { PlaceholderText = "Folder name" };
 		_addFolderDialog.AddChild(_addFolderInput);
 
+		_refactorNamespaceDialog = new AcceptDialog
+		{
+			Title = "Refactor Namespace",
+			MinSize = RefactorNamespaceDialogSize,
+			Unresizable = true
+		};
+
+		var refactorNamespaceContainer = new VBoxContainer
+		{
+			CustomMinimumSize = new Vector2(480, 0),
+			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin
+		};
+		refactorNamespaceContainer.AddChild(new Label
+		{
+			Text = "Update the selected script namespace and\nmatching using statements in linked C# files.",
+			AutowrapMode = TextServer.AutowrapMode.Off,
+			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+		});
+		refactorNamespaceContainer.AddChild(new Control { CustomMinimumSize = new Vector2(0, 8) });
+		refactorNamespaceContainer.AddChild(new Label { Text = "Old namespace" });
+		_oldNamespaceInput = new LineEdit
+		{
+			PlaceholderText = "Old namespace",
+			Editable = false
+		};
+		refactorNamespaceContainer.AddChild(_oldNamespaceInput);
+		refactorNamespaceContainer.AddChild(new Label { Text = "New namespace" });
+		_newNamespaceInput = new LineEdit { PlaceholderText = "New namespace" };
+		refactorNamespaceContainer.AddChild(_newNamespaceInput);
+		_refactorNamespaceDialog.AddChild(refactorNamespaceContainer);
+
 		_createScriptDialog.FileSelected += OnCreateScriptFileSelected;
 		_relinkScriptDialog.FileSelected += OnRelinkScriptFileSelected;
 		_linkSceneDialog.FileSelected += OnLinkSceneFileSelected;
@@ -158,6 +196,9 @@ public partial class SystemExplorerPlugin
 		_tree.MouseExited += OnTreeMouseExited;
 		_fileDialog.FilesSelected += OnScriptFilesSelected;
 		_contextMenu.IdPressed += OnContextMenuIdPressed;
+		_contextNewSubmenu.IdPressed += OnContextMenuIdPressed;
+		_contextAddSubmenu.IdPressed += OnContextMenuIdPressed;
+		_contextQuickActionsSubmenu.IdPressed += OnContextMenuIdPressed;
 		_removeDialog.Confirmed += OnRemoveConfirmed;
 		_removeDialog.WindowInput += OnRemoveDialogWindowInput;
 		_removeFromFilesystemCheckBox.GuiInput += OnRemoveDialogWindowInput;
@@ -167,6 +208,10 @@ public partial class SystemExplorerPlugin
 		_addFolderDialog.Confirmed += OnAddFolderConfirmed;
 		_addFolderDialog.WindowInput += OnAddFolderDialogWindowInput;
 		_addFolderInput.TextSubmitted += _ => ConfirmAddFolderDialogFromEnter();
+		_refactorNamespaceDialog.Confirmed += OnRefactorNamespaceConfirmed;
+		_refactorNamespaceDialog.WindowInput += OnRefactorNamespaceDialogWindowInput;
+		_oldNamespaceInput.TextSubmitted += _ => ConfirmRefactorNamespaceDialogFromEnter();
+		_newNamespaceInput.TextSubmitted += _ => ConfirmRefactorNamespaceDialogFromEnter();
 
 		_dock.AddChild(_systemNameInput);
 		_dock.AddChild(_scriptFilterInput);
@@ -184,6 +229,7 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_renameDialog);
 		_dock.AddChild(_addFolderDialog);
 		_dock.AddChild(_createScriptDialog);
+		_dock.AddChild(_refactorNamespaceDialog);
 	}
 
 	private void ConfigureTreeColumns()
