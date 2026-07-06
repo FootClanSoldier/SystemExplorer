@@ -203,10 +203,31 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		string uidPath = $"{scriptPath}.uid";
+		TryDeleteUidSidecar(scriptPath, "Delete File");
+	}
 
-		if (FileAccess.FileExists(uidPath))
-			DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(uidPath));
+	private void TryDeleteUidSidecar(string resourcePath, string context)
+	{
+		if (string.IsNullOrWhiteSpace(resourcePath))
+			return;
+
+		string uidPath = $"{resourcePath}.uid";
+
+		if (!FileAccess.FileExists(uidPath))
+			return;
+
+		Error error = DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(uidPath));
+
+		if (error == Error.Ok)
+		{
+			DebugLogOperation($"{context}: removed uid sidecar", uidPath);
+			return;
+		}
+
+		DebugLogOperation(
+			$"{context}: could not remove uid sidecar",
+			$"{uidPath} ({error})"
+		);
 	}
 
 	private void OnRenameConfirmed()
@@ -465,6 +486,8 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
+		TryDeleteUidSidecar(oldScriptPath, "Rename Script");
+
 		if (!DoesAnySystemContainEntry(entry))
 			TryRecoverSystemsFromDisk("Rename Script");
 
@@ -526,6 +549,8 @@ public partial class SystemExplorerPlugin
 			);
 			return false;
 		}
+
+		TryDeleteUidSidecar(oldScenePath, "Rename Scene");
 
 		if (!DoesAnySystemContainEntry(entry))
 			TryRecoverSystemsFromDisk("Rename Scene");
