@@ -240,11 +240,8 @@ They typically disappear after rebuilding or reopening the project.
 # Future Ideas
 
 - Multiple architecture views
-- Namespace refactoring
 - Custom icons
-- Beautify systems
-- Beautify folders
-- Beautify scripts
+- More C# workflow tools
 
 ---
 
