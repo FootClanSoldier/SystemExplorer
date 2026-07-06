@@ -132,7 +132,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_editorDock = new EditorDock
 		{
 			Title = "System Explorer",
-			DefaultSlot = EditorDock.DockSlot.RightBl,
+			DefaultSlot = EditorDock.DockSlot.RightUl,
 		};
 
 		_editorDock.AddChild(_dock);
@@ -140,9 +140,21 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		BuildTree();
 
+		CallDeferred(nameof(MakeSystemExplorerDockVisible));
+
 		DebugLogStateSnapshot("Enter Tree Complete");
 
 		StartCSharpierStartupWarmUp();
+	}
+
+	private void MakeSystemExplorerDockVisible()
+	{
+		if (!GodotObject.IsInstanceValid(_editorDock))
+		{
+			return;
+		}
+
+		_editorDock.MakeVisible();
 	}
 
 	private void LoadEditorIcons()
@@ -212,7 +224,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-			@"using Godot;
+            @"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {
