@@ -212,7 +212,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-            @"using Godot;
+			@"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {

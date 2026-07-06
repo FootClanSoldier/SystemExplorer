@@ -539,8 +539,10 @@ public partial class SystemExplorerPlugin
 		_contextMenu.AddSubmenuNodeItem(label, submenu);
 
 		int index = _contextMenu.ItemCount - 1;
+		bool shouldShowSubmenuItemIcon =
+			EnableContextMenuIcons || ShouldForceReversedContextSubmenuDirectionIcon(useReversedIcons);
 
-		if (EnableContextMenuIcons && icon != null)
+		if (shouldShowSubmenuItemIcon && icon != null)
 			_contextMenu.SetItemIcon(index, icon);
 	}
 
@@ -585,7 +587,7 @@ public partial class SystemExplorerPlugin
 		_contextMenu.RemoveThemeIconOverride("submenu");
 		_contextMenu.RemoveThemeIconOverride("submenu_mirrored");
 
-		if (!EnableContextMenuIcons || !useReversedIcons)
+		if (!ShouldForceReversedContextSubmenuDirectionIcon(useReversedIcons))
 			return;
 
 		Texture2D hiddenSubmenuIcon = GetHiddenContextSubmenuIcon();
@@ -595,6 +597,11 @@ public partial class SystemExplorerPlugin
 
 		_contextMenu.AddThemeIconOverride("submenu", hiddenSubmenuIcon);
 		_contextMenu.AddThemeIconOverride("submenu_mirrored", hiddenSubmenuIcon);
+	}
+
+	private bool ShouldForceReversedContextSubmenuDirectionIcon(bool useReversedIcons)
+	{
+		return useReversedIcons && _contextCategoryArrowLeftIcon != null;
 	}
 
 	private bool ShouldUseReversedContextSubmenuIcons()
