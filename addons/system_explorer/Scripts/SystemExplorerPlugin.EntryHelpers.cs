@@ -77,16 +77,17 @@ public partial class SystemExplorerPlugin
 		if (!EnsureSystemAvailable(systemName, "Remove Folder"))
 			return false;
 
-		int removedFolderEntries = _systems[systemName].RemoveAll(
-			entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath
-		);
+		int removedFolderEntries = _systems[systemName]
+			.RemoveAll(entry =>
+				entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath
+			);
 
-		int removedChildEntries = _systems[systemName].RemoveAll(
-			entry =>
+		int removedChildEntries = _systems[systemName]
+			.RemoveAll(entry =>
 				entry.StartsWith($"{folderPath}|")
 				|| entry.StartsWith($"{folderPath}/")
 				|| entry.StartsWith($"folder::{folderPath}/")
-		);
+			);
 
 		return removedFolderEntries > 0 || removedChildEntries > 0;
 	}
@@ -208,8 +209,8 @@ public partial class SystemExplorerPlugin
 	{
 		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);
 		return entryWithoutLinkedScene.Contains("|")
-		  ? entryWithoutLinkedScene.Split("|")[1]
-		  : entryWithoutLinkedScene;
+			? entryWithoutLinkedScene.Split("|")[1]
+			: entryWithoutLinkedScene;
 	}
 
 	private static string GetScenePathFromEntry(string entry)
@@ -242,7 +243,9 @@ public partial class SystemExplorerPlugin
 	private static string BuildSceneEntry(string folderPath, string scenePath, bool locked = false)
 	{
 		string sceneEntry = $"{SceneEntryMarker}{scenePath}";
-		string entry = string.IsNullOrWhiteSpace(folderPath) ? sceneEntry : $"{folderPath}|{sceneEntry}";
+		string entry = string.IsNullOrWhiteSpace(folderPath)
+			? sceneEntry
+			: $"{folderPath}|{sceneEntry}";
 		return locked ? AddLockMarker(entry) : entry;
 	}
 
@@ -250,7 +253,10 @@ public partial class SystemExplorerPlugin
 	{
 		string entryWithoutLock = RemoveLockMarker(entry);
 
-		if (string.IsNullOrWhiteSpace(entryWithoutLock) || !entryWithoutLock.Contains(LinkedSceneMarker))
+		if (
+			string.IsNullOrWhiteSpace(entryWithoutLock)
+			|| !entryWithoutLock.Contains(LinkedSceneMarker)
+		)
 			return "";
 
 		string[] parts = entryWithoutLock.Split(LinkedSceneMarker, System.StringSplitOptions.None);
@@ -261,7 +267,10 @@ public partial class SystemExplorerPlugin
 	{
 		string entryWithoutLock = RemoveLockMarker(entry);
 
-		if (string.IsNullOrWhiteSpace(entryWithoutLock) || !entryWithoutLock.Contains(LinkedSceneMarker))
+		if (
+			string.IsNullOrWhiteSpace(entryWithoutLock)
+			|| !entryWithoutLock.Contains(LinkedSceneMarker)
+		)
 			return entryWithoutLock;
 
 		return entryWithoutLock.Split(LinkedSceneMarker, System.StringSplitOptions.None)[0];
@@ -304,15 +313,9 @@ public partial class SystemExplorerPlugin
 			.Select(group => BuildFolderEntry(group.Key, group.Any(IsEntryLocked)))
 			.ToList();
 
-		List<string> systemMarkers = entries
-			.Where(IsSystemLockEntry)
-			.Distinct()
-			.ToList();
+		List<string> systemMarkers = entries.Where(IsSystemLockEntry).Distinct().ToList();
 
-		List<string> scripts = entries
-			.Where(IsScriptOrSceneEntry)
-			.Distinct()
-			.ToList();
+		List<string> scripts = entries.Where(IsScriptOrSceneEntry).Distinct().ToList();
 
 		List<string> requiredFolders = new();
 
@@ -336,13 +339,23 @@ public partial class SystemExplorerPlugin
 
 		foreach (string folderEntry in explicitFolders)
 		{
-			if (!normalized.Any(existing => GetFolderPathFromFolderEntry(existing) == GetFolderPathFromFolderEntry(folderEntry)))
+			if (
+				!normalized.Any(existing =>
+					GetFolderPathFromFolderEntry(existing)
+					== GetFolderPathFromFolderEntry(folderEntry)
+				)
+			)
 				normalized.Add(folderEntry);
 		}
 
 		foreach (string folderEntry in requiredFolders)
 		{
-			if (!normalized.Any(existing => GetFolderPathFromFolderEntry(existing) == GetFolderPathFromFolderEntry(folderEntry)))
+			if (
+				!normalized.Any(existing =>
+					GetFolderPathFromFolderEntry(existing)
+					== GetFolderPathFromFolderEntry(folderEntry)
+				)
+			)
 				normalized.Add(folderEntry);
 		}
 

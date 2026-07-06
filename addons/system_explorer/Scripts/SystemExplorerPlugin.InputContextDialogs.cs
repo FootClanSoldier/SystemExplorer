@@ -7,6 +7,9 @@ using System.Text.Json;
 public partial class SystemExplorerPlugin
 {
 	#region Global Input Shortcuts
+
+	private Texture2D _contextHiddenSubmenuIcon;
+
 	private void HandleGlobalLockShortcut(InputEvent inputEvent)
 	{
 		if (inputEvent is not InputEventKey keyEvent)
@@ -25,6 +28,26 @@ public partial class SystemExplorerPlugin
 
 		ToggleSelectedItemLock();
 		GetViewport().SetInputAsHandled();
+	}
+
+	private void HandleGlobalBeautifyShortcut(InputEvent inputEvent)
+	{
+		if (inputEvent is not InputEventKey keyEvent)
+			return;
+
+		if (!keyEvent.Pressed || keyEvent.Echo || !IsCtrlBeautifyCommand(keyEvent))
+			return;
+
+		if (_tree == null || _tree.GetSelected() == null)
+			return;
+
+		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
+
+		if (IsTextInputFocused(focusedControl))
+			return;
+
+		if (TryHandleBeautifyShortcutForSelectedItem())
+			GetViewport().SetInputAsHandled();
 	}
 
 	private static bool IsTextInputFocused(Control focusedControl)
@@ -75,7 +98,9 @@ public partial class SystemExplorerPlugin
 				if (mouseButton.Pressed && mouseButton.DoubleClick && IsScriptOrSceneItem(item))
 				{
 					item.Select(0);
-					_selectedScriptEntryFromFilter = GetEntryFromMetadata(item.GetMetadata(0).AsString());
+					_selectedScriptEntryFromFilter = GetEntryFromMetadata(
+						item.GetMetadata(0).AsString()
+					);
 					_ignoreNextScriptFilterReleaseOpen = true;
 
 					if (IsSceneItem(item))
@@ -90,7 +115,9 @@ public partial class SystemExplorerPlugin
 				if (!mouseButton.Pressed && IsScriptOrSceneItem(item))
 				{
 					item.Select(0);
-					_selectedScriptEntryFromFilter = GetEntryFromMetadata(item.GetMetadata(0).AsString());
+					_selectedScriptEntryFromFilter = GetEntryFromMetadata(
+						item.GetMetadata(0).AsString()
+					);
 
 					if (_ignoreNextScriptFilterReleaseOpen)
 					{
@@ -246,6 +273,14 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (IsCtrlBeautifyCommand(keyEvent))
+		{
+			if (TryHandleBeautifyShortcutForSelectedItem())
+				_tree.AcceptEvent();
+
+			return;
+		}
+
 		if (!IsCtrlShiftCollapseCommand(keyEvent))
 			return;
 
@@ -269,6 +304,14 @@ public partial class SystemExplorerPlugin
 			&& (keyEvent.Keycode == Key.L || keyEvent.PhysicalKeycode == Key.L);
 	}
 
+	private static bool IsCtrlBeautifyCommand(InputEventKey keyEvent)
+	{
+		return keyEvent.CtrlPressed
+			&& !keyEvent.ShiftPressed
+			&& !keyEvent.AltPressed
+			&& (keyEvent.Keycode == Key.B || keyEvent.PhysicalKeycode == Key.B);
+	}
+
 	#endregion
 
 	#region Context Menu
@@ -281,6 +324,7 @@ public partial class SystemExplorerPlugin
 		_pendingRenameMetadata = metadata;
 		_pendingAddFolderMetadata = GetAddFolderTargetMetadata(metadata);
 		_pendingShowInFileManagerMetadata = metadata;
+		_pendingBeautifyScriptMetadata = metadata;
 
 		BuildContextMenuForMetadata(metadata);
 
@@ -372,28 +416,69 @@ public partial class SystemExplorerPlugin
 		bool isScript = metadata.StartsWith("script::");
 		bool isScene = metadata.StartsWith("sceneLink::");
 		bool canShowNewAndAdd = !_isFilteringScripts;
-		bool canShowQuickActions = EnableQuickActions && isScript;
+		bool canShowQuickActions = EnableQuickActions && (isScript || isSystem || isFolder);
 		bool useReversedSubmenuIcons = ShouldUseReversedContextSubmenuIcons();
 
-		UpdateContextSubmenuDirectionIcons(
-			useReversedSubmenuIcons,
-			GetContextSubmenuDirectionIcon(canShowNewAndAdd)
-		);
+		UpdateContextSubmenuDirectionIcons(useReversedSubmenuIcons);
 
 		if (canShowNewAndAdd)
 		{
 			AddContextSubmenuItem("New", _contextNewSubmenu, useReversedSubmenuIcons);
-			AddContextSubmenuIconItem(_contextNewSubmenu, "Script", ContextNewScript, _contextNewScriptIcon);
-			AddContextSubmenuIconItem(_contextNewSubmenu, "Folder", ContextAddFolder, _contextFolderIcon);
+			AddContextSubmenuIconItem(
+				_contextNewSubmenu,
+				"Script",
+				ContextNewScript,
+				_contextNewScriptIcon
+			);
+			AddContextSubmenuIconItem(
+				_contextNewSubmenu,
+				"Folder",
+				ContextAddFolder,
+				_contextFolderIcon
+			);
 			AddContextSubmenuItem("Add", _contextAddSubmenu, useReversedSubmenuIcons);
-			AddContextSubmenuIconItem(_contextAddSubmenu, "Scripts", ContextAddScript, _contextAddScriptIcon);
+			AddContextSubmenuIconItem(
+				_contextAddSubmenu,
+				"Scripts",
+				ContextAddScript,
+				_contextAddScriptIcon
+			);
 			AddContextSubmenuIconItem(_contextAddSubmenu, "Scenes", ContextAddScene, _sceneIcon);
 		}
 
 		if (canShowQuickActions)
 		{
-			AddContextSubmenuItem("Quick Actions", _contextQuickActionsSubmenu, useReversedSubmenuIcons, GetContextQuickActionsSubmenuItemIcon(useReversedSubmenuIcons));
-			AddContextSubmenuIconItem(_contextQuickActionsSubmenu, "Refactor Namespace", ContextRefactorNamespace, _contextRefactorNamespaceIcon);
+			AddContextSubmenuItem(
+				"Quick Actions",
+				_contextQuickActionsSubmenu,
+				useReversedSubmenuIcons,
+				GetContextQuickActionsSubmenuItemIcon(useReversedSubmenuIcons)
+			);
+
+			if (isScript)
+			{
+				AddContextSubmenuIconItem(
+					_contextQuickActionsSubmenu,
+					"Beautify Script",
+					ContextBeautifyScript,
+					_contextBeautifyScriptIcon
+				);
+				AddContextSubmenuIconItem(
+					_contextQuickActionsSubmenu,
+					"Refactor Namespace",
+					ContextRefactorNamespace,
+					_contextRefactorNamespaceIcon
+				);
+			}
+			else if (isSystem || isFolder)
+			{
+				AddContextSubmenuIconItem(
+					_contextQuickActionsSubmenu,
+					"Beautify Scripts",
+					ContextBeautifyScripts,
+					_contextBeautifyScriptIcon
+				);
+			}
 		}
 
 		if (isScript)
@@ -409,12 +494,16 @@ public partial class SystemExplorerPlugin
 			}
 			else
 			{
-				AddContextMenuIconItem("Unlink from Scene", ContextUnlinkScene, _contextUnlinkSceneIcon);
+				AddContextMenuIconItem(
+					"Unlink from Scene",
+					ContextUnlinkScene,
+					_contextUnlinkSceneIcon
+				);
 			}
 		}
 		if (!(_isFilteringScripts && isScene))
 		{
-   		 _contextMenu.AddSeparator();
+			_contextMenu.AddSeparator();
 		}
 		AddContextMenuIconItem("Rename", ContextRename, _contextRenameIcon);
 		AddContextMenuIconItem("Remove", ContextRemove, _contextRemoveIcon);
@@ -422,16 +511,30 @@ public partial class SystemExplorerPlugin
 		if (isScript || isScene)
 		{
 			_contextMenu.AddSeparator();
-			AddContextMenuIconItem("Open File Path", ContextShowInFileManager, _contextShowInFileSystemIcon);
+			AddContextMenuIconItem(
+				"Open File Path",
+				ContextShowInFileManager,
+				_contextShowInFileSystemIcon
+			);
 		}
 	}
 
 	private void AddContextSubmenuItem(string label, PopupMenu submenu, bool useReversedIcons)
 	{
-		AddContextSubmenuItem(label, submenu, useReversedIcons, GetContextSubmenuItemIcon(useReversedIcons));
+		AddContextSubmenuItem(
+			label,
+			submenu,
+			useReversedIcons,
+			GetContextSubmenuItemIcon(useReversedIcons)
+		);
 	}
 
-	private void AddContextSubmenuItem(string label, PopupMenu submenu, bool useReversedIcons, Texture2D icon)
+	private void AddContextSubmenuItem(
+		string label,
+		PopupMenu submenu,
+		bool useReversedIcons,
+		Texture2D icon
+	)
 	{
 		_contextMenu.AddSubmenuNodeItem(label, submenu);
 
@@ -457,6 +560,18 @@ public partial class SystemExplorerPlugin
 		return _contextQuickActionsIcon;
 	}
 
+	private Texture2D GetHiddenContextSubmenuIcon()
+	{
+		if (_contextHiddenSubmenuIcon != null)
+			return _contextHiddenSubmenuIcon;
+
+		Image image = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
+		image.SetPixel(0, 0, new Color(1, 1, 1, 0));
+		_contextHiddenSubmenuIcon = ImageTexture.CreateFromImage(image);
+
+		return _contextHiddenSubmenuIcon;
+	}
+
 	private Texture2D GetContextSubmenuDirectionIcon(bool hasCreationSubmenus)
 	{
 		if (hasCreationSubmenus && _contextCategoryAddIcon != null)
@@ -465,16 +580,21 @@ public partial class SystemExplorerPlugin
 		return _contextQuickActionsIcon;
 	}
 
-	private void UpdateContextSubmenuDirectionIcons(bool useReversedIcons, Texture2D submenuDirectionIcon)
+	private void UpdateContextSubmenuDirectionIcons(bool useReversedIcons)
 	{
 		_contextMenu.RemoveThemeIconOverride("submenu");
 		_contextMenu.RemoveThemeIconOverride("submenu_mirrored");
 
-		if (!EnableContextMenuIcons || !useReversedIcons || submenuDirectionIcon == null)
+		if (!EnableContextMenuIcons || !useReversedIcons)
 			return;
 
-		_contextMenu.AddThemeIconOverride("submenu", submenuDirectionIcon);
-		_contextMenu.AddThemeIconOverride("submenu_mirrored", submenuDirectionIcon);
+		Texture2D hiddenSubmenuIcon = GetHiddenContextSubmenuIcon();
+
+		if (hiddenSubmenuIcon == null)
+			return;
+
+		_contextMenu.AddThemeIconOverride("submenu", hiddenSubmenuIcon);
+		_contextMenu.AddThemeIconOverride("submenu_mirrored", hiddenSubmenuIcon);
 	}
 
 	private bool ShouldUseReversedContextSubmenuIcons()
@@ -489,7 +609,12 @@ public partial class SystemExplorerPlugin
 	{
 		Control baseControl = EditorInterface.Singleton?.GetBaseControl();
 
-		if (_dock == null || baseControl == null || !_dock.IsInsideTree() || !baseControl.IsInsideTree())
+		if (
+			_dock == null
+			|| baseControl == null
+			|| !_dock.IsInsideTree()
+			|| !baseControl.IsInsideTree()
+		)
 			return false;
 
 		Rect2 editorRect = baseControl.GetGlobalRect();
@@ -505,7 +630,8 @@ public partial class SystemExplorerPlugin
 		const float SafetyPadding = 16.0f;
 
 		float mouseX = _dock.GetGlobalMousePosition().X;
-		float requiredRightEdge = mouseX + EstimatedMainMenuWidth + EstimatedSubmenuWidth + SafetyPadding;
+		float requiredRightEdge =
+			mouseX + EstimatedMainMenuWidth + EstimatedSubmenuWidth + SafetyPadding;
 		float editorRightEdge = editorRect.Position.X + editorRect.Size.X;
 
 		return requiredRightEdge <= editorRightEdge;
@@ -515,7 +641,12 @@ public partial class SystemExplorerPlugin
 	{
 		Control baseControl = EditorInterface.Singleton?.GetBaseControl();
 
-		if (_dock == null || baseControl == null || !_dock.IsInsideTree() || !baseControl.IsInsideTree())
+		if (
+			_dock == null
+			|| baseControl == null
+			|| !_dock.IsInsideTree()
+			|| !baseControl.IsInsideTree()
+		)
 			return false;
 
 		Rect2 dockRect = _dock.GetGlobalRect();
@@ -591,6 +722,14 @@ public partial class SystemExplorerPlugin
 
 			case ContextRefactorNamespace:
 				OpenRefactorNamespaceDialog();
+				break;
+
+			case ContextBeautifyScript:
+				OpenBeautifyScriptCSharpierCheckDialog();
+				break;
+
+			case ContextBeautifyScripts:
+				OpenBeautifyScriptsCSharpierCheckDialog();
 				break;
 		}
 	}
@@ -780,6 +919,7 @@ public partial class SystemExplorerPlugin
 	public override void _Input(InputEvent inputEvent)
 	{
 		HandleGlobalLockShortcut(inputEvent);
+		HandleGlobalBeautifyShortcut(inputEvent);
 
 		if (inputEvent is not InputEventKey keyEvent)
 			return;
@@ -804,6 +944,39 @@ public partial class SystemExplorerPlugin
 	#endregion
 
 	#region Keyboard Shortcut Actions
+	private bool TryHandleBeautifyShortcutForSelectedItem()
+	{
+		if (!EnableQuickActions || _tree == null)
+			return false;
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (selectedItem == null)
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+
+		if (string.IsNullOrWhiteSpace(metadata))
+			return false;
+
+		bool isScriptTarget = metadata.StartsWith("script::");
+		bool isBatchTarget =
+			!_isFilteringScripts
+			&& (metadata.StartsWith("system::") || metadata.StartsWith("folder::"));
+
+		if (!isScriptTarget && !isBatchTarget)
+			return false;
+
+		_pendingBeautifyScriptMetadata = metadata;
+
+		if (isScriptTarget)
+			OpenBeautifyScriptCSharpierCheckDialog();
+		else
+			OpenBeautifyScriptsCSharpierCheckDialog();
+
+		return true;
+	}
+
 	private void OpenRemoveDialogForSelectedItem()
 	{
 		TreeItem selectedItem = _tree.GetSelected();

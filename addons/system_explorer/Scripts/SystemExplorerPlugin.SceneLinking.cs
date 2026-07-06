@@ -199,7 +199,12 @@ public partial class SystemExplorerPlugin
 
 		string folderPath = GetFolderPathFromEntry(oldEntry);
 		string scriptPath = GetScriptPathFromEntry(oldEntry);
-		string newEntry = BuildScriptEntry(folderPath, scriptPath, linkedScenePath, IsEntryLocked(oldEntry));
+		string newEntry = BuildScriptEntry(
+			folderPath,
+			scriptPath,
+			linkedScenePath,
+			IsEntryLocked(oldEntry)
+		);
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{

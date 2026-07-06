@@ -166,12 +166,9 @@ public partial class SystemExplorerPlugin
 				return new List<string>();
 
 			return _systems[systemName]
-				.Where(
-					entry =>
-						IsScriptOrSceneEntry(entry)
-						&& (
-							entry.StartsWith($"{folderPath}|") || entry.StartsWith($"{folderPath}/")
-						)
+				.Where(entry =>
+					IsScriptOrSceneEntry(entry)
+					&& (entry.StartsWith($"{folderPath}|") || entry.StartsWith($"{folderPath}/"))
 				)
 				.Select(GetPathFromEntry)
 				.Distinct()
@@ -384,7 +381,10 @@ public partial class SystemExplorerPlugin
 
 				if (folderEntryPath.StartsWith($"{oldFolderPath}/"))
 				{
-					string childFolderPath = folderEntryPath.Replace($"{oldFolderPath}/", $"{newFolderPath}/");
+					string childFolderPath = folderEntryPath.Replace(
+						$"{oldFolderPath}/",
+						$"{newFolderPath}/"
+					);
 					updatedEntries.Add(BuildFolderEntry(childFolderPath, IsEntryLocked(entry)));
 					continue;
 				}
@@ -494,7 +494,9 @@ public partial class SystemExplorerPlugin
 
 		if (newName.Contains("/") || newName.Contains("\\"))
 		{
-			GD.PushWarning("Scene rename only supports changing the file name, not the folder path.");
+			GD.PushWarning(
+                "Scene rename only supports changing the file name, not the folder path."
+			);
 			DebugLogOperation("Rename Scene failed: invalid name", newName);
 			return false;
 		}
@@ -561,7 +563,11 @@ public partial class SystemExplorerPlugin
 				}
 
 				string folderPath = GetFolderPathFromEntry(entry);
-				string updatedEntry = BuildSceneEntry(folderPath, newScenePath, IsEntryLocked(entry));
+				string updatedEntry = BuildSceneEntry(
+					folderPath,
+					newScenePath,
+					IsEntryLocked(entry)
+				);
 
 				updatedEntries.Add(updatedEntry);
 			}
@@ -598,7 +604,12 @@ public partial class SystemExplorerPlugin
 				string folderPath = GetFolderPathFromEntry(entry);
 
 				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
-				string updatedEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath, IsEntryLocked(entry));
+				string updatedEntry = BuildScriptEntry(
+					folderPath,
+					newScriptPath,
+					linkedScenePath,
+					IsEntryLocked(entry)
+				);
 
 				UpdateSelectedScriptEntryFromFilter(entry, updatedEntry);
 

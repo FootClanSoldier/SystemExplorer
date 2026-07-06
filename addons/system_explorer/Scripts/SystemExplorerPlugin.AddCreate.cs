@@ -129,7 +129,10 @@ public partial class SystemExplorerPlugin
 
 		if (!AddScriptsToSelectedTreeLocation(paths))
 		{
-			DebugLogOperation("Add Existing Scripts cancelled: mutation failed", string.Join(", ", paths));
+			DebugLogOperation(
+				"Add Existing Scripts cancelled: mutation failed",
+				string.Join(", ", paths)
+			);
 			return;
 		}
 
@@ -163,7 +166,10 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(systemName))
 		{
 			GD.PushWarning("Select a system or folder before adding a script.");
-			DebugLogOperation("Add Script failed: no selected system", string.Join(", ", scriptPaths));
+			DebugLogOperation(
+				"Add Script failed: no selected system",
+				string.Join(", ", scriptPaths)
+			);
 			return false;
 		}
 
@@ -206,7 +212,6 @@ public partial class SystemExplorerPlugin
 
 	private void OnAddScenePressed()
 	{
-
 		string systemName = GetSelectedSystemName();
 
 		if (string.IsNullOrWhiteSpace(systemName))
@@ -224,7 +229,10 @@ public partial class SystemExplorerPlugin
 
 		if (!AddScenesToSelectedTreeLocation(paths))
 		{
-			DebugLogOperation("Add Existing Scenes cancelled: mutation failed", string.Join(", ", paths));
+			DebugLogOperation(
+				"Add Existing Scenes cancelled: mutation failed",
+				string.Join(", ", paths)
+			);
 			return;
 		}
 
@@ -261,7 +269,10 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(systemName))
 		{
 			GD.PushWarning("Select a system or folder before adding a scene.");
-			DebugLogOperation("Add Scene failed: no selected system", string.Join(", ", scenePaths));
+			DebugLogOperation(
+				"Add Scene failed: no selected system",
+				string.Join(", ", scenePaths)
+			);
 			return false;
 		}
 

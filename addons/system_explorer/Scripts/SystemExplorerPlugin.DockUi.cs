@@ -11,13 +11,11 @@ public partial class SystemExplorerPlugin
 	{
 		_dock = new VBoxContainer { Name = "System Explorer" };
 
-		_systemNameInput = new LineEdit { 
-			PlaceholderText = "System Name"
-			};
+		_systemNameInput = new LineEdit { PlaceholderText = "System Name" };
 		UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
 		_scriptFilterInput = new LineEdit { PlaceholderText = "Filter Items" };
 		UpdateScriptFilterSearchIconVisibility(_scriptFilterInput.Text);
-		
+
 		_tree = new Tree { HideRoot = true, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
 		ConfigureTreeColumns();
 
@@ -28,49 +26,49 @@ public partial class SystemExplorerPlugin
 			MouseFilter = Control.MouseFilterEnum.Ignore,
 			CustomMinimumSize = Vector2.Zero,
 			SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin,
-			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin
+			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
 		};
 
 		_fileDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.OpenFiles,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Select C# Script(s)"
+			Title = "Select C# Script(s)",
 		};
 
 		_createScriptDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.SaveFile,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Create C# Script"
+			Title = "Create C# Script",
 		};
 
 		_relinkScriptDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Relink C# Script"
+			Title = "Relink C# Script",
 		};
 
 		_linkSceneDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Link Godot Scene"
+			Title = "Link Godot Scene",
 		};
 
 		_addSceneDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.OpenFiles,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Add Godot Scene(s)"
+			Title = "Add Godot Scene(s)",
 		};
 
 		_relinkSceneDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.OpenFile,
 			Access = EditorFileDialog.AccessEnum.Resources,
-			Title = "Relink Godot Scene"
+			Title = "Relink Godot Scene",
 		};
 
 		_fileDialog.Filters = new[] { "*.cs ; C# Scripts" };
@@ -79,7 +77,7 @@ public partial class SystemExplorerPlugin
 		_linkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
 		_addSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
 		_relinkSceneDialog.Filters = new[] { "*.tscn ; Godot Scenes" };
-		
+
 		_contextMenu = new PopupMenu();
 		_contextNewSubmenu = new PopupMenu { Name = "ContextNewSubmenu" };
 		_contextAddSubmenu = new PopupMenu { Name = "ContextAddSubmenu" };
@@ -92,7 +90,7 @@ public partial class SystemExplorerPlugin
 		{
 			Title = "Remove Item",
 			DialogText = "Remove selected item from System Explorer?",
-			MinSize = new Vector2I(420, 220)
+			MinSize = new Vector2I(420, 220),
 		};
 
 		var removeDialogContainer = new VBoxContainer();
@@ -102,7 +100,7 @@ public partial class SystemExplorerPlugin
 		_removeFromFilesystemCheckBox = new CheckBox
 		{
 			Text = "Also delete script file(s) from FileSystem",
-			ButtonPressed = false
+			ButtonPressed = false,
 		};
 
 		removeDialogContainer.AddChild(_removeFromFilesystemCheckBox);
@@ -114,7 +112,7 @@ public partial class SystemExplorerPlugin
 			Title = "Script Not Found",
 			DialogText = "The script file could not be found.",
 			MinSize = new Vector2I(520, 220),
-			OkButtonText = "Relink Script..."
+			OkButtonText = "Relink Script...",
 		};
 
 		_missingScriptDialog.AddButton("Remove from Plugin", false, "remove_from_plugin");
@@ -124,7 +122,7 @@ public partial class SystemExplorerPlugin
 			Title = "Scene Not Found",
 			DialogText = "The linked scene could not be found:",
 			MinSize = new Vector2I(520, 220),
-			OkButtonText = "Relink Scene"
+			OkButtonText = "Relink Scene",
 		};
 
 		_missingSceneDialog.AddButton("Remove Scene Link", false, "remove_scene_link");
@@ -137,7 +135,7 @@ public partial class SystemExplorerPlugin
 		_addFolderDialog = new AcceptDialog
 		{
 			Title = "Add Folder",
-			MinSize = new Vector2I(350, 0)
+			MinSize = new Vector2I(350, 0),
 		};
 
 		_addFolderInput = new LineEdit { PlaceholderText = "Folder name" };
@@ -147,33 +145,53 @@ public partial class SystemExplorerPlugin
 		{
 			Title = "Refactor Namespace",
 			MinSize = RefactorNamespaceDialogSize,
-			Unresizable = true
+			Unresizable = true,
 		};
 
 		var refactorNamespaceContainer = new VBoxContainer
 		{
 			CustomMinimumSize = new Vector2(480, 0),
 			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin
+			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
 		};
-		refactorNamespaceContainer.AddChild(new Label
-		{
-			Text = "Update the selected script namespace and\nmatching using statements in linked C# files.",
-			AutowrapMode = TextServer.AutowrapMode.Off,
-			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
-		});
+		refactorNamespaceContainer.AddChild(
+			new Label
+			{
+				Text =
+					"Update the selected script namespace and\nmatching using statements in linked C# files.",
+				AutowrapMode = TextServer.AutowrapMode.Off,
+				SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+			}
+		);
 		refactorNamespaceContainer.AddChild(new Control { CustomMinimumSize = new Vector2(0, 8) });
 		refactorNamespaceContainer.AddChild(new Label { Text = "Old namespace" });
-		_oldNamespaceInput = new LineEdit
-		{
-			PlaceholderText = "Old namespace",
-			Editable = false
-		};
+		_oldNamespaceInput = new LineEdit { PlaceholderText = "Old namespace", Editable = false };
 		refactorNamespaceContainer.AddChild(_oldNamespaceInput);
 		refactorNamespaceContainer.AddChild(new Label { Text = "New namespace" });
 		_newNamespaceInput = new LineEdit { PlaceholderText = "New namespace" };
 		refactorNamespaceContainer.AddChild(_newNamespaceInput);
 		_refactorNamespaceDialog.AddChild(refactorNamespaceContainer);
+
+		_csharpierInstalledDialog = new AcceptDialog
+		{
+			Title = "Beautify Script",
+			DialogText = "CSharpier is already installed.",
+			MinSize = new Vector2I(420, 160),
+		};
+
+		_csharpierInstallResultDialog = new AcceptDialog
+		{
+			Title = "Beautify Script",
+			MinSize = new Vector2I(460, 160),
+		};
+
+		_csharpierNotInstalledDialog = new ConfirmationDialog
+		{
+			Title = "CSharpier Required",
+			DialogText = "To Beautify Scripts you need CSharpier installed.",
+			OkButtonText = "Install",
+			MinSize = new Vector2I(460, 180),
+		};
 
 		_createScriptDialog.FileSelected += OnCreateScriptFileSelected;
 		_relinkScriptDialog.FileSelected += OnRelinkScriptFileSelected;
@@ -209,6 +227,7 @@ public partial class SystemExplorerPlugin
 		_addFolderDialog.WindowInput += OnAddFolderDialogWindowInput;
 		_addFolderInput.TextSubmitted += _ => ConfirmAddFolderDialogFromEnter();
 		_refactorNamespaceDialog.Confirmed += OnRefactorNamespaceConfirmed;
+		_csharpierNotInstalledDialog.Confirmed += OnCSharpierInstallConfirmed;
 		_refactorNamespaceDialog.WindowInput += OnRefactorNamespaceDialogWindowInput;
 		_oldNamespaceInput.TextSubmitted += _ => ConfirmRefactorNamespaceDialogFromEnter();
 		_newNamespaceInput.TextSubmitted += _ => ConfirmRefactorNamespaceDialogFromEnter();
@@ -230,6 +249,9 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_addFolderDialog);
 		_dock.AddChild(_createScriptDialog);
 		_dock.AddChild(_refactorNamespaceDialog);
+		_dock.AddChild(_csharpierInstalledDialog);
+		_dock.AddChild(_csharpierInstallResultDialog);
+		_dock.AddChild(_csharpierNotInstalledDialog);
 	}
 
 	private void ConfigureTreeColumns()
@@ -251,9 +273,7 @@ public partial class SystemExplorerPlugin
 		if (_systemNameInput == null)
 			return;
 
-		_systemNameInput.RightIcon = !string.IsNullOrWhiteSpace(text)
-			? _systemNameEnterIcon
-			: null;
+		_systemNameInput.RightIcon = !string.IsNullOrWhiteSpace(text) ? _systemNameEnterIcon : null;
 
 		if (string.IsNullOrWhiteSpace(text))
 			ResetSystemNameInputCursor();
@@ -296,7 +316,8 @@ public partial class SystemExplorerPlugin
 		if (_systemNameInput == null)
 			return;
 
-		bool isHoveringAddIcon = !string.IsNullOrWhiteSpace(_systemNameInput.Text)
+		bool isHoveringAddIcon =
+			!string.IsNullOrWhiteSpace(_systemNameInput.Text)
 			&& _systemNameInput.RightIcon == _systemNameEnterIcon
 			&& IsLineEditRightIconClick(_systemNameInput, localMousePosition);
 

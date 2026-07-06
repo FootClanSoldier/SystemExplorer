@@ -27,13 +27,19 @@ public partial class SystemExplorerPlugin
 
 		if (IsDragSourceLockedBySelfOrParentFolder(draggedMetadata))
 		{
-			DebugLogOperation("Drag Move cancelled: dragged item or parent folder is locked", draggedMetadata);
+			DebugLogOperation(
+				"Drag Move cancelled: dragged item or parent folder is locked",
+				draggedMetadata
+			);
 			return;
 		}
 
 		if (IsDropTargetSortingLocked(targetMetadata))
 		{
-			DebugLogOperation("Drag Move cancelled: target folder contents are locked", targetMetadata);
+			DebugLogOperation(
+				"Drag Move cancelled: target folder contents are locked",
+				targetMetadata
+			);
 			return;
 		}
 
@@ -165,7 +171,12 @@ public partial class SystemExplorerPlugin
 				targetSystemName = GetSystemNameFromTreeItem(targetItem);
 		}
 
-		if (!EnsureSystemsAvailable(new[] { sourceSystemName, targetSystemName }, "Move Script/Scene"))
+		if (
+			!EnsureSystemsAvailable(
+				new[] { sourceSystemName, targetSystemName },
+                "Move Script/Scene"
+			)
+		)
 			return false;
 
 		List<string> sourceEntries = _systems[sourceSystemName];
@@ -326,7 +337,9 @@ public partial class SystemExplorerPlugin
 			return index;
 
 		string folderPath = GetFolderPathFromFolderEntry(entryToFind);
-		return entries.FindIndex(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath);
+		return entries.FindIndex(entry =>
+			entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath
+		);
 	}
 
 	private static bool IsSystemEntryMetadata(string metadata)
@@ -455,8 +468,10 @@ public partial class SystemExplorerPlugin
 			return "";
 
 		return _systems[systemName]
-			.FirstOrDefault(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath)
-			?? BuildFolderEntry(folderPath);
+				.FirstOrDefault(entry =>
+					entry.StartsWith("folder::")
+					&& GetFolderPathFromFolderEntry(entry) == folderPath
+				) ?? BuildFolderEntry(folderPath);
 	}
 
 	private static string GetParentFolderPathFromEntryMetadata(string metadata)
@@ -607,8 +622,10 @@ public partial class SystemExplorerPlugin
 
 		return IsSystemEntryMetadata(draggedMetadata)
 			&& IsSystemEntryMetadata(targetMetadata)
-			&& GetSystemNameFromEntryMetadata(draggedMetadata) == GetSystemNameFromEntryMetadata(targetMetadata)
-			&& GetParentFolderPathFromEntryMetadata(draggedMetadata) == GetParentFolderPathFromEntryMetadata(targetMetadata);
+			&& GetSystemNameFromEntryMetadata(draggedMetadata)
+				== GetSystemNameFromEntryMetadata(targetMetadata)
+			&& GetParentFolderPathFromEntryMetadata(draggedMetadata)
+				== GetParentFolderPathFromEntryMetadata(targetMetadata);
 	}
 
 	private void ClearDragState()

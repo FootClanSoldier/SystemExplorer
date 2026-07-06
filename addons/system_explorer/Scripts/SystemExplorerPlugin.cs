@@ -12,11 +12,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string ResourcesFolderPath = PluginFolderPath + "/Resources";
 	private const string SavePath = ResourcesFolderPath + "/systems.json";
 	private const string ScriptTemplatePath = ResourcesFolderPath + "/script_template.txt";
-	
-	
-	// Enable only when investigating editor state/save issues.
-	private const bool DebugState = false;
-	
+
 	private const int ContextAddFolder = 0;
 	private const int ContextAddScript = 1;
 	private const int ContextNewScript = 2;
@@ -27,6 +23,8 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const int ContextShowInFileManager = 7;
 	private const int ContextAddScene = 8;
 	private const int ContextRefactorNamespace = 9;
+	private const int ContextBeautifyScript = 10;
+	private const int ContextBeautifyScripts = 11;
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const string SceneEntryMarker = "scene::";
 	private const string LockedEntryMarker = "||locked";
@@ -53,6 +51,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private AcceptDialog _addFolderDialog;
 	private LineEdit _addFolderInput;
 	private AcceptDialog _refactorNamespaceDialog;
+	private AcceptDialog _csharpierInstalledDialog;
+	private AcceptDialog _csharpierInstallResultDialog;
+	private ConfirmationDialog _csharpierNotInstalledDialog;
 	private LineEdit _oldNamespaceInput;
 	private LineEdit _newNamespaceInput;
 	private EditorFileDialog _createScriptDialog;
@@ -68,6 +69,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _pendingAddFolderMetadata = "";
 	private string _pendingShowInFileManagerMetadata = "";
 	private string _pendingRefactorNamespaceMetadata = "";
+	private string _pendingBeautifyScriptMetadata = "";
 	private string _draggedMetadata = "";
 	private string _draggedSourceSystemName = "";
 	private string _draggedSourceFolderPath = "";
@@ -101,6 +103,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _contextCategoryArrowLeftIcon;
 	private Texture2D _contextQuickActionsIcon;
 	private Texture2D _contextRefactorNamespaceIcon;
+	private Texture2D _contextBeautifyScriptIcon;
 	private Texture2D _scriptFilterSearchIcon;
 	private Texture2D _systemNameEnterIcon;
 	private Texture2D _scriptFilterCloseIcon;
@@ -117,7 +120,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	#region Lifecycle and Dock Setup
 	public override void _EnterTree()
 	{
-		
 		DebugLogOperation("Enter Tree");
 
 		EnsureProjectSettings();
@@ -130,7 +132,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_editorDock = new EditorDock
 		{
 			Title = "System Explorer",
-			DefaultSlot = EditorDock.DockSlot.LeftBl
+			DefaultSlot = EditorDock.DockSlot.LeftBl,
 		};
 
 		_editorDock.AddChild(_dock);
@@ -139,32 +141,37 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		BuildTree();
 
 		DebugLogStateSnapshot("Enter Tree Complete");
+
+		StartCSharpierStartupWarmUp();
 	}
-private void LoadEditorIcons()
-{
-	var editorTheme = EditorInterface.Singleton.GetEditorTheme();
 
-	_scriptIcon = GetEditorIcon(editorTheme, "CSharpScript");
-	_sceneIcon = GetEditorIcon(editorTheme, "PackedScene");
-	_systemIcon = GetEditorIcon(editorTheme, "Environment");
-	_folderIcon = GetEditorIcon(editorTheme, "Folder");
-	_scriptFilterSearchIcon = GetEditorIcon(editorTheme, "Search");
-	_scriptFilterCloseIcon = GetEditorIcon(editorTheme, "GuiClose");
-	_systemNameEnterIcon = GetEditorIcon(editorTheme, "Add");
+	private void LoadEditorIcons()
+	{
+		var editorTheme = EditorInterface.Singleton.GetEditorTheme();
 
-	_contextFolderIcon = GetEditorIcon(editorTheme, "Folder");
-	_contextNewScriptIcon = GetEditorIcon(editorTheme, "Script");
-	_contextAddScriptIcon = GetEditorIcon(editorTheme, "ScriptCreate");
-	_contextLinkSceneIcon = GetEditorIcon(editorTheme, "PackedScene");
-	_contextUnlinkSceneIcon = GetEditorIcon(editorTheme, "Unlinked");
-	_contextRenameIcon = GetEditorIcon(editorTheme, "Rename");
-	_contextRemoveIcon = GetEditorIcon(editorTheme, "Remove");
-	_contextShowInFileSystemIcon = GetEditorIcon(editorTheme, "Filesystem");
-	_contextCategoryAddIcon = GetEditorIcon(editorTheme, "Add");
-	_contextCategoryArrowLeftIcon = GetEditorIcon(editorTheme, "ArrowLeft");
-	_contextQuickActionsIcon = GetEditorIcon(editorTheme, "Tools");
-	_contextRefactorNamespaceIcon = GetEditorIcon(editorTheme, "Rename");
-}
+		_scriptIcon = GetEditorIcon(editorTheme, "CSharpScript");
+		_sceneIcon = GetEditorIcon(editorTheme, "PackedScene");
+		_systemIcon = GetEditorIcon(editorTheme, "Environment");
+		_folderIcon = GetEditorIcon(editorTheme, "Folder");
+		_scriptFilterSearchIcon = GetEditorIcon(editorTheme, "Search");
+		_scriptFilterCloseIcon = GetEditorIcon(editorTheme, "GuiClose");
+		_systemNameEnterIcon = GetEditorIcon(editorTheme, "Add");
+
+		_contextFolderIcon = GetEditorIcon(editorTheme, "Folder");
+		_contextNewScriptIcon = GetEditorIcon(editorTheme, "Script");
+		_contextAddScriptIcon = GetEditorIcon(editorTheme, "ScriptCreate");
+		_contextLinkSceneIcon = GetEditorIcon(editorTheme, "PackedScene");
+		_contextUnlinkSceneIcon = GetEditorIcon(editorTheme, "Unlinked");
+		_contextRenameIcon = GetEditorIcon(editorTheme, "Rename");
+		_contextRemoveIcon = GetEditorIcon(editorTheme, "Remove");
+		_contextShowInFileSystemIcon = GetEditorIcon(editorTheme, "Filesystem");
+		_contextCategoryAddIcon = GetEditorIcon(editorTheme, "Add");
+		_contextCategoryArrowLeftIcon = GetEditorIcon(editorTheme, "ArrowLeft");
+		_contextQuickActionsIcon = GetEditorIcon(editorTheme, "Tools");
+		_contextRefactorNamespaceIcon = GetEditorIcon(editorTheme, "Rename");
+		_contextBeautifyScriptIcon = GetEditorIcon(editorTheme, "CodeHighlighter");
+		_contextBeautifyScriptIcon ??= GetEditorIcon(editorTheme, "CSharpScript");
+	}
 
 	private bool EnsureResourcesFolderExists()
 	{
@@ -175,7 +182,9 @@ private void LoadEditorIcons()
 
 		if (pluginDirectory == null)
 		{
-			GD.PushWarning($"System Explorer could not open plugin folder '{PluginFolderPath}' to create the Resources folder.");
+			GD.PushWarning(
+				$"System Explorer could not open plugin folder '{PluginFolderPath}' to create the Resources folder."
+			);
 			return false;
 		}
 
@@ -183,7 +192,9 @@ private void LoadEditorIcons()
 
 		if (error != Error.Ok && !DirAccess.DirExistsAbsolute(ResourcesFolderPath))
 		{
-			GD.PushWarning($"System Explorer could not create Resources folder at '{ResourcesFolderPath}'. Error: {error}.");
+			GD.PushWarning(
+				$"System Explorer could not create Resources folder at '{ResourcesFolderPath}'. Error: {error}."
+			);
 			return false;
 		}
 
@@ -213,13 +224,14 @@ public sealed class {{CLASS_NAME}}
 
 		EditorInterface.Singleton.GetResourceFilesystem().Scan();
 	}
-private static Texture2D GetEditorIcon(Theme theme, string iconName)
-{
-	if (!theme.HasIcon(iconName, "EditorIcons"))
-		return null;
 
-	return theme.GetIcon(iconName, "EditorIcons");
-}
+	private static Texture2D GetEditorIcon(Theme theme, string iconName)
+	{
+		if (!theme.HasIcon(iconName, "EditorIcons"))
+			return null;
+
+		return theme.GetIcon(iconName, "EditorIcons");
+	}
 
 	public override void _ExitTree()
 	{
@@ -235,70 +247,6 @@ private static Texture2D GetEditorIcon(Theme theme, string iconName)
 		_dock = null;
 	}
 
-	#endregion
-
-	#region Debug Logging
-	private void DebugLog(string message)
-	{
-		if (!DebugState)
-			return;
-
-		GD.Print($"[SystemExplorer] {message}");
-	}
-
-	private void DebugLogOperation(string operation, string details = "")
-	{
-		if (!DebugState)
-			return;
-
-		if (string.IsNullOrWhiteSpace(details))
-			GD.Print($"[SystemExplorer] {operation}");
-		else
-			GD.Print($"[SystemExplorer] {operation} -> {details}");
-	}
-
-	private void DebugLogStateSnapshot(string label)
-	{
-		if (!DebugState)
-			return;
-
-		DebugLog($"--- {label} ---");
-		DebugLog($"Systems Count: {_systems.Count}");
-		DebugLog($"Pending Add Folder Metadata: '{_pendingAddFolderMetadata}'");
-		DebugLog($"Pending Remove Metadata: '{_pendingRemoveMetadata}'");
-		DebugLog($"Pending Rename Metadata: '{_pendingRenameMetadata}'");
-
-		TreeItem selectedItem = _tree?.GetSelected();
-
-		if (selectedItem == null)
-		{
-			DebugLog("Selected Tree Item: <null>");
-		}
-		else
-		{
-			DebugLog($"Selected Tree Text: '{selectedItem.GetText(0)}'");
-			DebugLog($"Selected Tree Metadata: '{selectedItem.GetMetadata(0).AsString()}'");
-		}
-
-		DebugLogSystems("Systems Snapshot");
-		DebugLog($"--- End {label} ---");
-	}
-
-	private void DebugLogSystems(string label)
-	{
-		if (!DebugState)
-			return;
-
-		DebugLog(label);
-		if (_systems.Count == 0)
-		{
-			DebugLog(" - <no systems>");
-			return;
-		}
-
-		foreach (KeyValuePair<string, List<string>> system in _systems)
-			DebugLog($" - {system.Key}: {system.Value.Count} entries");
-	}
 	#endregion
 }
 #endif

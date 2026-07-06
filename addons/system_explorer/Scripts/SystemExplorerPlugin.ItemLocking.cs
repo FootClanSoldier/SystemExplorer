@@ -51,7 +51,12 @@ public partial class SystemExplorerPlugin
 
 		string newEntry = SetEntryLocked(oldEntry, !IsEntryLocked(oldEntry));
 		bool replacedEntry = metadata.StartsWith("folder::")
-			? ReplaceEntryInSystem(GetSystemNameFromMetadata(metadata), oldEntry, newEntry, "Toggle Folder Lock")
+			? ReplaceEntryInSystem(
+				GetSystemNameFromMetadata(metadata),
+				oldEntry,
+				newEntry,
+                "Toggle Folder Lock"
+			)
 			: ReplaceEntry(oldEntry, newEntry);
 
 		if (!replacedEntry)
@@ -80,7 +85,11 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private void ToggleSystemLock(string metadata, string selectedMetadataBeforeToggle, bool selectToggledItemAfterBuild)
+	private void ToggleSystemLock(
+		string metadata,
+		string selectedMetadataBeforeToggle,
+		bool selectToggledItemAfterBuild
+	)
 	{
 		string systemName = GetSystemNameFromMetadata(metadata);
 
@@ -276,7 +285,9 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		string folderEntry = _systems[systemName]
-			.FirstOrDefault(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath);
+			.FirstOrDefault(entry =>
+				entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == folderPath
+			);
 
 		return IsEntryLocked(folderEntry);
 	}

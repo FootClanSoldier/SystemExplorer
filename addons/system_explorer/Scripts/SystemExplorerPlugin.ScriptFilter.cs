@@ -88,7 +88,8 @@ public partial class SystemExplorerPlugin
 		if (_scriptFilterInput == null)
 			return;
 
-		bool isHoveringCloseIcon = !string.IsNullOrEmpty(_scriptFilterInput.Text)
+		bool isHoveringCloseIcon =
+			!string.IsNullOrEmpty(_scriptFilterInput.Text)
 			&& _scriptFilterInput.RightIcon == _scriptFilterCloseIcon
 			&& IsLineEditRightIconClick(_scriptFilterInput, localMousePosition);
 
@@ -162,7 +163,7 @@ public partial class SystemExplorerPlugin
 		if (!recovered)
 		{
 			GD.PushWarning(
-				"System Explorer could not filter items because the in-memory system list was empty and recovery from disk failed."
+                "System Explorer could not filter items because the in-memory system list was empty and recovery from disk failed."
 			);
 		}
 
@@ -188,10 +189,17 @@ public partial class SystemExplorerPlugin
 		{
 			TreeItem item = _tree.CreateItem(root);
 			bool isSceneEntry = IsSceneEntry(result.Entry);
-			string metadata = isSceneEntry ? $"sceneLink::{result.Entry}" : $"script::{result.Entry}";
+			string metadata = isSceneEntry
+				? $"sceneLink::{result.Entry}"
+				: $"script::{result.Entry}";
 
 			item.SetText(0, GetLockableItemDisplayName(metadata, result.ItemName, result.Entry));
-			item.SetTooltipText(0, isSceneEntry ? GetScenePathFromEntry(result.Entry) : GetScriptTooltipText(result.Entry));
+			item.SetTooltipText(
+				0,
+				isSceneEntry
+					? GetScenePathFromEntry(result.Entry)
+					: GetScriptTooltipText(result.Entry)
+			);
 			item.SetIcon(0, GetFilterResultIcon(result.Entry));
 			item.SetMetadata(0, metadata);
 		}
@@ -224,7 +232,9 @@ public partial class SystemExplorerPlugin
 		}
 
 		return results
-			.OrderBy(result => result.ItemName.ToLowerInvariant().StartsWith(normalizedFilter) ? 0 : 1)
+			.OrderBy(result =>
+				result.ItemName.ToLowerInvariant().StartsWith(normalizedFilter) ? 0 : 1
+			)
 			.ThenBy(result => result.ItemName)
 			.ThenBy(result => result.SystemName)
 			.ThenBy(result => result.FolderPath)

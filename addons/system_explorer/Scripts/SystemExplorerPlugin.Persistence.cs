@@ -302,12 +302,17 @@ public partial class SystemExplorerPlugin
 				}
 
 				bool isSceneEntry = IsSceneEntry(entry);
-				string path = isSceneEntry ? GetScenePathFromEntry(entry) : GetScriptPathFromEntry(entry);
+				string path = isSceneEntry
+					? GetScenePathFromEntry(entry)
+					: GetScriptPathFromEntry(entry);
 				string folderPath = GetFolderPathFromEntry(entry);
 				string linkedScenePath = GetLinkedScenePathFromEntry(entry);
 
-				Dictionary<string, object> serializedEntry =
-					new() { ["name"] = path.GetFile(), ["path"] = path };
+				Dictionary<string, object> serializedEntry = new()
+				{
+					["name"] = path.GetFile(),
+					["path"] = path,
+				};
 
 				if (isSceneEntry)
 					serializedEntry["type"] = "scene";
@@ -408,7 +413,11 @@ public partial class SystemExplorerPlugin
 		return false;
 	}
 
-	private static bool TryGetJsonProperty(JsonElement element, string propertyName, out JsonElement value)
+	private static bool TryGetJsonProperty(
+		JsonElement element,
+		string propertyName,
+		out JsonElement value
+	)
 	{
 		if (element.TryGetProperty(propertyName, out value))
 			return true;

@@ -29,7 +29,14 @@ public partial class SystemExplorerPlugin
 		foreach (KeyValuePair<string, List<string>> system in _systems)
 		{
 			TreeItem systemItem = _tree.CreateItem(root);
-			systemItem.SetText(0, GetLockableItemDisplayName($"system::{system.Key}", system.Key, IsSystemLocked(system.Key)));
+			systemItem.SetText(
+				0,
+				GetLockableItemDisplayName(
+					$"system::{system.Key}",
+					system.Key,
+					IsSystemLocked(system.Key)
+				)
+			);
 			systemItem.SetIcon(0, _systemIcon);
 			systemItem.SetIconModulate(0, _systemColor);
 			systemItem.SetMetadata(0, $"system::{system.Key}");
@@ -40,7 +47,13 @@ public partial class SystemExplorerPlugin
 
 			foreach (string entry in system.Value.Where(entry => entry.StartsWith("folder::")))
 			{
-				CreateFolderPath(systemItem, folders, system.Key, GetFolderPathFromFolderEntry(entry), lockedFolders);
+				CreateFolderPath(
+					systemItem,
+					folders,
+					system.Key,
+					GetFolderPathFromFolderEntry(entry),
+					lockedFolders
+				);
 			}
 
 			foreach (string entry in system.Value.Where(IsScriptOrSceneEntry))
@@ -55,7 +68,14 @@ public partial class SystemExplorerPlugin
 					TreeItem sceneItem = _tree.CreateItem(parent);
 					string scenePath = GetScenePathFromEntry(entry);
 
-					sceneItem.SetText(0, GetLockableItemDisplayName($"sceneLink::{entry}", scenePath.GetFile(), IsEntryLocked(entry)));
+					sceneItem.SetText(
+						0,
+						GetLockableItemDisplayName(
+							$"sceneLink::{entry}",
+							scenePath.GetFile(),
+							IsEntryLocked(entry)
+						)
+					);
 					sceneItem.SetIcon(0, _sceneIcon);
 					sceneItem.SetTooltipText(0, scenePath);
 					sceneItem.SetMetadata(0, $"sceneLink::{entry}");
@@ -69,7 +89,10 @@ public partial class SystemExplorerPlugin
 
 				scriptItem.SetTooltipText(0, GetScriptTooltipText(entry));
 
-				scriptItem.SetText(0, GetLockableItemDisplayName($"script::{entry}", scriptText, IsEntryLocked(entry)));
+				scriptItem.SetText(
+					0,
+					GetLockableItemDisplayName($"script::{entry}", scriptText, IsEntryLocked(entry))
+				);
 				scriptItem.SetIcon(
 					0,
 					string.IsNullOrWhiteSpace(linkedScenePath) ? _scriptIcon : _sceneIcon
@@ -80,6 +103,7 @@ public partial class SystemExplorerPlugin
 
 		RestoreExpansionState(root);
 	}
+
 	private string GetLockableItemDisplayName(string metadata, string displayName, string entry)
 	{
 		return GetLockableItemDisplayName(metadata, displayName, IsEntryLocked(entry));
@@ -88,7 +112,7 @@ public partial class SystemExplorerPlugin
 	private string GetLockableItemDisplayName(string metadata, string displayName, bool isLocked)
 	{
 		return isLocked && ShouldShowLockIconForMetadata(metadata)
-			? $"{displayName}  🔒"
+			? $"{displayName}  \U0001F512" //Lock Icon
 			: displayName;
 	}
 
@@ -143,7 +167,11 @@ public partial class SystemExplorerPlugin
 		item.SetText(0, GetLockableItemDisplayName(metadata, displayName, isLocked));
 	}
 
-	private bool TryGetLockableItemDisplayState(string metadata, out string displayName, out bool isLocked)
+	private bool TryGetLockableItemDisplayState(
+		string metadata,
+		out string displayName,
+		out bool isLocked
+	)
 	{
 		displayName = "";
 		isLocked = false;
@@ -200,16 +228,16 @@ public partial class SystemExplorerPlugin
 
 	private string GetScriptTooltipText(string entry)
 	{
-	string linkedScenePath = GetLinkedScenePathFromEntry(entry);
-	string scriptPath = GetScriptPathFromEntry(entry);
-	string tooltipText = $"{scriptPath}";
+		string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+		string scriptPath = GetScriptPathFromEntry(entry);
+		string tooltipText = $"{scriptPath}";
 
-	if (!string.IsNullOrWhiteSpace(linkedScenePath))
-	{
-		tooltipText += $"\n{linkedScenePath}";
-	}
+		if (!string.IsNullOrWhiteSpace(linkedScenePath))
+		{
+			tooltipText += $"\n{linkedScenePath}";
+		}
 
-	return tooltipText;
+		return tooltipText;
 	}
 
 	private void MergeForcedExpansionState()
@@ -337,10 +365,18 @@ public partial class SystemExplorerPlugin
 			if (!folders.ContainsKey(currentPath))
 			{
 				TreeItem folderItem = _tree.CreateItem(parent);
-				bool isLocked = lockedFolders != null
+				bool isLocked =
+					lockedFolders != null
 					&& lockedFolders.TryGetValue(currentPath, out bool locked)
 					&& locked;
-				folderItem.SetText(0, GetLockableItemDisplayName($"folder::{systemName}::{currentPath}", part, isLocked));
+				folderItem.SetText(
+					0,
+					GetLockableItemDisplayName(
+						$"folder::{systemName}::{currentPath}",
+						part,
+						isLocked
+					)
+				);
 				folderItem.SetIcon(0, _folderIcon);
 				folderItem.SetIconModulate(0, _folderColor);
 				folderItem.SetMetadata(0, $"folder::{systemName}::{currentPath}");

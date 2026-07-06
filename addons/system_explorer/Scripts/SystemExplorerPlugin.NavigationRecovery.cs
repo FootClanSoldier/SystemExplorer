@@ -12,7 +12,9 @@ public partial class SystemExplorerPlugin
 		TreeItem selectedItem = _tree.GetSelected();
 
 		if (_isFilteringScripts && IsScriptOrSceneItem(selectedItem))
-			_selectedScriptEntryFromFilter = GetEntryFromMetadata(selectedItem.GetMetadata(0).AsString());
+			_selectedScriptEntryFromFilter = GetEntryFromMetadata(
+				selectedItem.GetMetadata(0).AsString()
+			);
 
 		UpdateTreeLockIconVisibility();
 
@@ -98,6 +100,7 @@ public partial class SystemExplorerPlugin
 		_missingScriptDialog.PopupCentered();
 		CallDeferred(nameof(ReleaseMissingDialogFocus));
 	}
+
 	private void ReleaseMissingDialogFocus()
 	{
 		ReleaseDialogOkButtonFocus(_missingScriptDialog);
@@ -149,7 +152,12 @@ public partial class SystemExplorerPlugin
 		string oldEntry = _pendingMissingScriptEntry;
 		string folderPath = GetFolderPathFromEntry(oldEntry);
 		string linkedScenePath = GetLinkedScenePathFromEntry(oldEntry);
-		string newEntry = BuildScriptEntry(folderPath, newScriptPath, linkedScenePath, IsEntryLocked(oldEntry));
+		string newEntry = BuildScriptEntry(
+			folderPath,
+			newScriptPath,
+			linkedScenePath,
+			IsEntryLocked(oldEntry)
+		);
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
@@ -168,7 +176,12 @@ public partial class SystemExplorerPlugin
 		OpenScriptOrMissingDialog(newEntry, newScriptPath);
 	}
 
-	private bool ReplaceEntryInSystem(string systemName, string oldEntry, string newEntry, string operationName)
+	private bool ReplaceEntryInSystem(
+		string systemName,
+		string oldEntry,
+		string newEntry,
+		string operationName
+	)
 	{
 		if (string.IsNullOrWhiteSpace(systemName))
 			return false;
@@ -181,13 +194,23 @@ public partial class SystemExplorerPlugin
 			if (!TryRecoverSystemsFromDisk(operationName))
 				return false;
 
-			return TryReplaceEntryInSystem(systemName, oldEntry, newEntry, $"{operationName} After Recovery");
+			return TryReplaceEntryInSystem(
+				systemName,
+				oldEntry,
+				newEntry,
+				$"{operationName} After Recovery"
+			);
 		}
 
 		return true;
 	}
 
-	private bool TryReplaceEntryInSystem(string systemName, string oldEntry, string newEntry, string operationName)
+	private bool TryReplaceEntryInSystem(
+		string systemName,
+		string oldEntry,
+		string newEntry,
+		string operationName
+	)
 	{
 		if (!EnsureSystemAvailable(systemName, operationName))
 			return false;
@@ -223,7 +246,10 @@ public partial class SystemExplorerPlugin
 			if (index < 0 && oldEntry.StartsWith("folder::"))
 			{
 				string oldFolderPath = GetFolderPathFromFolderEntry(oldEntry);
-				index = entries.FindIndex(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == oldFolderPath);
+				index = entries.FindIndex(entry =>
+					entry.StartsWith("folder::")
+					&& GetFolderPathFromFolderEntry(entry) == oldFolderPath
+				);
 			}
 
 			if (index < 0)
@@ -251,7 +277,10 @@ public partial class SystemExplorerPlugin
 				if (index < 0 && oldEntry.StartsWith("folder::"))
 				{
 					string oldFolderPath = GetFolderPathFromFolderEntry(oldEntry);
-					index = entries.FindIndex(entry => entry.StartsWith("folder::") && GetFolderPathFromFolderEntry(entry) == oldFolderPath);
+					index = entries.FindIndex(entry =>
+						entry.StartsWith("folder::")
+						&& GetFolderPathFromFolderEntry(entry) == oldFolderPath
+					);
 				}
 
 				if (index < 0)
