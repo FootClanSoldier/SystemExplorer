@@ -385,7 +385,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		EditorInterface.Singleton.EditScript(script);
+		OpenScriptFromSystemExplorer(script, path, false);
 	}
 
 	#endregion

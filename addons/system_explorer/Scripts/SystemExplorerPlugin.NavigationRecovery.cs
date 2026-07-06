@@ -77,8 +77,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		EditorInterface.Singleton.EditScript(script);
-		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		OpenScriptFromSystemExplorer(script, scriptPath);
 	}
 
 	private void ReleaseTreeFocusAfterNavigation()

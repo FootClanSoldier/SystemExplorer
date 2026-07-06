@@ -132,7 +132,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_editorDock = new EditorDock
 		{
 			Title = "System Explorer",
-			DefaultSlot = EditorDock.DockSlot.LeftBl,
+			DefaultSlot = EditorDock.DockSlot.RightBl,
 		};
 
 		_editorDock.AddChild(_dock);
@@ -212,7 +212,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-			@"using Godot;
+            @"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {
