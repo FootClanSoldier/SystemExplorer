@@ -197,7 +197,7 @@ public partial class SystemExplorerPlugin
 		List<string> targetScriptPaths =
 			scriptPaths
 				?.Where(path => !string.IsNullOrWhiteSpace(path))
-				.Select(NormalizeRefactorNamespacePath)
+				.Select(NormalizeScriptPath)
 				.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
 				.Distinct(StringComparer.OrdinalIgnoreCase)
 				.ToList()
@@ -317,7 +317,7 @@ public partial class SystemExplorerPlugin
 
 		foreach (string linkedScriptPath in GetRefactorNamespaceProjectCSharpFilePaths())
 		{
-			string scriptPath = NormalizeRefactorNamespacePath(linkedScriptPath);
+			string scriptPath = NormalizeScriptPath(linkedScriptPath);
 
 			if (!FileAccess.FileExists(scriptPath))
 				continue;
@@ -354,7 +354,7 @@ public partial class SystemExplorerPlugin
 		foreach (
 			string scriptPath in scriptPaths
 				.Where(path => !string.IsNullOrWhiteSpace(path))
-				.Select(NormalizeRefactorNamespacePath)
+				.Select(NormalizeScriptPath)
 				.Distinct(StringComparer.OrdinalIgnoreCase)
 		)
 		{
@@ -407,7 +407,7 @@ public partial class SystemExplorerPlugin
 				continue;
 			}
 
-			string scriptPath = NormalizeRefactorNamespacePath(GetScriptPathFromEntry(entry));
+			string scriptPath = NormalizeScriptPath(GetScriptPathFromEntry(entry));
 
 			if (scriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
 				result.Add(scriptPath);
@@ -421,9 +421,9 @@ public partial class SystemExplorerPlugin
 		string targetFolderPath
 	)
 	{
-		string normalizedEntryFolderPath = NormalizeRefactorNamespacePath(entryFolderPath)
+		string normalizedEntryFolderPath = NormalizeScriptPath(entryFolderPath)
 			.Trim('/');
-		string normalizedTargetFolderPath = NormalizeRefactorNamespacePath(targetFolderPath)
+		string normalizedTargetFolderPath = NormalizeScriptPath(targetFolderPath)
 			.Trim('/');
 
 		return normalizedEntryFolderPath.Equals(
@@ -452,7 +452,7 @@ public partial class SystemExplorerPlugin
 					System.IO.SearchOption.AllDirectories
 				)
 				.Select(ProjectSettings.LocalizePath)
-				.Select(NormalizeRefactorNamespacePath)
+				.Select(NormalizeScriptPath)
 				.Concat(GetLinkedCSharpFilePaths())
 				.Distinct(StringComparer.OrdinalIgnoreCase)
 				.ToList();
