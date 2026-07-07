@@ -25,7 +25,6 @@
 </p>
 
 > Architecture-focused navigation plugin for Godot C# projects.
-
 > **Note:** The `main` branch may contain work-in-progress changes for the next plugin version. Stable versions are available from the official releases.
 
 ---
