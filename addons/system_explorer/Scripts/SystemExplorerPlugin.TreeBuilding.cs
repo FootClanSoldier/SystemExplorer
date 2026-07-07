@@ -393,14 +393,6 @@ public partial class SystemExplorerPlugin
 	#endregion
 
 	#region Tree Collapse Helpers
-	private static bool IsCtrlShiftCollapseCommand(InputEventKey keyEvent)
-	{
-		bool isCtrlKey = keyEvent.Keycode == Key.Ctrl || keyEvent.PhysicalKeycode == Key.Ctrl;
-		bool isShiftKey = keyEvent.Keycode == Key.Shift || keyEvent.PhysicalKeycode == Key.Shift;
-
-		return (isCtrlKey && keyEvent.ShiftPressed) || (isShiftKey && keyEvent.CtrlPressed);
-	}
-
 	private void CollapseEntireTree()
 	{
 		_expandedItems.Clear();

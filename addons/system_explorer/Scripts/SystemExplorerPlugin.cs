@@ -13,18 +13,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string SavePath = ResourcesFolderPath + "/systems.json";
 	private const string ScriptTemplatePath = ResourcesFolderPath + "/script_template.txt";
 
-	private const int ContextAddFolder = 0;
-	private const int ContextAddScript = 1;
-	private const int ContextNewScript = 2;
-	private const int ContextRename = 3;
-	private const int ContextRemove = 4;
-	private const int ContextLinkScene = 5;
-	private const int ContextUnlinkScene = 6;
-	private const int ContextShowInFileManager = 7;
-	private const int ContextAddScene = 8;
-	private const int ContextRefactorNamespace = 9;
-	private const int ContextBeautifyScript = 10;
-	private const int ContextBeautifyScripts = 11;
 	private const string LinkedSceneMarker = "||linkedScene::";
 	private const string SceneEntryMarker = "scene::";
 	private const string LockedEntryMarker = "||locked";
