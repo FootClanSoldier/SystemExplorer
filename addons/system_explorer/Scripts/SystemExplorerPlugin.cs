@@ -51,6 +51,13 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private AcceptDialog _addFolderDialog;
 	private LineEdit _addFolderInput;
 	private AcceptDialog _refactorNamespaceDialog;
+	private Label _refactorNamespaceDescriptionLabel;
+	private Label _oldNamespaceLabel;
+	private Label _newNamespaceLabel;
+	private Label _refactorNamespaceApplyToLabel;
+	private CheckBox _refactorNamespaceExistingNamespaceOption;
+	private OptionButton _refactorNamespaceExistingNamespaceDropdown;
+	private CheckBox _refactorNamespaceWithoutNamespaceOption;
 	private AcceptDialog _csharpierInstalledDialog;
 	private AcceptDialog _csharpierInstallResultDialog;
 	private ConfirmationDialog _csharpierNotInstalledDialog;
@@ -224,7 +231,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-            @"using Godot;
+			@"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {

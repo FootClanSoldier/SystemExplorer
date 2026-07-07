@@ -478,6 +478,12 @@ public partial class SystemExplorerPlugin
 					ContextBeautifyScripts,
 					_contextBeautifyScriptIcon
 				);
+				AddContextSubmenuIconItem(
+					_contextQuickActionsSubmenu,
+					"Refactor Namespace",
+					ContextRefactorNamespace,
+					_contextRefactorNamespaceIcon
+				);
 			}
 		}
 

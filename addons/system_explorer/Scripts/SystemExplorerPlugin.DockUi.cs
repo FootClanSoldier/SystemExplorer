@@ -154,22 +154,53 @@ public partial class SystemExplorerPlugin
 			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
 			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
 		};
-		refactorNamespaceContainer.AddChild(
-			new Label
-			{
-				Text =
-					"Update the selected script namespace and\nmatching using statements in linked C# files.",
-				AutowrapMode = TextServer.AutowrapMode.Off,
-				SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-			}
-		);
+
+		_refactorNamespaceDescriptionLabel = new Label
+		{
+			Text =
+				"Update the selected script namespace and\nmatching using statements in linked C# files.",
+			AutowrapMode = TextServer.AutowrapMode.Off,
+			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+		};
+		refactorNamespaceContainer.AddChild(_refactorNamespaceDescriptionLabel);
 		refactorNamespaceContainer.AddChild(new Control { CustomMinimumSize = new Vector2(0, 8) });
-		refactorNamespaceContainer.AddChild(new Label { Text = "Old namespace" });
-		_oldNamespaceInput = new LineEdit { PlaceholderText = "Old namespace", Editable = false };
-		refactorNamespaceContainer.AddChild(_oldNamespaceInput);
-		refactorNamespaceContainer.AddChild(new Label { Text = "New namespace" });
+
+		_newNamespaceLabel = new Label { Text = "New namespace" };
+		refactorNamespaceContainer.AddChild(_newNamespaceLabel);
 		_newNamespaceInput = new LineEdit { PlaceholderText = "New namespace" };
 		refactorNamespaceContainer.AddChild(_newNamespaceInput);
+
+		_oldNamespaceLabel = new Label { Text = "Old namespace" };
+		refactorNamespaceContainer.AddChild(_oldNamespaceLabel);
+		_oldNamespaceInput = new LineEdit { PlaceholderText = "Old namespace", Editable = false };
+		refactorNamespaceContainer.AddChild(_oldNamespaceInput);
+
+		_refactorNamespaceApplyToLabel = new Label { Text = "Apply to:" };
+		refactorNamespaceContainer.AddChild(_refactorNamespaceApplyToLabel);
+
+		var refactorNamespaceApplyModeGroup = new ButtonGroup();
+
+		_refactorNamespaceExistingNamespaceOption = new CheckBox
+		{
+			Text = "All scripts with namespace:",
+			ButtonPressed = true,
+			ButtonGroup = refactorNamespaceApplyModeGroup,
+		};
+		refactorNamespaceContainer.AddChild(_refactorNamespaceExistingNamespaceOption);
+
+		_refactorNamespaceExistingNamespaceDropdown = new OptionButton
+		{
+			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+		};
+		refactorNamespaceContainer.AddChild(_refactorNamespaceExistingNamespaceDropdown);
+
+		_refactorNamespaceWithoutNamespaceOption = new CheckBox
+		{
+			Text = "Scripts without namespace",
+			ButtonGroup = refactorNamespaceApplyModeGroup,
+		};
+		refactorNamespaceContainer.AddChild(_refactorNamespaceWithoutNamespaceOption);
+
 		_refactorNamespaceDialog.AddChild(refactorNamespaceContainer);
 
 		_csharpierInstalledDialog = new AcceptDialog
@@ -227,6 +258,8 @@ public partial class SystemExplorerPlugin
 		_addFolderDialog.WindowInput += OnAddFolderDialogWindowInput;
 		_addFolderInput.TextSubmitted += _ => ConfirmAddFolderDialogFromEnter();
 		_refactorNamespaceDialog.Confirmed += OnRefactorNamespaceConfirmed;
+		_refactorNamespaceExistingNamespaceOption.Toggled += OnRefactorNamespaceExistingNamespaceOptionToggled;
+		_refactorNamespaceWithoutNamespaceOption.Toggled += OnRefactorNamespaceWithoutNamespaceOptionToggled;
 		_csharpierNotInstalledDialog.Confirmed += OnCSharpierInstallConfirmed;
 		_refactorNamespaceDialog.WindowInput += OnRefactorNamespaceDialogWindowInput;
 		_oldNamespaceInput.TextSubmitted += _ => ConfirmRefactorNamespaceDialogFromEnter();
