@@ -3,35 +3,25 @@ using Godot;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
 
 public partial class SystemExplorerPlugin
 {
 	#region Quick Actions - Refactor Namespace
 	private static readonly Vector2I RefactorNamespaceDialogSize = new(520, 285);
 
-	private static readonly Regex NamespaceDeclarationRegex = new(
-		@"(?m)^(\s*namespace\s+)([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)(\s*(?:;|\{))",
-		RegexOptions.Compiled
-	);
-
-	private static readonly Regex NamespaceIdentifierRegex = new(
-		@"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$",
-		RegexOptions.Compiled
-	);
-
 	private Dictionary<string, string> _deferredRefactorNamespaceOriginalTextsByPath = new(
 		StringComparer.OrdinalIgnoreCase
 	);
-
 
 	private void OpenRefactorNamespaceDialog()
 	{
 		if (string.IsNullOrWhiteSpace(_pendingRenameMetadata))
 			return;
 
-		if (_pendingRenameMetadata.StartsWith("system::") || _pendingRenameMetadata.StartsWith("folder::"))
+		if (
+			_pendingRenameMetadata.StartsWith("system::")
+			|| _pendingRenameMetadata.StartsWith("folder::")
+		)
 		{
 			OpenBatchRefactorNamespaceDialog(_pendingRenameMetadata);
 			return;
@@ -50,7 +40,9 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(currentNamespace))
 		{
-			DebugLog($"Refactor Namespace found no namespace in '{scriptPath}'. Opening add-namespace dialog.");
+			DebugLog(
+				$"Refactor Namespace found no namespace in '{scriptPath}'. Opening add-namespace dialog."
+			);
 			OpenSingleScriptAddNamespaceDialog(scriptPath);
 			return;
 		}
@@ -140,14 +132,16 @@ public partial class SystemExplorerPlugin
 
 			if (!IsValidNamespaceName(newNamespace))
 			{
-				DebugLog("Refactor Namespace add cancelled: new namespace must be a valid C# namespace name.");
+				DebugLog(
+                    "Refactor Namespace add cancelled: new namespace must be a valid C# namespace name."
+				);
 				return;
 			}
 
 			AddNamespaceToScripts(
 				_pendingBatchRefactorNamespaceScriptPaths,
 				newNamespace,
-				"Refactor Namespace Add"
+                "Refactor Namespace Add"
 			);
 			ClearPendingRefactorNamespaceState();
 			return;
@@ -160,7 +154,7 @@ public partial class SystemExplorerPlugin
 		if (!IsValidNamespaceName(oldNamespace) || !IsValidNamespaceName(newNamespace))
 		{
 			GD.PushWarning(
-				"Refactor Namespace cancelled: namespace values must be valid C# namespace names."
+                "Refactor Namespace cancelled: namespace values must be valid C# namespace names."
 			);
 			return;
 		}
@@ -353,12 +347,14 @@ public partial class SystemExplorerPlugin
 		if (!EnsureSystemsLoadedForTreeOperation(operationName))
 			return false;
 
-		List<string> targetScriptPaths = scriptPaths
-			?.Where(path => !string.IsNullOrWhiteSpace(path))
-			.Select(NormalizeScriptPath)
-			.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-			.Distinct(StringComparer.OrdinalIgnoreCase)
-			.ToList() ?? new List<string>();
+		List<string> targetScriptPaths =
+			scriptPaths
+				?.Where(path => !string.IsNullOrWhiteSpace(path))
+				.Select(NormalizeScriptPath)
+				.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.ToList()
+			?? new List<string>();
 
 		if (targetScriptPaths.Count == 0)
 		{
@@ -436,7 +432,9 @@ public partial class SystemExplorerPlugin
 
 			if (!string.IsNullOrWhiteSpace(GetNamespaceFromText(scriptText)))
 			{
-				DebugLog($"Refactor Namespace add skipped '{scriptPath}' because it already has a namespace.");
+				DebugLog(
+					$"Refactor Namespace add skipped '{scriptPath}' because it already has a namespace."
+				);
 				continue;
 			}
 
@@ -448,7 +446,9 @@ public partial class SystemExplorerPlugin
 
 			if (!namespaceAdded)
 			{
-				DebugLog($"Refactor Namespace add skipped '{scriptPath}' because the namespace block could not be inserted.");
+				DebugLog(
+					$"Refactor Namespace add skipped '{scriptPath}' because the namespace block could not be inserted."
+				);
 				continue;
 			}
 
@@ -461,7 +461,9 @@ public partial class SystemExplorerPlugin
 
 		if (pendingWrites.Count == 0)
 		{
-			DebugLog("Refactor Namespace add cancelled: no scripts without namespace could be updated.");
+			DebugLog(
+                "Refactor Namespace add cancelled: no scripts without namespace could be updated."
+			);
 			return false;
 		}
 
@@ -567,10 +569,7 @@ public partial class SystemExplorerPlugin
 
 		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 
-		DebugLogOperation(
-			$"{operationName} Completed",
-			$"Updated {pendingWrites.Count} file(s)."
-		);
+		DebugLogOperation($"{operationName} Completed", $"Updated {pendingWrites.Count} file(s).");
 		return true;
 	}
 
@@ -714,11 +713,13 @@ public partial class SystemExplorerPlugin
 		if (scriptEditor == null)
 			return true;
 
-		List<string> normalizedCandidatePaths = candidatePaths
-			?.Where(path => !string.IsNullOrWhiteSpace(path))
-			.Select(NormalizeScriptPath)
-			.Distinct(StringComparer.OrdinalIgnoreCase)
-			.ToList() ?? new List<string>();
+		List<string> normalizedCandidatePaths =
+			candidatePaths
+				?.Where(path => !string.IsNullOrWhiteSpace(path))
+				.Select(NormalizeScriptPath)
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.ToList()
+			?? new List<string>();
 
 		if (normalizedCandidatePaths.Count == 0)
 			return true;
@@ -800,9 +801,7 @@ public partial class SystemExplorerPlugin
 		if (!string.IsNullOrWhiteSpace(metadata) && metadata.StartsWith("script::"))
 		{
 			string selectedEntry = GetEntryFromMetadata(metadata);
-			selectedScriptPath = NormalizeScriptPath(
-				GetScriptPathFromEntry(selectedEntry)
-			);
+			selectedScriptPath = NormalizeScriptPath(GetScriptPathFromEntry(selectedEntry));
 		}
 
 		if (candidatePaths.Count == 0)
@@ -874,9 +873,7 @@ public partial class SystemExplorerPlugin
 		if (!string.IsNullOrWhiteSpace(metadata) && metadata.StartsWith("script::"))
 		{
 			string selectedEntry = GetEntryFromMetadata(metadata);
-			string selectedScriptPath = NormalizeScriptPath(
-				GetScriptPathFromEntry(selectedEntry)
-			);
+			string selectedScriptPath = NormalizeScriptPath(GetScriptPathFromEntry(selectedEntry));
 
 			if (
 				!string.IsNullOrWhiteSpace(selectedScriptPath)
@@ -897,7 +894,6 @@ public partial class SystemExplorerPlugin
 
 		return result;
 	}
-
 
 	private void DebugDumpRefactorNamespaceEditorState(string metadata, string label)
 	{
@@ -958,20 +954,13 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-
 	private void RefreshOpenScriptEditorBuffersAfterRefactorNamespaceDeferred(
 		string scriptPathPayload
 	)
 	{
-		Dictionary<string, string> updatedTextsByPath = ParseScriptPathPayload(
-				scriptPathPayload
-			)
+		Dictionary<string, string> updatedTextsByPath = ParseScriptPathPayload(scriptPathPayload)
 			.Where(FileAccess.FileExists)
-			.ToDictionary(
-				NormalizeScriptPath,
-				ReadTextFile,
-				StringComparer.OrdinalIgnoreCase
-			);
+			.ToDictionary(NormalizeScriptPath, ReadTextFile, StringComparer.OrdinalIgnoreCase);
 
 		if (updatedTextsByPath.Count == 0)
 		{
@@ -996,8 +985,11 @@ public partial class SystemExplorerPlugin
 
 		_deferredRefactorNamespaceOriginalTextsByPath.Clear();
 
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath =
-			GetOpenScriptEditorsByPath(originalTextsByPath, updatedTextsByPath, out _);
+		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath = GetOpenScriptEditorsByPath(
+			originalTextsByPath,
+			updatedTextsByPath,
+			out _
+		);
 
 		ApplyTextToOpenScriptEditors(openEditorsByPath, updatedTextsByPath);
 	}
@@ -1028,191 +1020,6 @@ public partial class SystemExplorerPlugin
 		return !pathPart.StartsWith(SceneEntryMarker)
 			&& pathPart.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
 	}
-
-	private static bool IsValidNamespaceName(string namespaceName)
-	{
-		return !string.IsNullOrWhiteSpace(namespaceName)
-			&& NamespaceIdentifierRegex.IsMatch(namespaceName);
-	}
-
-	private static string ReadNamespaceFromScript(string scriptPath)
-	{
-		if (!FileAccess.FileExists(scriptPath))
-			return "";
-
-		return GetNamespaceFromText(ReadTextFile(scriptPath));
-	}
-
-	private static string GetNamespaceFromText(string scriptText)
-	{
-		if (string.IsNullOrWhiteSpace(scriptText))
-			return "";
-
-		Match match = NamespaceDeclarationRegex.Match(scriptText);
-		return match.Success ? match.Groups[2].Value : "";
-	}
-
-	private static string ReplaceNamespaceDeclaration(
-		string scriptText,
-		string oldNamespace,
-		string newNamespace,
-		out bool changed
-	)
-	{
-		bool didChange = false;
-
-		string updatedText = NamespaceDeclarationRegex.Replace(
-			scriptText,
-			match =>
-			{
-				if (didChange || match.Groups[2].Value != oldNamespace)
-					return match.Value;
-
-				didChange = true;
-				return $"{match.Groups[1].Value}{newNamespace}{match.Groups[3].Value}";
-			},
-			1
-		);
-
-		changed = didChange;
-		return updatedText;
-	}
-
-	private static string AddNamespaceBlockToScriptText(
-		string scriptText,
-		string newNamespace,
-		out bool changed
-	)
-	{
-		changed = false;
-
-		if (string.IsNullOrWhiteSpace(scriptText) || !IsValidNamespaceName(newNamespace))
-			return scriptText ?? "";
-
-		if (!string.IsNullOrWhiteSpace(GetNamespaceFromText(scriptText)))
-			return scriptText;
-
-		string normalizedText = (scriptText ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
-		int insertionIndex = GetNamespaceInsertionIndexAfterTopUsingDirectives(normalizedText);
-		string prefix = normalizedText.Substring(0, insertionIndex).TrimEnd();
-		string body = normalizedText.Substring(insertionIndex).TrimStart('\n');
-
-		if (string.IsNullOrWhiteSpace(body))
-			return scriptText;
-
-		string indentedBody = IndentNamespaceBody(body);
-		StringBuilder builder = new();
-
-		if (!string.IsNullOrWhiteSpace(prefix))
-		{
-			builder.Append(prefix);
-			builder.Append("\n\n");
-		}
-
-		builder.Append("namespace ");
-		builder.Append(newNamespace);
-		builder.Append("\n{\n");
-		builder.Append(indentedBody.TrimEnd('\n'));
-		builder.Append("\n}\n");
-
-		changed = true;
-		return builder.ToString();
-	}
-
-	private static int GetNamespaceInsertionIndexAfterTopUsingDirectives(string scriptText)
-	{
-		if (string.IsNullOrEmpty(scriptText))
-			return 0;
-
-		int lineStart = 0;
-		int insertionIndex = 0;
-		bool foundUsingDirective = false;
-
-		while (lineStart < scriptText.Length)
-		{
-			int lineEnd = scriptText.IndexOf('\n', lineStart);
-			if (lineEnd < 0)
-				lineEnd = scriptText.Length;
-
-			string line = scriptText.Substring(lineStart, lineEnd - lineStart);
-			string trimmedLine = line.Trim();
-			int nextLineStart = lineEnd < scriptText.Length ? lineEnd + 1 : lineEnd;
-
-			if (trimmedLine.Length == 0)
-			{
-				lineStart = nextLineStart;
-				continue;
-			}
-
-			if (
-				(
-					trimmedLine.StartsWith("using ", StringComparison.Ordinal)
-					|| trimmedLine.StartsWith("global using ", StringComparison.Ordinal)
-				)
-				&& trimmedLine.EndsWith(";", StringComparison.Ordinal)
-			)
-			{
-				foundUsingDirective = true;
-				insertionIndex = nextLineStart;
-				lineStart = nextLineStart;
-				continue;
-			}
-
-			break;
-		}
-
-		return foundUsingDirective ? insertionIndex : 0;
-	}
-
-	private static string IndentNamespaceBody(string body)
-	{
-		string normalizedBody = (body ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
-		string[] lines = normalizedBody.Split('\n');
-		StringBuilder builder = new();
-
-		for (int i = 0; i < lines.Length; i++)
-		{
-			string line = lines[i];
-
-			if (line.Length > 0)
-				builder.Append('\t');
-
-			builder.Append(line);
-
-			if (i < lines.Length - 1)
-				builder.Append('\n');
-		}
-
-		return builder.ToString();
-	}
-
-	private static string ReplaceUsingStatements(
-		string scriptText,
-		string oldNamespace,
-		string newNamespace,
-		out bool changed
-	)
-	{
-		bool didChange = false;
-
-		Regex usingRegex = new(
-			$@"(?m)^(\s*using\s+){Regex.Escape(oldNamespace)}(\s*;)",
-			RegexOptions.Compiled
-		);
-
-		string updatedText = usingRegex.Replace(
-			scriptText,
-			match =>
-			{
-				didChange = true;
-				return $"{match.Groups[1].Value}{newNamespace}{match.Groups[2].Value}";
-			}
-		);
-
-		changed = didChange;
-		return updatedText;
-	}
-
 
 	#endregion
 }

@@ -100,9 +100,7 @@ public partial class SystemExplorerPlugin
 		}
 		catch (Exception exception)
 		{
-			DebugLog(
-				$"Script open top reset failed for '{scriptPath}': {exception.Message}"
-			);
+			DebugLog($"Script open top reset failed for '{scriptPath}': {exception.Message}");
 		}
 	}
 

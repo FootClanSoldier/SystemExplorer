@@ -203,13 +203,6 @@ public partial class SystemExplorerPlugin
 
 		_refactorNamespaceDialog.AddChild(refactorNamespaceContainer);
 
-		_csharpierInstalledDialog = new AcceptDialog
-		{
-			Title = "Beautify Script",
-			DialogText = "CSharpier is already installed.",
-			MinSize = new Vector2I(420, 160),
-		};
-
 		_csharpierInstallResultDialog = new AcceptDialog
 		{
 			Title = "Beautify Script",
@@ -258,8 +251,10 @@ public partial class SystemExplorerPlugin
 		_addFolderDialog.WindowInput += OnAddFolderDialogWindowInput;
 		_addFolderInput.TextSubmitted += _ => ConfirmAddFolderDialogFromEnter();
 		_refactorNamespaceDialog.Confirmed += OnRefactorNamespaceConfirmed;
-		_refactorNamespaceExistingNamespaceOption.Toggled += OnRefactorNamespaceExistingNamespaceOptionToggled;
-		_refactorNamespaceWithoutNamespaceOption.Toggled += OnRefactorNamespaceWithoutNamespaceOptionToggled;
+		_refactorNamespaceExistingNamespaceOption.Toggled +=
+			OnRefactorNamespaceExistingNamespaceOptionToggled;
+		_refactorNamespaceWithoutNamespaceOption.Toggled +=
+			OnRefactorNamespaceWithoutNamespaceOptionToggled;
 		_csharpierNotInstalledDialog.Confirmed += OnCSharpierInstallConfirmed;
 		_refactorNamespaceDialog.WindowInput += OnRefactorNamespaceDialogWindowInput;
 		_oldNamespaceInput.TextSubmitted += _ => ConfirmRefactorNamespaceDialogFromEnter();
@@ -282,7 +277,6 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_addFolderDialog);
 		_dock.AddChild(_createScriptDialog);
 		_dock.AddChild(_refactorNamespaceDialog);
-		_dock.AddChild(_csharpierInstalledDialog);
 		_dock.AddChild(_csharpierInstallResultDialog);
 		_dock.AddChild(_csharpierNotInstalledDialog);
 	}

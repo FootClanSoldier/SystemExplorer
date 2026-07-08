@@ -165,11 +165,13 @@ public partial class SystemExplorerPlugin
 		AddContextMenuIconItem("Rename", ContextRename, _contextRenameIcon);
 		AddContextMenuIconItem("Remove", ContextRemove, _contextRemoveIcon);
 
-		if (isScript || isScene)
+		bool canShowFileManagerAction = isScript || isScene || HasFolderFileManagerTarget(metadata);
+
+		if (canShowFileManagerAction)
 		{
 			_contextMenu.AddSeparator();
 			AddContextMenuIconItem(
-				"Open File Path",
+				isFolder ? "Open Folder Path" : "Open File Path",
 				ContextShowInFileManager,
 				_contextShowInFileSystemIcon
 			);
@@ -197,7 +199,8 @@ public partial class SystemExplorerPlugin
 
 		int index = _contextMenu.ItemCount - 1;
 		bool shouldShowSubmenuItemIcon =
-			EnableContextMenuIcons || ShouldForceReversedContextSubmenuDirectionIcon(useReversedIcons);
+			EnableContextMenuIcons
+			|| ShouldForceReversedContextSubmenuDirectionIcon(useReversedIcons);
 
 		if (shouldShowSubmenuItemIcon && icon != null)
 			_contextMenu.SetItemIcon(index, icon);
@@ -381,7 +384,7 @@ public partial class SystemExplorerPlugin
 				break;
 
 			case ContextShowInFileManager:
-				ShowPendingScriptInFileManager();
+				ShowPendingItemInFileManager();
 				break;
 
 			case ContextRefactorNamespace:
@@ -398,51 +401,6 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private void ShowPendingScriptInFileManager()
-	{
-		if (string.IsNullOrWhiteSpace(_pendingShowInFileManagerMetadata))
-			return;
-
-		string path = "";
-		string missingEntry = "";
-
-		if (_pendingShowInFileManagerMetadata.StartsWith("script::"))
-		{
-			string entry = GetEntryFromMetadata(_pendingShowInFileManagerMetadata);
-			path = GetScriptPathFromEntry(entry);
-			missingEntry = entry;
-		}
-		else if (_pendingShowInFileManagerMetadata.StartsWith("sceneLink::"))
-		{
-			string entry = _pendingShowInFileManagerMetadata.Substring("sceneLink::".Length);
-			path = GetScenePathFromEntry(entry);
-			missingEntry = entry;
-		}
-		else
-		{
-			return;
-		}
-
-		if (!FileAccess.FileExists(path))
-		{
-			if (_pendingShowInFileManagerMetadata.StartsWith("sceneLink::"))
-				OpenMissingSceneDialog(missingEntry, path);
-			else
-				OpenMissingScriptDialog(missingEntry, path);
-
-			return;
-		}
-
-		string globalPath = ProjectSettings.GlobalizePath(path);
-
-		if (string.IsNullOrWhiteSpace(globalPath))
-		{
-			GD.PushWarning($"Could not resolve file path: {path}");
-			return;
-		}
-
-		OS.ShellShowInFileManager(globalPath, false);
-	}
 	#endregion
 }
 #endif

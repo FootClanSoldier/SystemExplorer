@@ -46,7 +46,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private CheckBox _refactorNamespaceExistingNamespaceOption;
 	private OptionButton _refactorNamespaceExistingNamespaceDropdown;
 	private CheckBox _refactorNamespaceWithoutNamespaceOption;
-	private AcceptDialog _csharpierInstalledDialog;
 	private AcceptDialog _csharpierInstallResultDialog;
 	private ConfirmationDialog _csharpierNotInstalledDialog;
 	private LineEdit _oldNamespaceInput;

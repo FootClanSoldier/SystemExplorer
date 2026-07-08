@@ -224,10 +224,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		DebugLogOperation(
-			$"{context}: could not remove uid sidecar",
-			$"{uidPath} ({error})"
-		);
+		DebugLogOperation($"{context}: could not remove uid sidecar", $"{uidPath} ({error})");
 	}
 
 	private void OnRenameConfirmed()

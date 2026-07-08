@@ -381,7 +381,8 @@ public partial class SystemExplorerPlugin
 
 		string systemName = GetSystemNameFromMetadata(metadata);
 
-		if (string.IsNullOrWhiteSpace(systemName)
+		if (
+			string.IsNullOrWhiteSpace(systemName)
 			|| !_systems.TryGetValue(systemName, out List<string> entries)
 		)
 		{
@@ -421,10 +422,8 @@ public partial class SystemExplorerPlugin
 		string targetFolderPath
 	)
 	{
-		string normalizedEntryFolderPath = NormalizeScriptPath(entryFolderPath)
-			.Trim('/');
-		string normalizedTargetFolderPath = NormalizeScriptPath(targetFolderPath)
-			.Trim('/');
+		string normalizedEntryFolderPath = NormalizeScriptPath(entryFolderPath).Trim('/');
+		string normalizedTargetFolderPath = NormalizeScriptPath(targetFolderPath).Trim('/');
 
 		return normalizedEntryFolderPath.Equals(
 				normalizedTargetFolderPath,

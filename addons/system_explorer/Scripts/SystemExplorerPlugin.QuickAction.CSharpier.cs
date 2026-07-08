@@ -99,7 +99,6 @@ public partial class SystemExplorerPlugin
 		public bool ShouldInvalidateCachedCommand { get; }
 	}
 
-
 	private void OnCSharpierInstallConfirmed()
 	{
 		if (_isInstallingCSharpier)

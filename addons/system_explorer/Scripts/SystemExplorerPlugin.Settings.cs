@@ -8,7 +8,7 @@ public partial class SystemExplorerPlugin
 	private const string EnableContextMenuIconsSetting =
 		ProjectSettingsPath + "/enable_context_menu_icons";
 	private const string EnableQuickActionsSetting = ProjectSettingsPath + "/enable_quick_actions";
-	private const string DebugStateSetting = ProjectSettingsPath + "/debug_state";
+	private const string DebugStateSetting = ProjectSettingsPath + "/enable_debug_state";
 
 	private bool EnableContextMenuIcons =>
 		GetBoolProjectSetting(EnableContextMenuIconsSetting, true);

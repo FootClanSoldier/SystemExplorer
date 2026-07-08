@@ -9,11 +9,10 @@ public partial class SystemExplorerPlugin
 {
 	#region Quick Actions - Beautify
 	private bool _isBeautifyingScript;
-	private readonly List<BeautifyEditorViewState> _pendingBeautifyEditorViewStates = new();
-	private int _pendingBeautifyEditorViewStateRestorePasses;
 	private string _pendingBeautifyAfterCSharpierInstallMetadata = "";
 	private string[] _pendingBeautifyAfterCSharpierInstallScriptPaths = Array.Empty<string>();
 	private bool _pendingBeautifyAfterCSharpierInstallIsBatch;
+	private bool _pendingBeautifyAfterCSharpierInstallReleaseTreeFocusAfterNavigation = true;
 
 	private enum BeautifyScriptOperationStatus
 	{
@@ -21,40 +20,6 @@ public partial class SystemExplorerPlugin
 		Unchanged,
 		Skipped,
 		Failed,
-	}
-
-	private readonly struct BeautifyEditorViewState
-	{
-		public BeautifyEditorViewState(
-			string path,
-			TextEdit textEditor,
-			int firstVisibleLine,
-			int scrollHorizontal,
-			double scrollVertical,
-			int caretLine,
-			int caretColumn,
-			bool hadFocus
-		)
-		{
-			Path = NormalizeScriptPath(path);
-			TextEditor = textEditor;
-			FirstVisibleLine = firstVisibleLine;
-			ScrollHorizontal = scrollHorizontal;
-			ScrollVertical = scrollVertical;
-			CaretLine = caretLine;
-			CaretColumn = caretColumn;
-			HadFocus = hadFocus;
-		}
-
-		public string Path { get; }
-		public TextEdit TextEditor { get; }
-		public int FirstVisibleLine { get; }
-		public int ScrollHorizontal { get; }
-		public double ScrollVertical { get; }
-		public int CaretLine { get; }
-		public int CaretColumn { get; }
-		public bool HadFocus { get; }
-		public bool IsValid => TextEditor != null;
 	}
 
 	private readonly struct BeautifyScriptOperationResult
@@ -162,6 +127,41 @@ public partial class SystemExplorerPlugin
 		await BeautifyScriptWithCSharpier(scriptPath, csharpierCommand);
 	}
 
+	private async void OpenBeautifyScriptPathCSharpierCheckDialog(string scriptPath)
+	{
+		if (_isBeautifyingScript)
+			return;
+
+		string normalizedScriptPath = NormalizeScriptPath(scriptPath);
+
+		if (string.IsNullOrWhiteSpace(normalizedScriptPath))
+			return;
+
+		if (!normalizedScriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+			return;
+
+		if (!FileAccess.FileExists(normalizedScriptPath))
+			return;
+
+		if (!TryGetCSharpierCommand(out CSharpierCommand csharpierCommand))
+		{
+			StorePendingBeautifyAfterCSharpierInstall(
+				$"editor-script::{normalizedScriptPath}",
+				new[] { normalizedScriptPath },
+				isBatch: false,
+				releaseTreeFocusAfterNavigation: false
+			);
+			OpenCSharpierNotInstalledDialogForPendingBeautify();
+			return;
+		}
+
+		await BeautifyScriptWithCSharpier(
+			normalizedScriptPath,
+			csharpierCommand,
+			releaseTreeFocusAfterNavigation: false
+		);
+	}
+
 	private async void OpenBeautifyScriptsCSharpierCheckDialog()
 	{
 		if (_isBeautifyingScript)
@@ -217,9 +217,19 @@ public partial class SystemExplorerPlugin
 		await BeautifyScriptsWithCSharpier(scriptPaths, csharpierCommand);
 	}
 
+	private Task BeautifyScriptWithCSharpier(string scriptPath, CSharpierCommand csharpierCommand)
+	{
+		return BeautifyScriptWithCSharpier(
+			scriptPath,
+			csharpierCommand,
+			releaseTreeFocusAfterNavigation: true
+		);
+	}
+
 	private async Task BeautifyScriptWithCSharpier(
 		string scriptPath,
-		CSharpierCommand csharpierCommand
+		CSharpierCommand csharpierCommand,
+		bool releaseTreeFocusAfterNavigation
 	)
 	{
 		if (_isBeautifyingScript)
@@ -236,13 +246,15 @@ public partial class SystemExplorerPlugin
 				scriptPath,
 				csharpierCommand,
 				"Beautify Script",
-				showWarnings: true,
 				preserveEditorViewState: true
 			);
 
 			if (
-				result.Status == BeautifyScriptOperationStatus.Formatted
-				|| result.Status == BeautifyScriptOperationStatus.Unchanged
+				releaseTreeFocusAfterNavigation
+				&& (
+					result.Status == BeautifyScriptOperationStatus.Formatted
+					|| result.Status == BeautifyScriptOperationStatus.Unchanged
+				)
 			)
 			{
 				CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
@@ -280,7 +292,6 @@ public partial class SystemExplorerPlugin
 
 		_isBeautifyingScript = true;
 		BeautifyScriptsBatchSummary summary = new();
-		List<string> failedDetails = new();
 
 		try
 		{
@@ -290,7 +301,6 @@ public partial class SystemExplorerPlugin
 					scriptPath,
 					csharpierCommand,
 					"Beautify Scripts",
-					showWarnings: false,
 					preserveEditorViewState: false
 				);
 
@@ -299,32 +309,11 @@ public partial class SystemExplorerPlugin
 				DebugPrintBeautify(
 					$"Beautify Scripts item result: status={result.Status}, path='{result.Path}', message='{GetDebugTextPreview(result.Message)}'"
 				);
-
-				if (
-					result.Status == BeautifyScriptOperationStatus.Failed
-					&& !string.IsNullOrWhiteSpace(result.Message)
-				)
-				{
-					failedDetails.Add(result.Message);
-				}
 			}
 
 			DebugPrintBeautify($"Beautify Scripts summary: {summary}");
 			CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 			DebugLogOperation("Beautify Scripts Completed", summary.ToString());
-
-			if (summary.Failed > 0)
-			{
-				string details =
-					failedDetails.Count == 0
-						? "Some scripts could not be formatted. The affected files were left unchanged."
-						: TruncateDialogText(string.Join("\n", failedDetails));
-
-				ShowBeautifyUserMessage(
-					"Beautify Scripts",
-					$"Beautify Scripts finished with {summary.Failed} failed file(s).\n\n{details}"
-				);
-			}
 		}
 		finally
 		{
@@ -336,7 +325,6 @@ public partial class SystemExplorerPlugin
 		string scriptPath,
 		CSharpierCommand csharpierCommand,
 		string operationName,
-		bool showWarnings,
 		bool preserveEditorViewState
 	)
 	{
@@ -349,22 +337,19 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(normalizedScriptPath))
 			return BeautifyScriptSkipped(
 				normalizedScriptPath,
-				$"{operationName} skipped: empty script path.",
-				showWarnings
+				$"{operationName} skipped: empty script path."
 			);
 
 		if (!normalizedScriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
 			return BeautifyScriptSkipped(
 				normalizedScriptPath,
-				$"{operationName} skipped non-C# file '{normalizedScriptPath}'.",
-				showWarnings
+				$"{operationName} skipped non-C# file '{normalizedScriptPath}'."
 			);
 
 		if (!FileAccess.FileExists(normalizedScriptPath))
 			return BeautifyScriptSkipped(
 				normalizedScriptPath,
-				$"{operationName} skipped missing script '{normalizedScriptPath}'.",
-				showWarnings
+				$"{operationName} skipped missing script '{normalizedScriptPath}'."
 			);
 
 		string globalScriptPathForDebug = ProjectSettings.GlobalizePath(normalizedScriptPath);
@@ -386,12 +371,11 @@ public partial class SystemExplorerPlugin
 			[normalizedScriptPath] = diskTextBeforeSync,
 		};
 
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath =
-			GetOpenScriptEditorsByPath(
-				originalTextsByPath,
-				pendingTextByPath,
-				out string unsafeOpenScriptList
-			);
+		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath = GetOpenScriptEditorsByPath(
+			originalTextsByPath,
+			pendingTextByPath,
+			out string unsafeOpenScriptList
+		);
 
 		DebugPrintBeautify(
 			$"{operationName} item open editor scan: matchedOpenEditors={openEditorsByPath.Count}, unsafe='{GetDebugTextPreview(unsafeOpenScriptList)}'"
@@ -400,8 +384,7 @@ public partial class SystemExplorerPlugin
 		if (!string.IsNullOrWhiteSpace(unsafeOpenScriptList))
 			return BeautifyScriptSkipped(
 				normalizedScriptPath,
-				$"{operationName} skipped: System Explorer could not safely match this open script editor buffer. Save/reopen it before formatting:\n{unsafeOpenScriptList}",
-				showWarnings
+				$"{operationName} skipped: System Explorer could not safely match this open script editor buffer. Save/reopen it before formatting:\n{unsafeOpenScriptList}"
 			);
 
 		bool didAutosaveOpenEditor = false;
@@ -421,8 +404,7 @@ public partial class SystemExplorerPlugin
 				normalizedScriptPath,
 				string.IsNullOrWhiteSpace(autosaveFailureMessage)
 					? $"{operationName} skipped '{normalizedScriptPath}' because the open editor buffer could not be autosaved safely."
-					: autosaveFailureMessage,
-				showWarnings
+					: autosaveFailureMessage
 			);
 		}
 
@@ -445,7 +427,7 @@ public partial class SystemExplorerPlugin
 		);
 
 		if (!formatResult.Success)
-			return BeautifyScriptFailed(normalizedScriptPath, formatResult.Message, showWarnings);
+			return BeautifyScriptFailed(normalizedScriptPath, formatResult.Message);
 
 		string csharpierOutput = formatResult.FormattedText;
 
@@ -460,8 +442,7 @@ public partial class SystemExplorerPlugin
 		if (IsUnsafeEmptyBeautifyOutput(originalText, csharpierOutput))
 			return BeautifyScriptFailed(
 				normalizedScriptPath,
-				$"{operationName} failed: CSharpier returned empty output for non-empty script '{normalizedScriptPath}'. The file was left unchanged.",
-				showWarnings
+				$"{operationName} failed: CSharpier returned empty output for non-empty script '{normalizedScriptPath}'. The file was left unchanged."
 			);
 
 		string formattedText = NormalizeFormattedTextLineEndings(csharpierOutput, originalText);
@@ -473,8 +454,7 @@ public partial class SystemExplorerPlugin
 		if (IsUnsafeEmptyBeautifyOutput(originalText, formattedText))
 			return BeautifyScriptFailed(
 				normalizedScriptPath,
-				$"{operationName} failed: CSharpier produced empty formatted text for non-empty script '{normalizedScriptPath}'. The file was left unchanged.",
-				showWarnings
+				$"{operationName} failed: CSharpier produced empty formatted text for non-empty script '{normalizedScriptPath}'. The file was left unchanged."
 			);
 
 		string currentText = ReadTextFile(normalizedScriptPath);
@@ -482,8 +462,7 @@ public partial class SystemExplorerPlugin
 		if (currentText != originalText)
 			return BeautifyScriptFailed(
 				normalizedScriptPath,
-				$"{operationName} failed: '{normalizedScriptPath}' changed while CSharpier was running. Try again.",
-				showWarnings
+				$"{operationName} failed: '{normalizedScriptPath}' changed while CSharpier was running. Try again."
 			);
 
 		Dictionary<string, string> updatedTextsByPath = new(StringComparer.OrdinalIgnoreCase)
@@ -504,15 +483,13 @@ public partial class SystemExplorerPlugin
 		if (!string.IsNullOrWhiteSpace(unsafeOpenScriptList))
 			return BeautifyScriptSkipped(
 				normalizedScriptPath,
-				$"{operationName} skipped: System Explorer could not safely match this open script editor buffer. Save/reopen it before formatting:\n{unsafeOpenScriptList}",
-				showWarnings
+				$"{operationName} skipped: System Explorer could not safely match this open script editor buffer. Save/reopen it before formatting:\n{unsafeOpenScriptList}"
 			);
 
 		if (HasUnsavedOpenScriptEditorBuffers(openEditorsByPath, out string unsavedScriptList))
 			return BeautifyScriptSkipped(
 				normalizedScriptPath,
-				$"{operationName} skipped: the selected script changed while CSharpier was running. Try again after saving/retrying:\n{unsavedScriptList}",
-				showWarnings
+				$"{operationName} skipped: the selected script changed while CSharpier was running. Try again after saving/retrying:\n{unsavedScriptList}"
 			);
 
 		if (
@@ -528,8 +505,7 @@ public partial class SystemExplorerPlugin
 				normalizedScriptPath,
 				string.IsNullOrWhiteSpace(editorValidationFailureMessage)
 					? $"{operationName} skipped '{normalizedScriptPath}' because the open editor buffer changed before applying formatted text."
-					: editorValidationFailureMessage,
-				showWarnings
+					: editorValidationFailureMessage
 			);
 		}
 
@@ -573,8 +549,7 @@ public partial class SystemExplorerPlugin
 				normalizedScriptPath,
 				string.IsNullOrWhiteSpace(editorApplyFailureMessage)
 					? $"{operationName} skipped '{normalizedScriptPath}' because the open editor buffer could not be updated safely."
-					: editorApplyFailureMessage,
-				showWarnings
+					: editorApplyFailureMessage
 			);
 		}
 
@@ -589,8 +564,7 @@ public partial class SystemExplorerPlugin
 			RestoreBeautifyEditorViewStateNowAndDeferred(editorViewState);
 			return BeautifyScriptFailed(
 				normalizedScriptPath,
-				$"{operationName} failed while writing '{normalizedScriptPath}'.",
-				showWarnings
+				$"{operationName} failed while writing '{normalizedScriptPath}'."
 			);
 		}
 
@@ -608,7 +582,8 @@ public partial class SystemExplorerPlugin
 	private void StorePendingBeautifyAfterCSharpierInstall(
 		string metadata,
 		IEnumerable<string> scriptPaths,
-		bool isBatch
+		bool isBatch,
+		bool releaseTreeFocusAfterNavigation = true
 	)
 	{
 		List<string> normalizedScriptPaths = (scriptPaths ?? Array.Empty<string>())
@@ -621,6 +596,8 @@ public partial class SystemExplorerPlugin
 		_pendingBeautifyAfterCSharpierInstallMetadata = metadata ?? "";
 		_pendingBeautifyAfterCSharpierInstallScriptPaths = normalizedScriptPaths.ToArray();
 		_pendingBeautifyAfterCSharpierInstallIsBatch = isBatch;
+		_pendingBeautifyAfterCSharpierInstallReleaseTreeFocusAfterNavigation =
+			releaseTreeFocusAfterNavigation;
 
 		DebugPrintBeautify(
 			$"Stored pending Beautify after CSharpier install: metadata='{_pendingBeautifyAfterCSharpierInstallMetadata}', isBatch={isBatch}, scriptCount={_pendingBeautifyAfterCSharpierInstallScriptPaths.Length}"
@@ -643,6 +620,7 @@ public partial class SystemExplorerPlugin
 		_pendingBeautifyAfterCSharpierInstallMetadata = "";
 		_pendingBeautifyAfterCSharpierInstallScriptPaths = Array.Empty<string>();
 		_pendingBeautifyAfterCSharpierInstallIsBatch = false;
+		_pendingBeautifyAfterCSharpierInstallReleaseTreeFocusAfterNavigation = true;
 	}
 
 	private void OpenCSharpierNotInstalledDialogForPendingBeautify()
@@ -668,6 +646,8 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		bool isBatch = _pendingBeautifyAfterCSharpierInstallIsBatch;
+		bool releaseTreeFocusAfterNavigation =
+			_pendingBeautifyAfterCSharpierInstallReleaseTreeFocusAfterNavigation;
 		string metadata = _pendingBeautifyAfterCSharpierInstallMetadata;
 		string[] scriptPaths = _pendingBeautifyAfterCSharpierInstallScriptPaths.ToArray();
 
@@ -680,7 +660,11 @@ public partial class SystemExplorerPlugin
 		if (isBatch)
 			await BeautifyScriptsWithCSharpier(scriptPaths, csharpierCommand);
 		else
-			await BeautifyScriptWithCSharpier(scriptPaths[0], csharpierCommand);
+			await BeautifyScriptWithCSharpier(
+				scriptPaths[0],
+				csharpierCommand,
+				releaseTreeFocusAfterNavigation
+			);
 
 		return true;
 	}
@@ -730,10 +714,8 @@ public partial class SystemExplorerPlugin
 
 	private static bool IsEntryInsideBeautifyFolder(string entryFolderPath, string targetFolderPath)
 	{
-		string normalizedEntryFolderPath = NormalizeScriptPath(entryFolderPath)
-			.Trim('/');
-		string normalizedTargetFolderPath = NormalizeScriptPath(targetFolderPath)
-			.Trim('/');
+		string normalizedEntryFolderPath = NormalizeScriptPath(entryFolderPath).Trim('/');
+		string normalizedTargetFolderPath = NormalizeScriptPath(targetFolderPath).Trim('/');
 
 		return normalizedEntryFolderPath.Equals(
 				normalizedTargetFolderPath,
@@ -745,14 +727,9 @@ public partial class SystemExplorerPlugin
 			);
 	}
 
-	private BeautifyScriptOperationResult BeautifyScriptSkipped(
-		string scriptPath,
-		string message,
-		bool showWarning
-	)
+	private BeautifyScriptOperationResult BeautifyScriptSkipped(string scriptPath, string message)
 	{
-		if (showWarning && !string.IsNullOrWhiteSpace(message))
-			ShowBeautifyUserMessage("Beautify Script", message);
+		HandleBeautifyFormattingSkipped(scriptPath, message);
 
 		return new BeautifyScriptOperationResult(
 			BeautifyScriptOperationStatus.Skipped,
@@ -761,14 +738,9 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private BeautifyScriptOperationResult BeautifyScriptFailed(
-		string scriptPath,
-		string message,
-		bool showWarning
-	)
+	private BeautifyScriptOperationResult BeautifyScriptFailed(string scriptPath, string message)
 	{
-		if (showWarning && !string.IsNullOrWhiteSpace(message))
-			ShowBeautifyUserMessage("Beautify Script", message);
+		HandleBeautifyFormattingFailure(scriptPath, message);
 
 		return new BeautifyScriptOperationResult(
 			BeautifyScriptOperationStatus.Failed,
@@ -777,352 +749,23 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private void ShowBeautifyUserMessage(string title, string text)
+	private void HandleBeautifyFormattingSkipped(string scriptPath, string reason)
 	{
-		if (string.IsNullOrWhiteSpace(text))
+		HandleBeautifyFormattingIssue("Beautify Formatting Skipped", scriptPath, reason);
+	}
+
+	private void HandleBeautifyFormattingFailure(string scriptPath, string reason)
+	{
+		HandleBeautifyFormattingIssue("Beautify Formatting Failure", scriptPath, reason);
+	}
+
+	private void HandleBeautifyFormattingIssue(string operation, string scriptPath, string reason)
+	{
+		if (string.IsNullOrWhiteSpace(reason))
 			return;
 
-		if (_csharpierInstalledDialog == null)
-		{
-			DebugPrintBeautify($"{title}: {GetDebugTextPreview(text)}");
-			return;
-		}
-
-		_csharpierInstalledDialog.Title = title;
-		_csharpierInstalledDialog.DialogText = text;
-		_csharpierInstalledDialog.PopupCentered();
-	}
-
-	private static bool TryAutosaveBeautifyOpenEditorIfNeeded(
-		string scriptPath,
-		string diskText,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-		out string originalText,
-		out bool didAutosaveOpenEditor,
-		out string failureMessage
-	)
-	{
-		originalText = diskText ?? "";
-		didAutosaveOpenEditor = false;
-		failureMessage = "";
-
-		if (
-			openEditorsByPath == null
-			|| !openEditorsByPath.TryGetValue(
-				scriptPath,
-				out OpenScriptEditorBuffer openEditor
-			)
-			|| openEditor.TextEditor == null
-		)
-		{
-			return true;
-		}
-
-		TextEdit textEditor = openEditor.TextEditor;
-		bool isUnsaved = textEditor.GetVersion() != textEditor.GetSavedVersion();
-
-		if (!isUnsaved)
-		{
-			if (textEditor.Text != originalText)
-			{
-				failureMessage =
-					$"Beautify Script cancelled: the open editor buffer for '{scriptPath}' does not match the file on disk. Reload/save the script before formatting.";
-				return false;
-			}
-
-			return true;
-		}
-
-		string editorText = textEditor.Text ?? "";
-
-		if (!WriteTextFile(scriptPath, editorText))
-		{
-			failureMessage =
-				$"Beautify Script cancelled: could not autosave the selected script before formatting '{scriptPath}'.";
-			return false;
-		}
-
-		string savedEditorText = ReadTextFile(scriptPath);
-
-		if (savedEditorText != editorText)
-		{
-			failureMessage =
-				$"Beautify Script cancelled: autosaved text for '{scriptPath}' did not match the open editor buffer. The script was not formatted.";
-			return false;
-		}
-
-		textEditor.TagSavedVersion();
-		originalText = savedEditorText;
-		didAutosaveOpenEditor = true;
-		return true;
-	}
-
-	private static bool ValidateBeautifyOpenEditorStillMatchesDisk(
-		string scriptPath,
-		string originalText,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-		out string failureMessage
-	)
-	{
-		failureMessage = "";
-
-		if (
-			openEditorsByPath == null
-			|| !openEditorsByPath.TryGetValue(
-				scriptPath,
-				out OpenScriptEditorBuffer openEditor
-			)
-			|| openEditor.TextEditor == null
-		)
-		{
-			return true;
-		}
-
-		TextEdit textEditor = openEditor.TextEditor;
-
-		if (textEditor.GetVersion() != textEditor.GetSavedVersion())
-		{
-			failureMessage =
-				$"Beautify Script cancelled: the selected script became unsaved while CSharpier was running. Try again after saving/retrying:\n{scriptPath}";
-			return false;
-		}
-
-		if (textEditor.Text != originalText)
-		{
-			failureMessage =
-				$"Beautify Script cancelled: the open editor buffer for '{scriptPath}' changed while CSharpier was running. Try again.";
-			return false;
-		}
-
-		return true;
-	}
-
-	private static bool TryApplyBeautifyTextToEditorBeforeDiskWrite(
-		string scriptPath,
-		string originalText,
-		string formattedText,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-		out string failureMessage
-	)
-	{
-		failureMessage = "";
-
-		if (
-			openEditorsByPath == null
-			|| !openEditorsByPath.TryGetValue(
-				scriptPath,
-				out OpenScriptEditorBuffer openEditor
-			)
-			|| openEditor.TextEditor == null
-		)
-		{
-			return true;
-		}
-
-		TextEdit textEditor = openEditor.TextEditor;
-
-		if (textEditor.GetVersion() != textEditor.GetSavedVersion())
-		{
-			failureMessage =
-				$"Beautify Script cancelled: the selected script is unsaved again before applying formatted text:\n{scriptPath}";
-			return false;
-		}
-
-		if (textEditor.Text != originalText)
-		{
-			failureMessage =
-				$"Beautify Script cancelled: the open editor buffer for '{scriptPath}' no longer matches the saved text. Try again.";
-			return false;
-		}
-
-		if (textEditor.Text != formattedText)
-			textEditor.Text = formattedText;
-
-		return true;
-	}
-
-	private BeautifyEditorViewState CaptureBeautifyEditorViewState(
-		string scriptPath,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath
-	)
-	{
-		if (
-			openEditorsByPath == null
-			|| !openEditorsByPath.TryGetValue(
-				scriptPath,
-				out OpenScriptEditorBuffer openEditor
-			)
-			|| !IsBeautifyTextEditorAvailable(openEditor.TextEditor)
-		)
-		{
-			return default;
-		}
-
-		TextEdit textEditor = openEditor.TextEditor;
-
-		try
-		{
-			return new BeautifyEditorViewState(
-				scriptPath,
-				textEditor,
-				Math.Max(0, textEditor.GetFirstVisibleLine()),
-				Math.Max(0, textEditor.ScrollHorizontal),
-				Math.Max(0.0, textEditor.ScrollVertical),
-				Math.Max(0, textEditor.GetCaretLine()),
-				Math.Max(0, textEditor.GetCaretColumn()),
-				textEditor.HasFocus()
-			);
-		}
-		catch (Exception exception)
-		{
-			DebugPrintBeautify(
-				$"Beautify Script view-state capture skipped for '{scriptPath}': {exception.Message}"
-			);
-			return default;
-		}
-	}
-
-	private void RestoreBeautifyEditorViewStateNowAndDeferred(
-		BeautifyEditorViewState editorViewState
-	)
-	{
-		if (!editorViewState.IsValid)
-			return;
-
-		RestoreBeautifyEditorViewState(editorViewState);
-
-		_pendingBeautifyEditorViewStates.Add(editorViewState);
-		_pendingBeautifyEditorViewStateRestorePasses = Math.Max(
-			_pendingBeautifyEditorViewStateRestorePasses,
-			2
-		);
-		CallDeferred(nameof(RestorePendingBeautifyEditorViewStates));
-	}
-
-	private void RestorePendingBeautifyEditorViewStates()
-	{
-		if (_pendingBeautifyEditorViewStates.Count == 0)
-		{
-			_pendingBeautifyEditorViewStateRestorePasses = 0;
-			return;
-		}
-
-		BeautifyEditorViewState[] pendingStates = _pendingBeautifyEditorViewStates.ToArray();
-
-		foreach (BeautifyEditorViewState editorViewState in pendingStates)
-			RestoreBeautifyEditorViewState(editorViewState);
-
-		_pendingBeautifyEditorViewStateRestorePasses--;
-
-		if (_pendingBeautifyEditorViewStateRestorePasses > 0)
-		{
-			CallDeferred(nameof(RestorePendingBeautifyEditorViewStates));
-			return;
-		}
-
-		_pendingBeautifyEditorViewStates.Clear();
-	}
-
-	private void RestoreBeautifyEditorViewState(BeautifyEditorViewState editorViewState)
-	{
-		if (!editorViewState.IsValid || !IsBeautifyTextEditorAvailable(editorViewState.TextEditor))
-			return;
-
-		TextEdit textEditor = editorViewState.TextEditor;
-
-		try
-		{
-			int lineCount = Math.Max(1, textEditor.GetLineCount());
-			int firstVisibleLine = ClampBeautifyEditorViewStateValue(
-				editorViewState.FirstVisibleLine,
-				0,
-				lineCount - 1
-			);
-			int caretLine = ClampBeautifyEditorViewStateValue(
-				editorViewState.CaretLine,
-				0,
-				lineCount - 1
-			);
-			int caretColumn = ClampBeautifyEditorViewStateValue(
-				editorViewState.CaretColumn,
-				0,
-				GetBeautifyEditorLineLength(textEditor, caretLine)
-			);
-			int scrollHorizontal = Math.Max(0, editorViewState.ScrollHorizontal);
-			double scrollVertical = Math.Min(
-				Math.Max(0.0, editorViewState.ScrollVertical),
-				Math.Max(0.0, lineCount - 1)
-			);
-
-			textEditor.SetCaretLine(caretLine, false, true, -1);
-			textEditor.SetCaretColumn(caretColumn, false);
-			textEditor.SetLineAsFirstVisible(firstVisibleLine);
-			textEditor.ScrollVertical = scrollVertical;
-			textEditor.ScrollHorizontal = scrollHorizontal;
-
-			if (editorViewState.HadFocus && textEditor.IsVisibleInTree())
-				textEditor.GrabFocus();
-		}
-		catch (Exception exception)
-		{
-			DebugPrintBeautify(
-				$"Beautify Script view-state restore skipped for '{editorViewState.Path}': {exception.Message}"
-			);
-		}
-	}
-
-	private static bool IsBeautifyTextEditorAvailable(TextEdit textEditor)
-	{
-		return textEditor != null
-			&& GodotObject.IsInstanceValid(textEditor)
-			&& !textEditor.IsQueuedForDeletion();
-	}
-
-	private static int GetBeautifyEditorLineLength(TextEdit textEditor, int line)
-	{
-		if (textEditor == null)
-			return 0;
-
-		try
-		{
-			if (line < 0 || line >= textEditor.GetLineCount())
-				return 0;
-
-			return (textEditor.GetLine(line) ?? "").Length;
-		}
-		catch
-		{
-			return 0;
-		}
-	}
-
-	private static int ClampBeautifyEditorViewStateValue(int value, int min, int max)
-	{
-		if (max < min)
-			return min;
-
-		return Math.Min(Math.Max(value, min), max);
-	}
-
-	private static void RestoreBeautifyOpenEditorAfterFailedWrite(
-		string scriptPath,
-		string originalText,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath
-	)
-	{
-		if (
-			openEditorsByPath == null
-			|| !openEditorsByPath.TryGetValue(
-				scriptPath,
-				out OpenScriptEditorBuffer openEditor
-			)
-			|| openEditor.TextEditor == null
-		)
-		{
-			return;
-		}
-
-		ApplyTextToOpenScriptEditor(openEditor.TextEditor, originalText);
+		string targetPath = string.IsNullOrWhiteSpace(scriptPath) ? "<unknown>" : scriptPath;
+		DebugLogOperation(operation, $"{targetPath}: {reason}");
 	}
 
 	private static bool IsUnsafeEmptyBeautifyOutput(string originalText, string formattedText)

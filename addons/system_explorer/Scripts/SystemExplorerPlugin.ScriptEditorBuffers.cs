@@ -296,9 +296,7 @@ public partial class SystemExplorerPlugin
 	)
 	{
 		unsafeOpenScriptList = "";
-		Dictionary<string, OpenScriptEditorBuffer> result = new(
-			StringComparer.OrdinalIgnoreCase
-		);
+		Dictionary<string, OpenScriptEditorBuffer> result = new(StringComparer.OrdinalIgnoreCase);
 
 		if (
 			originalTextsByPath == null
@@ -320,10 +318,7 @@ public partial class SystemExplorerPlugin
 		if (scriptEditor == null)
 			return result;
 
-		HashSet<string> openTargetPaths = GetOpenScriptPaths(
-			scriptEditor,
-			targetPaths
-		);
+		HashSet<string> openTargetPaths = GetOpenScriptPaths(scriptEditor, targetPaths);
 		HashSet<TextEdit> usedTextEditors = new();
 
 		Script currentScript = scriptEditor.GetCurrentScript();
@@ -394,12 +389,7 @@ public partial class SystemExplorerPlugin
 
 				if (matchingPathCount == 1)
 				{
-					AddOpenScriptEditorBuffer(
-						result,
-						usedTextEditors,
-						targetPath,
-						matchingEditor
-					);
+					AddOpenScriptEditorBuffer(result, usedTextEditors, targetPath, matchingEditor);
 					continue;
 				}
 			}
@@ -638,10 +628,7 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(normalizedPath))
 			return;
 
-		openEditorsByPath[normalizedPath] = new OpenScriptEditorBuffer(
-			normalizedPath,
-			textEditor
-		);
+		openEditorsByPath[normalizedPath] = new OpenScriptEditorBuffer(normalizedPath, textEditor);
 		usedTextEditors.Add(textEditor);
 	}
 
@@ -713,9 +700,7 @@ public partial class SystemExplorerPlugin
 		if (openEditorsByPath == null || updatedTextsByPath == null || openEditorsByPath.Count == 0)
 			return;
 
-		foreach (
-			KeyValuePair<string, OpenScriptEditorBuffer> openEditorPair in openEditorsByPath
-		)
+		foreach (KeyValuePair<string, OpenScriptEditorBuffer> openEditorPair in openEditorsByPath)
 		{
 			if (!updatedTextsByPath.TryGetValue(openEditorPair.Key, out string updatedText))
 				continue;
@@ -724,10 +709,7 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private static void ApplyTextToOpenScriptEditor(
-		TextEdit textEditor,
-		string updatedText
-	)
+	private static void ApplyTextToOpenScriptEditor(TextEdit textEditor, string updatedText)
 	{
 		if (textEditor == null)
 			return;
