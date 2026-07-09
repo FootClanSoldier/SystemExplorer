@@ -209,53 +209,68 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
-		HashSet<string> requiredPaths = targetScriptPaths.ToHashSet(
-			StringComparer.OrdinalIgnoreCase
-		);
-		HashSet<string> candidatePaths = targetScriptPaths
-			.Concat(GetRefactorNamespaceProjectCSharpFilePaths())
-			.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		BeginBatchScriptEditorContextPreservation();
 
-		if (
-			!TryAutosaveOpenRefactorNamespaceCandidateScriptsBeforeBuild(
-				candidatePaths,
-				requiredPaths,
-				out bool didAutosaveCandidateScripts,
-				out string candidateAutosaveFailureMessage
-			)
-		)
+		try
 		{
-			GD.PushWarning(
-				string.IsNullOrWhiteSpace(candidateAutosaveFailureMessage)
-					? "Refactor Namespace cancelled: open script buffer(s) could not be autosaved safely before scanning namespace usages."
-					: candidateAutosaveFailureMessage
+			HashSet<string> requiredPaths = targetScriptPaths.ToHashSet(
+				StringComparer.OrdinalIgnoreCase
 			);
-			return false;
-		}
+			HashSet<string> candidatePaths = targetScriptPaths
+				.Concat(GetRefactorNamespaceProjectCSharpFilePaths())
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-		if (didAutosaveCandidateScripts)
-			DebugLog("Refactor Namespace batch save-first pre-scan saved open script buffer(s).");
-
-		if (
-			!TryBuildBatchRefactorNamespacePendingWrites(
-				targetScriptPaths,
-				oldNamespace,
-				newNamespace,
-				out string selectedScriptPath,
-				out Dictionary<string, string> originalTextsByPath,
-				out Dictionary<string, string> pendingWrites
+			if (
+				!TryAutosaveOpenRefactorNamespaceCandidateScriptsBeforeBuild(
+					candidatePaths,
+					requiredPaths,
+					out bool didAutosaveCandidateScripts,
+					out string candidateAutosaveFailureMessage,
+					allowScriptEditorActivation: false,
+					namespaceReferenceToProtect: oldNamespace
+				)
 			)
-		)
-		{
-			return false;
-		}
+			{
+				GD.PushWarning(
+					string.IsNullOrWhiteSpace(candidateAutosaveFailureMessage)
+						? "Refactor Namespace cancelled: open script buffer(s) could not be autosaved safely before scanning namespace usages."
+						: candidateAutosaveFailureMessage
+				);
+				return false;
+			}
 
-		return ApplyRefactorNamespacePendingWrites(
-			selectedScriptPath,
-			originalTextsByPath,
-			pendingWrites,
-            "Refactor Namespace Batch"
-		);
+			if (didAutosaveCandidateScripts)
+				DebugLog(
+                    "Refactor Namespace batch save-first pre-scan saved open script buffer(s)."
+				);
+
+			if (
+				!TryBuildBatchRefactorNamespacePendingWrites(
+					targetScriptPaths,
+					oldNamespace,
+					newNamespace,
+					out string selectedScriptPath,
+					out Dictionary<string, string> originalTextsByPath,
+					out Dictionary<string, string> pendingWrites
+				)
+			)
+			{
+				return false;
+			}
+
+			return ApplyRefactorNamespacePendingWrites(
+				selectedScriptPath,
+				originalTextsByPath,
+				pendingWrites,
+				"Refactor Namespace Batch",
+				"",
+				false
+			);
+		}
+		finally
+		{
+			EndBatchScriptEditorContextPreservation();
+		}
 	}
 
 	private bool TryBuildBatchRefactorNamespacePendingWrites(

@@ -133,6 +133,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		AddDock(_editorDock);
 
 		BuildTree();
+		InitializeScriptEditorSync();
 
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));
 
@@ -218,7 +219,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 			return;
 
 		string defaultTemplate =
-			@"using Godot;
+            @"using Godot;
 
 public sealed class {{CLASS_NAME}}
 {
@@ -242,6 +243,8 @@ public sealed class {{CLASS_NAME}}
 	public override void _ExitTree()
 	{
 		DebugLogOperation("Exit Tree");
+
+		ShutdownScriptEditorSync();
 
 		if (_editorDock == null)
 			return;

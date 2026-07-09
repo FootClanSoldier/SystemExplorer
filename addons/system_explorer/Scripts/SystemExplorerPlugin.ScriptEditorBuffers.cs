@@ -423,14 +423,17 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
-		return textEditor.Text == originalText || textEditor.Text == updatedText;
+		string editorText = textEditor.Text ?? "";
+		return ScriptTextsMatchForDiskVerification(editorText, originalText)
+			|| ScriptTextsMatchForDiskVerification(editorText, updatedText);
 	}
 
 	private static bool TryGetOpenScriptEditorsByIndexedScriptEditorPaths(
 		ScriptEditor scriptEditor,
 		HashSet<string> targetPaths,
 		out Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-		out string failureMessage
+		out string failureMessage,
+		HashSet<string> requiredPaths = null
 	)
 	{
 		failureMessage = "";
@@ -445,98 +448,247 @@ public partial class SystemExplorerPlugin
 		Godot.Collections.Array<ScriptEditorBase> openScriptEditors =
 			scriptEditor.GetOpenScriptEditors();
 
-		if (openScripts.Count != openScriptEditors.Count)
-		{
-			List<string> openTargetPaths = new();
+		HashSet<TextEdit> usedTextEditors = new();
 
-			foreach (Script openScript in openScripts)
+		AddCurrentOpenScriptEditorBufferIfTarget(
+			scriptEditor,
+			targetPaths,
+			openEditorsByPath,
+			usedTextEditors
+		);
+
+		if (openScripts.Count == openScriptEditors.Count)
+		{
+			for (int i = 0; i < openScripts.Count; i++)
 			{
+				Script openScript = openScripts[i];
+
 				if (openScript == null)
 					continue;
 
-				string openScriptPath = NormalizeScriptPath(openScript.ResourcePath);
+				string scriptPath = NormalizeScriptPath(openScript.ResourcePath);
+
+				if (!targetPaths.Contains(scriptPath))
+					continue;
+
+				if (!scriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+					continue;
+
+				Control baseEditor = openScriptEditors[i]?.GetBaseEditor();
+
+				bool isRequiredScript = requiredPaths?.Contains(scriptPath) == true;
+
+				if (baseEditor is not TextEdit textEditor)
+				{
+					if (isRequiredScript)
+					{
+						failureMessage =
+							$"Refactor Namespace cancelled: System Explorer could not access the open script editor buffer for '{scriptPath}' before scanning namespace usages.";
+						return false;
+					}
+
+					continue;
+				}
+
+				if (usedTextEditors.Contains(textEditor))
+				{
+					if (isRequiredScript)
+					{
+						failureMessage =
+							$"Refactor Namespace cancelled: System Explorer found the same open script editor buffer for more than one script while preparing namespace refactor '{scriptPath}'.";
+						return false;
+					}
+
+					continue;
+				}
 
 				if (
-					targetPaths.Contains(openScriptPath)
-					&& !openTargetPaths.Contains(openScriptPath, StringComparer.OrdinalIgnoreCase)
+					openEditorsByPath.TryGetValue(
+						scriptPath,
+						out OpenScriptEditorBuffer existingOpenEditor
+					)
+					&& existingOpenEditor.TextEditor != textEditor
 				)
 				{
-					openTargetPaths.Add(openScriptPath);
+					if (isRequiredScript)
+					{
+						failureMessage =
+							$"Refactor Namespace cancelled: System Explorer found duplicate open script editor buffers for '{scriptPath}'. Save/reopen it before refactoring.";
+						return false;
+					}
+
+					continue;
 				}
+
+				if (
+					!IndexedScriptEditorPairLooksSafe(
+						openScript,
+						scriptPath,
+						textEditor,
+						out string unsafePairReason
+					)
+				)
+				{
+					if (isRequiredScript)
+					{
+						failureMessage = unsafePairReason;
+						return false;
+					}
+
+					continue;
+				}
+
+				openEditorsByPath[scriptPath] = new OpenScriptEditorBuffer(scriptPath, textEditor);
+				usedTextEditors.Add(textEditor);
 			}
 
-			if (openTargetPaths.Count == 0)
-				return true;
+			return true;
+		}
 
+		AddOpenScriptEditorBuffersByDiskText(
+			scriptEditor,
+			targetPaths,
+			openEditorsByPath,
+			usedTextEditors
+		);
+
+		List<string> unmatchedRequiredOpenScripts = GetUnmatchedOpenScriptPaths(
+			scriptEditor,
+			requiredPaths,
+			openEditorsByPath
+		);
+
+		if (unmatchedRequiredOpenScripts.Count > 0)
+		{
 			failureMessage =
-				$"Refactor Namespace cancelled: Godot reported {openScripts.Count} open script(s) but {openScriptEditors.Count} open script editor(s), so System Explorer could not safely autosave open script buffer(s) before scanning namespace usages:\n{string.Join("\n", openTargetPaths)}";
+				$"Refactor Namespace cancelled: System Explorer could not safely match required open script editor buffer(s) without changing the active editor tab. Save/reopen before refactoring:\n{string.Join("\n", unmatchedRequiredOpenScripts)}";
 			return false;
 		}
 
-		HashSet<TextEdit> usedTextEditors = new();
+		return true;
+	}
 
-		for (int i = 0; i < openScripts.Count; i++)
+	private static void AddCurrentOpenScriptEditorBufferIfTarget(
+		ScriptEditor scriptEditor,
+		HashSet<string> targetPaths,
+		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
+		HashSet<TextEdit> usedTextEditors
+	)
+	{
+		if (
+			scriptEditor == null
+			|| targetPaths == null
+			|| targetPaths.Count == 0
+			|| openEditorsByPath == null
+			|| usedTextEditors == null
+		)
 		{
-			Script openScript = openScripts[i];
-
-			if (openScript == null)
-				continue;
-
-			string scriptPath = NormalizeScriptPath(openScript.ResourcePath);
-
-			if (!targetPaths.Contains(scriptPath))
-				continue;
-
-			if (!scriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-				continue;
-
-			Control baseEditor = openScriptEditors[i]?.GetBaseEditor();
-
-			if (baseEditor is not TextEdit textEditor)
-			{
-				failureMessage =
-					$"Refactor Namespace cancelled: System Explorer could not access the open script editor buffer for '{scriptPath}' before scanning namespace usages.";
-				return false;
-			}
-
-			if (usedTextEditors.Contains(textEditor))
-			{
-				failureMessage =
-					$"Refactor Namespace cancelled: System Explorer found the same open script editor buffer for more than one script while preparing namespace refactor '{scriptPath}'.";
-				return false;
-			}
-
-			if (
-				openEditorsByPath.TryGetValue(
-					scriptPath,
-					out OpenScriptEditorBuffer existingOpenEditor
-				)
-				&& existingOpenEditor.TextEditor != textEditor
-			)
-			{
-				failureMessage =
-					$"Refactor Namespace cancelled: System Explorer found duplicate open script editor buffers for '{scriptPath}'. Save/reopen it before refactoring.";
-				return false;
-			}
-
-			if (
-				!IndexedScriptEditorPairLooksSafe(
-					openScript,
-					scriptPath,
-					textEditor,
-					out string unsafePairReason
-				)
-			)
-			{
-				failureMessage = unsafePairReason;
-				return false;
-			}
-
-			openEditorsByPath[scriptPath] = new OpenScriptEditorBuffer(scriptPath, textEditor);
-			usedTextEditors.Add(textEditor);
+			return;
 		}
 
-		return true;
+		Script currentScript = scriptEditor.GetCurrentScript();
+		string currentScriptPath = NormalizeScriptPath(currentScript?.ResourcePath);
+
+		if (
+			string.IsNullOrWhiteSpace(currentScriptPath)
+			|| !targetPaths.Contains(currentScriptPath)
+			|| openEditorsByPath.ContainsKey(currentScriptPath)
+		)
+		{
+			return;
+		}
+
+		ScriptEditorBase currentEditor = scriptEditor.GetCurrentEditor();
+		Control baseEditor = currentEditor?.GetBaseEditor();
+
+		if (
+			baseEditor is TextEdit currentTextEditor
+			&& !usedTextEditors.Contains(currentTextEditor)
+		)
+			AddOpenScriptEditorBuffer(
+				openEditorsByPath,
+				usedTextEditors,
+				currentScriptPath,
+				currentTextEditor
+			);
+	}
+
+	private static void AddOpenScriptEditorBuffersByDiskText(
+		ScriptEditor scriptEditor,
+		HashSet<string> targetPaths,
+		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
+		HashSet<TextEdit> usedTextEditors
+	)
+	{
+		if (
+			scriptEditor == null
+			|| targetPaths == null
+			|| openEditorsByPath == null
+			|| usedTextEditors == null
+		)
+		{
+			return;
+		}
+
+		List<TextEdit> openTextEditors = GetOpenScriptTextEditors(scriptEditor);
+		Dictionary<string, string> diskTextsByPath = targetPaths
+			.Where(path =>
+				!string.IsNullOrWhiteSpace(path)
+				&& path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+				&& FileAccess.FileExists(path)
+			)
+			.Distinct(StringComparer.OrdinalIgnoreCase)
+			.ToDictionary(NormalizeScriptPath, ReadTextFile, StringComparer.OrdinalIgnoreCase);
+
+		foreach (string targetPath in diskTextsByPath.Keys)
+		{
+			if (openEditorsByPath.ContainsKey(targetPath))
+				continue;
+
+			string diskText = diskTextsByPath[targetPath];
+
+			List<TextEdit> matchingEditors = openTextEditors
+				.Where(textEditor =>
+					textEditor != null
+					&& !usedTextEditors.Contains(textEditor)
+					&& ScriptTextsMatchForDiskVerification(textEditor.Text ?? "", diskText)
+				)
+				.ToList();
+
+			if (matchingEditors.Count != 1)
+				continue;
+
+			TextEdit matchingEditor = matchingEditors[0];
+			int matchingPathCount = diskTextsByPath.Count(pair =>
+				!openEditorsByPath.ContainsKey(pair.Key)
+				&& ScriptTextsMatchForDiskVerification(matchingEditor.Text ?? "", pair.Value)
+			);
+
+			if (matchingPathCount != 1)
+				continue;
+
+			AddOpenScriptEditorBuffer(
+				openEditorsByPath,
+				usedTextEditors,
+				targetPath,
+				matchingEditor
+			);
+		}
+	}
+
+	private static List<string> GetUnmatchedOpenScriptPaths(
+		ScriptEditor scriptEditor,
+		HashSet<string> targetPaths,
+		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath
+	)
+	{
+		if (scriptEditor == null || targetPaths == null || targetPaths.Count == 0)
+			return new List<string>();
+
+		return GetOpenScriptPaths(scriptEditor, targetPaths)
+			.Where(path => openEditorsByPath == null || !openEditorsByPath.ContainsKey(path))
+			.Distinct(StringComparer.OrdinalIgnoreCase)
+			.ToList();
 	}
 
 	private static bool IndexedScriptEditorPairLooksSafe(
@@ -560,7 +712,7 @@ public partial class SystemExplorerPlugin
 
 		if (textEditor.GetVersion() == textEditor.GetSavedVersion())
 		{
-			if (editorText == diskText)
+			if (ScriptTextsMatchForDiskVerification(editorText, diskText))
 				return true;
 
 			failureMessage =
@@ -630,6 +782,71 @@ public partial class SystemExplorerPlugin
 
 		openEditorsByPath[normalizedPath] = new OpenScriptEditorBuffer(normalizedPath, textEditor);
 		usedTextEditors.Add(textEditor);
+	}
+
+	private static bool TryFindUnmatchedOpenScriptEditorUsingReference(
+		ScriptEditor scriptEditor,
+		Dictionary<string, OpenScriptEditorBuffer> matchedOpenEditorsByPath,
+		string namespaceName,
+		out string failureMessage
+	)
+	{
+		failureMessage = "";
+
+		if (scriptEditor == null || string.IsNullOrWhiteSpace(namespaceName))
+			return false;
+
+		HashSet<TextEdit> matchedTextEditors =
+			matchedOpenEditorsByPath
+				?.Values.Where(openEditor => openEditor.TextEditor != null)
+				.Select(openEditor => openEditor.TextEditor)
+				.ToHashSet()
+			?? new HashSet<TextEdit>();
+
+		foreach (ScriptEditorBase scriptEditorBase in scriptEditor.GetOpenScriptEditors())
+		{
+			Control baseEditor = scriptEditorBase?.GetBaseEditor();
+
+			if (baseEditor is not TextEdit textEditor || matchedTextEditors.Contains(textEditor))
+				continue;
+
+			if (!ScriptTextContainsUsingStatement(textEditor.Text ?? "", namespaceName))
+				continue;
+
+			failureMessage =
+				$"Refactor Namespace cancelled: an open script editor buffer contains 'using {namespaceName};', but System Explorer could not safely match that buffer to a script path without changing the active editor tab. Save/reopen open scripts before batch refactoring.";
+			return true;
+		}
+
+		return false;
+	}
+
+	private static bool ScriptTextContainsUsingStatement(string scriptText, string namespaceName)
+	{
+		if (string.IsNullOrWhiteSpace(scriptText) || string.IsNullOrWhiteSpace(namespaceName))
+			return false;
+
+		string[] lines = NormalizeScriptTextForDiskVerification(scriptText).Split('\n');
+
+		foreach (string line in lines)
+		{
+			string trimmedLine = line.Trim();
+
+			if (!trimmedLine.StartsWith("using ", StringComparison.Ordinal))
+				continue;
+
+			if (!trimmedLine.EndsWith(";", StringComparison.Ordinal))
+				continue;
+
+			string usingNamespace = trimmedLine
+				.Substring("using ".Length, trimmedLine.Length - "using ".Length - 1)
+				.Trim();
+
+			if (string.Equals(usingNamespace, namespaceName, StringComparison.Ordinal))
+				return true;
+		}
+
+		return false;
 	}
 
 	private static bool HasUnsavedOpenScriptEditorBuffers(

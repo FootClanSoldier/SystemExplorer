@@ -249,16 +249,15 @@ public partial class SystemExplorerPlugin
 				preserveEditorViewState: true
 			);
 
-			if (
-				releaseTreeFocusAfterNavigation
-				&& (
-					result.Status == BeautifyScriptOperationStatus.Formatted
-					|| result.Status == BeautifyScriptOperationStatus.Unchanged
-				)
-			)
-			{
+			bool completedWithoutChangesOrFailure =
+				result.Status == BeautifyScriptOperationStatus.Formatted
+				|| result.Status == BeautifyScriptOperationStatus.Unchanged;
+
+			if (!releaseTreeFocusAfterNavigation && completedWithoutChangesOrFailure)
+				SyncSelectionToActiveScriptAfterOperation();
+
+			if (releaseTreeFocusAfterNavigation && completedWithoutChangesOrFailure)
 				CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
-			}
 		}
 		finally
 		{
@@ -292,6 +291,7 @@ public partial class SystemExplorerPlugin
 
 		_isBeautifyingScript = true;
 		BeautifyScriptsBatchSummary summary = new();
+		BeginBatchScriptEditorContextPreservation();
 
 		try
 		{
@@ -312,11 +312,11 @@ public partial class SystemExplorerPlugin
 			}
 
 			DebugPrintBeautify($"Beautify Scripts summary: {summary}");
-			CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 			DebugLogOperation("Beautify Scripts Completed", summary.ToString());
 		}
 		finally
 		{
+			EndBatchScriptEditorContextPreservation();
 			_isBeautifyingScript = false;
 		}
 	}

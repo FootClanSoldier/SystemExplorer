@@ -320,6 +320,7 @@ public partial class SystemExplorerPlugin
 
 		string changedScriptPathPayload = BuildScriptPathPayload(pendingWrites.Keys);
 		RestoreRefactorNamespaceTargetScriptEditor(selectedScriptPath);
+		SyncSelectionToActiveScriptAfterOperation();
 
 		CallDeferred(
 			nameof(RefreshOpenScriptEditorBuffersAfterRefactorNamespaceDeferred),
@@ -329,6 +330,7 @@ public partial class SystemExplorerPlugin
 			nameof(RestoreRefactorNamespaceTargetScriptEditorDeferred),
 			selectedScriptPath
 		);
+		CallDeferred(nameof(SyncSelectionToActiveScriptAfterOperation));
 		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 
 		DebugLogOperation(
@@ -362,45 +364,64 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
-		if (
-			!TryAutosaveOpenRefactorNamespaceCandidateScriptsBeforeBuild(
-				targetScriptPaths,
-				targetScriptPaths.ToHashSet(StringComparer.OrdinalIgnoreCase),
-				out bool didAutosaveCandidateScripts,
-				out string candidateAutosaveFailureMessage
-			)
-		)
-		{
-			DebugLog(
-				string.IsNullOrWhiteSpace(candidateAutosaveFailureMessage)
-					? $"{operationName} cancelled: open script buffer(s) could not be autosaved safely before adding namespace."
-					: candidateAutosaveFailureMessage
-			);
-			return false;
-		}
-
-		if (didAutosaveCandidateScripts)
-			DebugLog($"{operationName} save-first pre-scan saved open script buffer(s).");
-
-		if (
-			!TryBuildAddNamespacePendingWrites(
-				targetScriptPaths,
-				newNamespace,
-				out string selectedScriptPath,
-				out Dictionary<string, string> originalTextsByPath,
-				out Dictionary<string, string> pendingWrites
-			)
-		)
-		{
-			return false;
-		}
-
-		return ApplyRefactorNamespacePendingWrites(
-			selectedScriptPath,
-			originalTextsByPath,
-			pendingWrites,
-			operationName
+		bool preserveBatchUiState = operationName.Contains(
+			"Batch",
+			StringComparison.OrdinalIgnoreCase
 		);
+
+		if (preserveBatchUiState)
+			BeginBatchScriptEditorContextPreservation();
+
+		try
+		{
+			if (
+				!TryAutosaveOpenRefactorNamespaceCandidateScriptsBeforeBuild(
+					targetScriptPaths,
+					targetScriptPaths.ToHashSet(StringComparer.OrdinalIgnoreCase),
+					out bool didAutosaveCandidateScripts,
+					out string candidateAutosaveFailureMessage,
+					allowScriptEditorActivation: !preserveBatchUiState
+				)
+			)
+			{
+				DebugLog(
+					string.IsNullOrWhiteSpace(candidateAutosaveFailureMessage)
+						? $"{operationName} cancelled: open script buffer(s) could not be autosaved safely before adding namespace."
+						: candidateAutosaveFailureMessage
+				);
+				return false;
+			}
+
+			if (didAutosaveCandidateScripts)
+				DebugLog($"{operationName} save-first pre-scan saved open script buffer(s).");
+
+			if (
+				!TryBuildAddNamespacePendingWrites(
+					targetScriptPaths,
+					newNamespace,
+					out string selectedScriptPath,
+					out Dictionary<string, string> originalTextsByPath,
+					out Dictionary<string, string> pendingWrites
+				)
+			)
+			{
+				return false;
+			}
+
+			return ApplyRefactorNamespacePendingWrites(
+				selectedScriptPath,
+				originalTextsByPath,
+				pendingWrites,
+				operationName,
+				"",
+				!preserveBatchUiState
+			);
+		}
+		finally
+		{
+			if (preserveBatchUiState)
+				EndBatchScriptEditorContextPreservation();
+		}
 	}
 
 	private bool TryBuildAddNamespacePendingWrites(
@@ -474,7 +495,9 @@ public partial class SystemExplorerPlugin
 		string selectedScriptPath,
 		Dictionary<string, string> originalTextsByPath,
 		Dictionary<string, string> pendingWrites,
-		string operationName
+		string operationName,
+		string scriptPathToRestoreAfterOperation = "",
+		bool syncSelectionAfterOperation = true
 	)
 	{
 		if (pendingWrites == null || pendingWrites.Count == 0)
@@ -485,21 +508,40 @@ public partial class SystemExplorerPlugin
 
 		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath;
 
-		if (
-			!TryGetOpenScriptEditorsByActivatingPaths(
-				pendingWrites.Keys,
-				true,
-				out openEditorsByPath,
-				out string affectedEditorFailureMessage
-			)
-		)
+		if (syncSelectionAfterOperation)
 		{
-			GD.PushWarning(
-				string.IsNullOrWhiteSpace(affectedEditorFailureMessage)
-					? $"{operationName} cancelled: affected open script buffer(s) could not be matched safely."
-					: affectedEditorFailureMessage
+			if (
+				!TryGetOpenScriptEditorsByActivatingPaths(
+					pendingWrites.Keys,
+					true,
+					out openEditorsByPath,
+					out string affectedEditorFailureMessage
+				)
+			)
+			{
+				GD.PushWarning(
+					string.IsNullOrWhiteSpace(affectedEditorFailureMessage)
+						? $"{operationName} cancelled: affected open script buffer(s) could not be matched safely."
+						: affectedEditorFailureMessage
+				);
+				return false;
+			}
+		}
+		else
+		{
+			openEditorsByPath = GetOpenScriptEditorsByPath(
+				originalTextsByPath,
+				pendingWrites,
+				out string unsafeOpenScriptList
 			);
-			return false;
+
+			if (!string.IsNullOrWhiteSpace(unsafeOpenScriptList))
+			{
+				GD.PushWarning(
+					$"{operationName} cancelled: System Explorer could not safely match open script editor buffer(s) without changing the active editor tab. Save/reopen before refactoring:\n{unsafeOpenScriptList}"
+				);
+				return false;
+			}
 		}
 
 		if (
@@ -550,24 +592,36 @@ public partial class SystemExplorerPlugin
 		);
 
 		string changedScriptPathPayload = BuildScriptPathPayload(pendingWrites.Keys);
+		string restoreScriptPath = "";
 
-		if (!string.IsNullOrWhiteSpace(selectedScriptPath))
-			RestoreRefactorNamespaceTargetScriptEditor(selectedScriptPath);
+		if (syncSelectionAfterOperation)
+		{
+			restoreScriptPath = string.IsNullOrWhiteSpace(scriptPathToRestoreAfterOperation)
+				? selectedScriptPath
+				: scriptPathToRestoreAfterOperation;
+
+			if (!string.IsNullOrWhiteSpace(restoreScriptPath))
+				RestoreRefactorNamespaceTargetScriptEditor(restoreScriptPath);
+		}
 
 		CallDeferred(
 			nameof(RefreshOpenScriptEditorBuffersAfterRefactorNamespaceDeferred),
 			changedScriptPathPayload
 		);
 
-		if (!string.IsNullOrWhiteSpace(selectedScriptPath))
+		if (syncSelectionAfterOperation && !string.IsNullOrWhiteSpace(restoreScriptPath))
 		{
+			SyncSelectionToActiveScriptAfterOperation();
+
 			CallDeferred(
 				nameof(RestoreRefactorNamespaceTargetScriptEditorDeferred),
-				selectedScriptPath
+				restoreScriptPath
 			);
+			CallDeferred(nameof(SyncSelectionToActiveScriptAfterOperation));
 		}
 
-		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		if (syncSelectionAfterOperation)
+			CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 
 		DebugLogOperation($"{operationName} Completed", $"Updated {pendingWrites.Count} file(s).");
 		return true;
@@ -702,7 +756,9 @@ public partial class SystemExplorerPlugin
 		IEnumerable<string> candidatePaths,
 		HashSet<string> requiredPaths,
 		out bool didAutosaveCandidateScripts,
-		out string failureMessage
+		out string failureMessage,
+		bool allowScriptEditorActivation = true,
+		string namespaceReferenceToProtect = ""
 	)
 	{
 		didAutosaveCandidateScripts = false;
@@ -725,6 +781,71 @@ public partial class SystemExplorerPlugin
 			return true;
 
 		requiredPaths ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		if (!allowScriptEditorActivation)
+		{
+			HashSet<string> targetPaths = normalizedCandidatePaths.ToHashSet(
+				StringComparer.OrdinalIgnoreCase
+			);
+
+			if (
+				!TryGetOpenScriptEditorsByIndexedScriptEditorPaths(
+					scriptEditor,
+					targetPaths,
+					out Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
+					out string editorFailureMessage,
+					requiredPaths
+				)
+			)
+			{
+				failureMessage = editorFailureMessage;
+				return false;
+			}
+
+			foreach (OpenScriptEditorBuffer openEditor in openEditorsByPath.Values)
+			{
+				bool isRequiredScript = requiredPaths.Contains(openEditor.Path);
+
+				if (
+					!TryAutosaveOpenScriptEditorBufferIfNeeded(
+						openEditor,
+						isRequiredScript,
+						out bool didAutosaveOpenEditor,
+						out string autosaveFailureMessage
+					)
+				)
+				{
+					if (isRequiredScript)
+					{
+						failureMessage = autosaveFailureMessage;
+						return false;
+					}
+
+					DebugLog(
+						$"Refactor Namespace pre-scan skipped autosave for open candidate '{openEditor.Path}': {autosaveFailureMessage}"
+					);
+					continue;
+				}
+
+				if (didAutosaveOpenEditor)
+					didAutosaveCandidateScripts = true;
+			}
+
+			if (
+				TryFindUnmatchedOpenScriptEditorUsingReference(
+					scriptEditor,
+					openEditorsByPath,
+					namespaceReferenceToProtect,
+					out string unmatchedUsingFailureMessage
+				)
+			)
+			{
+				failureMessage = unmatchedUsingFailureMessage;
+				return false;
+			}
+
+			return true;
+		}
 
 		foreach (string candidatePath in normalizedCandidatePaths)
 		{

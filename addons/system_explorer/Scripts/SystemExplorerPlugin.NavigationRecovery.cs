@@ -18,6 +18,14 @@ public partial class SystemExplorerPlugin
 
 		UpdateTreeLockIconVisibility();
 
+		if (
+			_isSyncingTreeSelectionToActiveScript || _suppressNextTreeNavigationFromScriptEditorSync
+		)
+		{
+			_suppressNextTreeNavigationFromScriptEditorSync = false;
+			return;
+		}
+
 		OpenScriptFromTreeItem(selectedItem);
 		OpenSceneFromTreeItem(selectedItem);
 	}

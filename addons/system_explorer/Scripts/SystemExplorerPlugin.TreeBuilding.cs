@@ -1,5 +1,6 @@
 #if TOOLS
 using Godot;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -303,6 +304,56 @@ public partial class SystemExplorerPlugin
 			return;
 
 		SaveExpandedRecursive(root);
+	}
+
+	private HashSet<string> CaptureTreeExpansionStateSnapshot()
+	{
+		SaveExpansionState();
+
+		return new HashSet<string>(_expandedItems, StringComparer.OrdinalIgnoreCase);
+	}
+
+	private void RestoreTreeExpansionStateSnapshot(HashSet<string> expandedItemsSnapshot)
+	{
+		if (expandedItemsSnapshot == null)
+			return;
+
+		_expandedItems.Clear();
+
+		foreach (string metadata in expandedItemsSnapshot)
+		{
+			if (!string.IsNullOrWhiteSpace(metadata))
+				_expandedItems.Add(metadata);
+		}
+
+		TreeItem root = _tree?.GetRoot();
+
+		if (root == null)
+			return;
+
+		RestoreTreeExpansionStateSnapshotRecursive(root, _expandedItems);
+	}
+
+	private static void RestoreTreeExpansionStateSnapshotRecursive(
+		TreeItem item,
+		HashSet<string> expandedItems
+	)
+	{
+		TreeItem current = item;
+
+		while (current != null)
+		{
+			TreeItem child = current.GetFirstChild();
+			string metadata = current.GetMetadata(0).AsString();
+
+			if (!string.IsNullOrWhiteSpace(metadata) && child != null)
+				current.Collapsed = !expandedItems.Contains(metadata);
+
+			if (child != null)
+				RestoreTreeExpansionStateSnapshotRecursive(child, expandedItems);
+
+			current = current.GetNext();
+		}
 	}
 
 	private void SaveExpandedRecursive(TreeItem item)

@@ -15,6 +15,7 @@ SystemExplorerPlugin.DockUi.cs
 
 SystemExplorerPlugin.TreeBuilding.cs
 - Builds/rebuilds the tree, restores expansion state, tracks forced expansion, and contains collapse/expand helpers.
+- Provides tree expansion snapshot helpers used by operations that must restore the user's exact visual tree state after temporary editor/script sync work.
 - Handles lock icon visibility/display state and script tooltip text during tree creation.
 
 SystemExplorerPlugin.ScriptFilter.cs
@@ -38,8 +39,19 @@ SystemExplorerPlugin.ScriptOpenPosition.cs
 
 SystemExplorerPlugin.ScriptEditorBuffers.cs
 - Contains shared helpers for working with Godot’s open script editor buffers and script text files.
-- Handles script path normalization, global file path resolution, safe text file reading/writing, locating open script editor buffers by activating script paths, and applying updated text back to open editor buffers.
+- Handles script path normalization, global file path resolution, safe text file reading/writing, locating open script editor buffers by activating script paths when explicitly needed, and applying updated text back to open editor buffers.
+- Provides non-activating open-buffer matching for batch/preserve-context operations, including current-editor fallback, disk-text matching when Godot's open script/editor lists cannot be index-matched, and defensive detection of unmatched open buffers that still contain namespace using references.
 - Shared by Refactor Namespace and Beautify so editor-buffer safety logic is centralized instead of living inside a feature-specific Quick Action partial.
+
+SystemExplorerPlugin.ScriptEditorSync.cs
+- Handles synchronization between Godot's active Script Editor script and the System Explorer tree selection.
+- Connects to ScriptEditor active-script changes when available, with a light polling fallback if the editor signal cannot be connected.
+- Primes the initially active editor script without changing tree selection, then syncs only after subsequent active-script changes or explicit post-operation requests.
+- Provides follow-active-script behavior and post-operation selection resync helpers for stabilizing tree selection after single-script refactor/format operations.
+- Provides a short-lived active-script suppression scope so internal ScriptEditor activations during batch/editor-buffer operations do not leak into user-facing tree selection or expansion.
+- Provides a separate batch context-preservation scope that suppresses post-operation active-script sync until a deferred pass, allowing already queued post-operation sync calls to no-op after batch operations.
+- Preserves existing expansion state additively by only expanding the minimum parent path needed to reveal the active script.
+- Does not mutate system data or persist systems; only updates visual tree selection/expansion defensively.
 
 SystemExplorerPlugin.Shortcuts.cs
 - Handles global plugin shortcut routing through _Input(...), including Ctrl+L lock, Ctrl+B Beautify, Ctrl+Delete remove, and Ctrl+Shift collapse detection helpers.
@@ -94,7 +106,8 @@ SystemExplorerPlugin.Settings.cs
 
 SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
 - Handles the Quick Action flow for refactoring a selected script namespace.
-- Owns context/action entry points, dialog setup/confirmation, single-script orchestration, pending writes, write application, editor-buffer refresh, target script restoration, and operation diagnostics.
+- Owns context/action entry points, dialog setup/confirmation, single-script orchestration, pending writes, write application, editor-buffer refresh, target script restoration for single-script operations, and operation diagnostics.
+- For batch namespace/add-namespace flows, relies on ScriptEditorSync batch context preservation and non-activating editor-buffer lookup rather than restoring the previously active script or tree selection after the batch.
 - Delegates shared script path normalization, text file reading/writing, Godot file refresh, and open editor-buffer handling to SystemExplorerPlugin.ScriptEditorBuffers.cs.
 - Delegates pure namespace/script-text parsing and rewrite helpers to SystemExplorerPlugin.QuickAction.RefactorNamespace.Text.cs.
 
@@ -106,6 +119,7 @@ SystemExplorerPlugin.QuickAction.Beautify.cs
 - Handles the Quick Action flow for Beautify Script / Beautify Scripts.
 - Collects and validates single-script, active-editor script, and batch targets; stores pending beautify actions when CSharpier needs installation; and routes formatting through the shared CSharpier helpers.
 - Handles beautify result summaries, unchanged/skipped/failed handling, safe write checks, and main operation orchestration.
+- Uses ScriptEditorSync batch context preservation for Beautify Scripts so batch formatting does not trigger post-operation active-script selection sync.
 - Delegates editor view-state capture/restore and open editor-buffer validation/application helpers to SystemExplorerPlugin.QuickAction.Beautify.EditorState.cs.
 
 SystemExplorerPlugin.QuickAction.Beautify.EditorState.cs
