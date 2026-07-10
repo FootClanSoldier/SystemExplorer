@@ -244,6 +244,7 @@ They typically disappear after rebuilding or reopening the project.
 - Multiple architecture views
 - Custom icons
 - More C# workflow tools
+- Lightweight autocomplete suggestions in script editor
 
 ---
 
