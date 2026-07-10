@@ -253,6 +253,8 @@ public partial class SystemExplorerPlugin
 		_refactorNamespaceDialog.Confirmed += OnRefactorNamespaceConfirmed;
 		_refactorNamespaceExistingNamespaceOption.Toggled +=
 			OnRefactorNamespaceExistingNamespaceOptionToggled;
+		_refactorNamespaceExistingNamespaceDropdown.ItemSelected +=
+			OnRefactorNamespaceExistingNamespaceSelected;
 		_refactorNamespaceWithoutNamespaceOption.Toggled +=
 			OnRefactorNamespaceWithoutNamespaceOptionToggled;
 		_csharpierNotInstalledDialog.Confirmed += OnCSharpierInstallConfirmed;

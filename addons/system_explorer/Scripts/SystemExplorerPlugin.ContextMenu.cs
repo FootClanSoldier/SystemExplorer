@@ -57,6 +57,14 @@ public partial class SystemExplorerPlugin
 
 	private void BuildContextMenuForMetadata(string metadata)
 	{
+		BuildContextMenuForMetadata(metadata, useReversedSubmenuIcons: false);
+
+		if (ShouldUseReversedContextSubmenuIcons())
+			BuildContextMenuForMetadata(metadata, useReversedSubmenuIcons: true);
+	}
+
+	private void BuildContextMenuForMetadata(string metadata, bool useReversedSubmenuIcons)
+	{
 		_contextMenu.Clear();
 		_contextNewSubmenu.Clear();
 		_contextAddSubmenu.Clear();
@@ -68,7 +76,6 @@ public partial class SystemExplorerPlugin
 		bool isScene = metadata.StartsWith("sceneLink::");
 		bool canShowNewAndAdd = !_isFilteringScripts;
 		bool canShowQuickActions = EnableQuickActions && (isScript || isSystem || isFolder);
-		bool useReversedSubmenuIcons = ShouldUseReversedContextSubmenuIcons();
 
 		UpdateContextSubmenuDirectionIcons(useReversedSubmenuIcons);
 
@@ -290,18 +297,54 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		// PopupMenu does not expose the final submenu opening direction before it is shown.
-		// Estimate the space required by the main context menu plus one submenu so the
-		// right-dock icon layout only reverses when Godot is likely to open the submenu left.
-		const float EstimatedMainMenuWidth = 180.0f;
-		const float EstimatedSubmenuWidth = 170.0f;
-		const float SafetyPadding = 16.0f;
+		// Measure the populated menu and use the regular New/Add submenus as the direction
+		// reference. Quick Actions is intentionally ignored because it is substantially
+		// wider and would otherwise make every submenu icon reverse too early. Godot can
+		// still choose the final opening direction for Quick Actions when it is displayed.
+		float edgeTolerance = GetContextMenuEdgeTolerance();
 
+		float mainMenuWidth = GetRequiredPopupWidth(_contextMenu);
+		float referenceSubmenuWidth = Mathf.Max(
+			GetRequiredPopupWidth(_contextNewSubmenu),
+			GetRequiredPopupWidth(_contextAddSubmenu)
+		);
+
+		float editorLeftEdge = editorRect.Position.X;
+		float editorRightEdge = editorRect.End.X;
 		float mouseX = _dock.GetGlobalMousePosition().X;
-		float requiredRightEdge =
-			mouseX + EstimatedMainMenuWidth + EstimatedSubmenuWidth + SafetyPadding;
-		float editorRightEdge = editorRect.Position.X + editorRect.Size.X;
+		float mainMenuLeft = Mathf.Clamp(
+			mouseX,
+			editorLeftEdge,
+			Mathf.Max(editorLeftEdge, editorRightEdge - mainMenuWidth)
+		);
+		float requiredRightEdge = mainMenuLeft + mainMenuWidth + referenceSubmenuWidth;
 
-		return requiredRightEdge <= editorRightEdge;
+		return requiredRightEdge <= editorRightEdge + edgeTolerance;
+	}
+
+	private static float GetContextMenuEdgeTolerance()
+	{
+		const float BaseTolerance = 6.0f;
+
+		float editorScale = EditorInterface.Singleton?.GetEditorScale() ?? 1.0f;
+
+		if (editorScale <= 0.0f)
+			editorScale = 1.0f;
+
+		return BaseTolerance * editorScale;
+	}
+
+	private static float GetRequiredPopupWidth(PopupMenu menu)
+	{
+		if (menu == null || !GodotObject.IsInstanceValid(menu))
+			return 0.0f;
+
+		menu.ChildControlsChanged();
+
+		float contentWidth = menu.GetContentsMinimumSize().X;
+		float configuredMinimumWidth = menu.MinSize.X;
+
+		return Mathf.Max(contentWidth, configuredMinimumWidth);
 	}
 
 	private bool IsDockOnRightSide()

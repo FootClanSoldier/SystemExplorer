@@ -84,10 +84,12 @@ public partial class SystemExplorerPlugin
 		foreach (string namespaceName in namespaces)
 			_refactorNamespaceExistingNamespaceDropdown.AddItem(namespaceName);
 
-		_refactorNamespaceExistingNamespaceDropdown.Disabled = namespaces.Count == 0;
+		bool hasExistingNamespaces = namespaces.Count > 0;
+		_refactorNamespaceExistingNamespaceOption.Disabled = !hasExistingNamespaces;
+		_refactorNamespaceExistingNamespaceDropdown.Disabled = !hasExistingNamespaces;
 		_refactorNamespaceWithoutNamespaceOption.Disabled = !hasScriptsWithoutNamespace;
 
-		bool useExistingNamespaceMode = namespaces.Count > 0;
+		bool useExistingNamespaceMode = hasExistingNamespaces;
 		SetRefactorNamespaceBatchApplyMode(useExistingNamespaceMode);
 	}
 
@@ -145,6 +147,20 @@ public partial class SystemExplorerPlugin
 			return;
 
 		SetRefactorNamespaceBatchApplyMode(true);
+	}
+
+	private void OnRefactorNamespaceExistingNamespaceSelected(long index)
+	{
+		if (_newNamespaceInput == null || _refactorNamespaceExistingNamespaceDropdown == null)
+			return;
+
+		if (index < 0 || index >= _refactorNamespaceExistingNamespaceDropdown.ItemCount)
+			return;
+
+		_newNamespaceInput.Text =
+			_refactorNamespaceExistingNamespaceDropdown.GetItemText((int)index);
+		_newNamespaceInput.GrabFocus();
+		_newNamespaceInput.SelectAll();
 	}
 
 	private void OnRefactorNamespaceWithoutNamespaceOptionToggled(bool pressed)
