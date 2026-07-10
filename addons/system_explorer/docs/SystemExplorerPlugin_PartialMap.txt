@@ -1,0 +1,140 @@
+System Explorer partial class map:
+
+SystemExplorerPlugin.cs (Core file)
+- Constants, shared fields, editor lifecycle, icon loading, template bootstrap, dock registration/removal, and core setup/teardown flow.
+- This is the only partial file that carries [Tool] and inherits from EditorPlugin.
+
+SystemExplorerPlugin.DebugLogging.cs
+- Contains debug-only logging helpers guarded by DebugState.
+- Provides DebugLog(...), DebugLogOperation(...), DebugLogStateSnapshot(...), and DebugLogSystems(...).
+- Used by other partial files for developer diagnostics without noisy normal-user output.
+
+SystemExplorerPlugin.DockUi.cs
+- Builds the dock UI controls, toolbar/input layout, dialogs, tree control, context menu nodes, and context menu signal wiring.
+- Handles System Name input behavior, including the inline Enter hint icon and cursor updates.
+
+SystemExplorerPlugin.TreeBuilding.cs
+- Builds/rebuilds the tree, restores expansion state, tracks forced expansion, and contains collapse/expand helpers.
+- Provides tree expansion snapshot helpers used by operations that must restore the user's exact visual tree state after temporary editor/script sync work.
+- Handles lock icon visibility/display state and script tooltip text during tree creation.
+
+SystemExplorerPlugin.ScriptFilter.cs
+- Handles script filtering, filter result tree generation, filter UI icons, clear/search icon behavior, and restoring the normal tree after filtering.
+- Handles revealing/selecting a script again after exiting filter mode.
+
+SystemExplorerPlugin.AddCreate.cs
+- Handles adding systems/folders/scripts/scenes and creating new C# script files from the template.
+- Handles selected file callbacks, target location resolution, forced expansion after additions, and opening newly created scripts through the shared System Explorer script-open helper.
+
+SystemExplorerPlugin.NavigationRecovery.cs
+- Handles tree item selection/navigation for scripts and scenes, reopening selected scripts, and missing script recovery dialogs.
+- Handles relinking or removing missing scripts and safely replacing entries in systems.
+- Delegates System Explorer script opening to SystemExplorerPlugin.ScriptOpenPosition.cs so navigation behavior stays centralized.
+
+SystemExplorerPlugin.ScriptOpenPosition.cs
+- Contains the shared System Explorer script-open helper used by tree navigation and newly created scripts.
+- Tracks which script paths have been opened from System Explorer during the current editor session.
+- After the first System Explorer open for a script in a session, verifies the active script editor and attempts to place the TextEdit caret/scroll position at the top.
+- Releases tree focus after navigation when requested and logs skipped/failed top-reset attempts through DebugLog(...).
+
+SystemExplorerPlugin.ScriptEditorBuffers.cs
+- Contains shared helpers for working with Godot’s open script editor buffers and script text files.
+- Handles script path normalization, global file path resolution, safe text file reading/writing, locating open script editor buffers by activating script paths when explicitly needed, and applying updated text back to open editor buffers.
+- Provides non-activating open-buffer matching for batch/preserve-context operations, including current-editor fallback, disk-text matching when Godot's open script/editor lists cannot be index-matched, and defensive detection of unmatched open buffers that still contain namespace using references.
+- Shared by Refactor Namespace and Beautify so editor-buffer safety logic is centralized instead of living inside a feature-specific Quick Action partial.
+
+SystemExplorerPlugin.ScriptEditorSync.cs
+- Handles synchronization between Godot's active Script Editor script and the System Explorer tree selection.
+- Connects to ScriptEditor active-script changes when available, with a light polling fallback if the editor signal cannot be connected.
+- Primes the initially active editor script without changing tree selection, then syncs only after subsequent active-script changes or explicit post-operation requests.
+- Provides follow-active-script behavior and post-operation selection resync helpers for stabilizing tree selection after single-script refactor/format operations.
+- Provides a short-lived active-script suppression scope so internal ScriptEditor activations during batch/editor-buffer operations do not leak into user-facing tree selection or expansion.
+- Provides a separate batch context-preservation scope that suppresses post-operation active-script sync until a deferred pass, allowing already queued post-operation sync calls to no-op after batch operations.
+- Preserves existing expansion state additively by only expanding the minimum parent path needed to reveal the active script.
+- Does not mutate system data or persist systems; only updates visual tree selection/expansion defensively.
+
+SystemExplorerPlugin.Shortcuts.cs
+- Handles global plugin shortcut routing through _Input(...), including Ctrl+L lock, Ctrl+B Beautify, Ctrl+Delete remove, and Ctrl+Shift collapse detection helpers.
+- Routes selected-item shortcut actions such as Beautify and remove without changing the underlying tree mutation safeguards.
+- Allows only Ctrl+B / Beautify to pass through when focus is safely verified inside the active Godot script editor, so the active editor script can be formatted without falling back to the selected System Explorer tree item.
+
+SystemExplorerPlugin.TreeInput.cs
+- Handles Tree.GuiInput and mouse-exit behavior for tree keyboard/mouse input, hover lock icon updates, filtering clicks, double-click scene opening, drag preparation/release, and keyboard collapse routing.
+- Contains tree-item input helpers for script/scene detection, selected script/scene click handling, shift-click expansion, and local expand/collapse toggling.
+
+SystemExplorerPlugin.ContextMenu.cs
+- Handles context menu constants, hidden submenu icon state, context menu construction, submenu direction/icon behavior, and context menu action routing.
+- Handles pending metadata setup, New/Add/Quick Actions menu composition, Open File Path / Open Folder Path routing, visibility of file-manager actions, and context-specific system/folder/script/scene menu entries.
+- Delegates physical file/folder target resolution and OS file-manager opening to SystemExplorerPlugin.ContextMenu.FileManager.cs.
+
+SystemExplorerPlugin.ContextMenu.FileManager.cs
+- Contains Open File Path / Open Folder Path file-manager helpers used by the context menu.
+- Resolves script, scene, and virtual-folder metadata into physical project file paths without changing menu visibility or action routing.
+- Handles folder target lookup by choosing the first script entry in the selected virtual folder, falling back to nested scripts and scene entries when needed.
+
+SystemExplorerPlugin.DialogInput.cs
+- Handles remove dialog setup plus dialog Enter-confirm helpers for remove, rename, add folder, and Refactor Namespace dialogs.
+- Contains dialog OK focus release helpers used by remove and missing-item recovery dialogs.
+
+SystemExplorerPlugin.ItemLocking.cs
+- Handles lock/unlock actions for scripts, scenes, folders, and systems.
+- Contains lock metadata helpers and restrictions used by selection, drag sources, and drop targets.
+
+SystemExplorerPlugin.SceneLinking.cs
+- Handles linking/unlinking/relinking scenes to scripts and adding/opening direct scene links.
+- Handles missing scene recovery dialogs and updating linked/direct scene paths.
+
+SystemExplorerPlugin.DragDrop.cs
+- Handles drag & drop validation, previews/highlighting, move/reorder logic, and locked-item/folder restrictions during drag operations.
+- Contains metadata parsing helpers specific to drag sources, drop targets, and system entry moves.
+
+SystemExplorerPlugin.RenameRemove.cs
+- Handles rename and remove operations for systems, folders, scripts, linked scenes, and direct scene entries.
+- Handles file deletion, file/folder renames, forced expansion after renames, and updating script/scene entries after path changes.
+
+SystemExplorerPlugin.EntryHelpers.cs
+- Contains shared helpers for selection lookup, entry mutation, metadata parsing, path/folder utilities, display names, and entry normalization.
+- Contains helpers for script entries, scene entries, linked scene metadata, folder entries, lock markers, and selected filter result updates.
+
+SystemExplorerPlugin.Persistence.cs
+- Handles JSON load/save, recovery, save guards, and defensive checks before tree/system mutations.
+- Provides EnsureSystemsLoadedForTreeOperation(...), EnsureSystemAvailable(...), EnsureSystemsAvailable(...), disk recovery, serialization, and deserialization.
+
+SystemExplorerPlugin.Settings.cs
+- Handles plugin Project Settings registration and reading configurable settings under addons/system_explorer/..
+- Contains settings-backed toggles for context menu icons and Quick Actions.
+
+SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
+- Handles the Quick Action flow for refactoring a selected script namespace.
+- Owns context/action entry points, dialog setup/confirmation, single-script orchestration, pending writes, write application, editor-buffer refresh, target script restoration for single-script operations, and operation diagnostics.
+- For batch namespace/add-namespace flows, relies on ScriptEditorSync batch context preservation and non-activating editor-buffer lookup rather than restoring the previously active script or tree selection after the batch.
+- Delegates shared script path normalization, text file reading/writing, Godot file refresh, and open editor-buffer handling to SystemExplorerPlugin.ScriptEditorBuffers.cs.
+- Delegates pure namespace/script-text parsing and rewrite helpers to SystemExplorerPlugin.QuickAction.RefactorNamespace.Text.cs.
+
+SystemExplorerPlugin.QuickAction.RefactorNamespace.Text.cs
+- Contains pure Refactor Namespace text helpers for namespace detection, namespace name validation, namespace declaration replacement, adding namespace blocks around scripts without namespaces, insertion-point parsing after top using directives, body indentation, and matching using-directive rewrites.
+- Keeps namespace/text parsing logic separate from dialog, tree, editor-state, and persistence orchestration.
+
+SystemExplorerPlugin.QuickAction.Beautify.cs
+- Handles the Quick Action flow for Beautify Script / Beautify Scripts.
+- Collects and validates single-script, active-editor script, and batch targets; stores pending beautify actions when CSharpier needs installation; and routes formatting through the shared CSharpier helpers.
+- Handles beautify result summaries, unchanged/skipped/failed handling, safe write checks, and main operation orchestration.
+- Uses ScriptEditorSync batch context preservation for Beautify Scripts so batch formatting does not trigger post-operation active-script selection sync.
+- Delegates editor view-state capture/restore and open editor-buffer validation/application helpers to SystemExplorerPlugin.QuickAction.Beautify.EditorState.cs.
+
+SystemExplorerPlugin.QuickAction.Beautify.EditorState.cs
+- Contains Beautify-specific editor-state and open editor-buffer safeguards.
+- Captures/restores TextEdit caret, first visible line, horizontal/vertical scroll, and focus state for single-script Beautify.
+- Handles deferred restore passes so Godot does not unnecessarily throw the user to the top of the file after formatting or refresh.
+- Validates/autosaves open editor buffers before formatting, applies formatted text to open editors before disk writes, and restores open editor text after failed writes.
+
+SystemExplorerPlugin.QuickAction.CSharpier.cs
+- Contains the CSharpier-specific backend used by Beautify.
+- Handles CSharpier command discovery, command caching, startup warm-up, install confirmation/result handling, and developer-only uninstall/warm-up debug helpers.
+- Runs CSharpier formatting through the cached command with fallback probing when a cached command becomes invalid.
+- Contains process execution helpers, command display/debug helpers, global tool path resolution, and CSharpier install/uninstall result parsing.
+
+SystemExplorerPlugin.QuickAction.RefactorNamespace.Batch.cs
+- Handles batch-specific Refactor Namespace behavior for System and Folder Quick Actions.
+- Collects scoped C# scripts, scans unique namespaces, detects scripts without namespaces, configures the batch apply UI, filters target scripts, and routes either namespace replacement or namespace insertion to the shared Refactor Namespace helpers.
+- Keeps batch flow separate from the core Refactor Namespace partial while shared editor-buffer and script text handling lives in SystemExplorerPlugin.ScriptEditorBuffers.cs.
