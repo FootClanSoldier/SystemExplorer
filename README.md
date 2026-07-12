@@ -140,7 +140,7 @@ System Explorer integrates with the open-source **CSharpier** formatter.
 * Format individual C# scripts
 * Format every script inside a system or folder
 * Press **Ctrl + B** to format the currently active script
-* Preserve editor focus, caret position, scroll position, and the active script where possible
+* Preserve editor focus, caret position, scroll position, and the active script during formatting
 
 ### Refactor Namespace
 
