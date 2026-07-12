@@ -26,7 +26,7 @@
 
 > Architecture-focused navigation and lightweight C# workflow tools for Godot.
 
-> **Note:** The `main` branch may contain work-in-progress changes for the next plugin version. Stable versions are available from the official releases.
+> Evolving toward a lightweight C# IDE inside Godot.
 
 ---
 
