@@ -136,7 +136,7 @@ Quick Actions are disabled by default and can be enabled through the plugin's Pr
 
 System Explorer integrates with the open-source **CSharpier** formatter.
 
-* Install or uninstall CSharpier directly from the Godot editor
+* Install CSharpier directly from the Godot editor
 * Format individual C# scripts
 * Format every script inside a system or folder
 * Press **Ctrl + B** to format the currently active script
