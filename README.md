@@ -1,7 +1,7 @@
 <p align="center">
-	<a href="https://github.com/FootClanSoldier/SystemExplorer">
-  <img src="icon.png" width="300" alt="System Explorer Logo">
-	</a>
+  <a href="https://github.com/FootClanSoldier/SystemExplorer">
+    <img src="icon.png" width="300" alt="System Explorer Logo">
+  </a>
 </p>
 
 <h1 align="center">System Explorer</h1>
@@ -24,7 +24,7 @@
   </a>
 </p>
 
-> Architecture-focused navigation plugin for Godot C# projects.
+> Architecture-focused navigation and lightweight C# workflow tools for Godot.
 
 > **Note:** The `main` branch may contain work-in-progress changes for the next plugin version. Stable versions are available from the official releases.
 
@@ -40,20 +40,23 @@
 
 ## Contents
 
-- [About](#about)
-- [Why](#why)
-- [Features](#features)
-- [Installation](#installation)
-- [Script Templates](#script-templates)
-- [Data Storage](#data-storage)
-- [Known Issues](#known-issues)
-- [Future Ideas](#future-ideas)
+* [About](#about)
+* [Why](#why)
+* [Features](#features)
+* [Installation](#installation)
+* [Script Templates](#script-templates)
+* [Data Storage](#data-storage)
+* [Known Issues](#known-issues)
+* [Future Ideas](#future-ideas)
+* [Feedback](#feedback)
 
 # About
 
-System Explorer is a Godot C# editor plugin that lets you organize your project from an architectural perspective instead of relying solely on the FileSystem dock.
+System Explorer is a Godot C# editor plugin that lets you organize and navigate your project from an architectural perspective instead of relying solely on the FileSystem dock.
 
 Create custom systems and folders, organize scripts and scene links, and navigate large codebases without changing your physical project structure.
+
+System Explorer also includes optional lightweight IDE-style tools for common C# workflows, such as script formatting and namespace refactoring, directly inside the Godot editor.
 
 ---
 
@@ -87,37 +90,68 @@ Organize your code around your game's architecture, not simply where files happe
 
 ## Organization
 
-- Create systems and folders
-- Create new scripts or add existing ones
-- Add multiple scripts or scenes in a single operation
-- Rename and remove items
-- Organize systems, folders, scripts, and scenes using drag & drop
-- Lock systems, folders, scripts, and scene links to prevent accidental drag & drop
-- Virtual organization that doesn't modify your project structure
+* Create systems and folders
+* Create new scripts or add existing ones
+* Add multiple scripts or scenes in a single operation
+* Rename and remove items
+* Organize systems, folders, scripts, and scenes using drag & drop
+* Lock systems, folders, scripts, and scene links to prevent accidental drag & drop
+* Virtual organization that does not modify your physical project structure
 
 ---
 
 ## Navigation
 
-- Architecture-focused project navigation
-- Filter scripts across every system
-- Open scripts with a single click
-- Open containing folder
-- Expansion state persistence
+* Architecture-focused project navigation
+* Filter scripts and scenes across every system
+* Open scripts and directly linked scenes with a single click
+* Follow scripts opened through Godot's Script Editor, FileSystem dock, or scenes
+* Open the physical folder path represented by a System Explorer folder
+* Preserve tree expansion state between editor sessions and common operations
 
 ---
 
 ## Scene Integration
 
-Connect your architecture directly to the scenes that use those scripts.
+Connect your architecture directly to the scenes that use your scripts.
 
-- Link scripts to their corresponding scenes
-- Single-click opens the script
-- Double-click opens both the script and its linked scene
-- Unlink scene associations
-- Automatic recovery if linked scenes are moved or deleted
+* Link scripts to their corresponding scenes
+* Add scenes directly to systems and folders
+* Single-click opens a script or direct scene link
+* Double-click a script to open both the script and its linked scene
+* Unlink scene associations
+* Automatic recovery if linked scenes are moved or deleted
 
 Scene links are stored in `systems.json` and persist between editor sessions.
+
+---
+
+## Quick Actions
+
+Optional **Quick Actions** add lightweight C# workflow tools directly inside Godot.
+
+Quick Actions are disabled by default and can be enabled through the plugin's Project Settings.
+
+### Beautify Scripts
+
+System Explorer integrates with the open-source **CSharpier** formatter.
+
+* Install or uninstall CSharpier directly from the Godot editor
+* Format individual C# scripts
+* Format every script inside a system or folder
+* Press **Ctrl + B** to format the currently active script
+* Preserve editor focus, caret position, scroll position, and the active script where possible
+
+### Refactor Namespace
+
+Rename or add namespaces without leaving Godot.
+
+* Change or add the namespace of an individual C# script
+* Run namespace refactoring across an entire system or folder
+* Update related `using` directives and namespace references
+* Preserve the active editor context during batch operations
+
+> Automated refactoring can affect multiple project files. Reviewing changes before committing them is recommended.
 
 ---
 
@@ -125,18 +159,19 @@ Scene links are stored in `systems.json` and persist between editor sessions.
 
 Several quality-of-life features help speed up common workflows:
 
-- Press **Enter** to confirm dialogs and create new systems
-- Click the **+** button inside the System Name field to create a system
-- Context menus with optional icons
-- Project Settings support for plugin options
-- Script tooltips
-- **Double-click** systems and folders to expand or collapse them
-- **Ctrl + Click** expands or collapses systems and folders with a single click
-- **Ctrl + Shift** collapses the entire tree when a system or folder is selected
-- **Middle Mouse Button** while hovering an item locks or unlocks it
-- **Ctrl + L** locks or unlocks the selected item
-- **Ctrl + Delete** opens the delete dialog
-- Expansion state is automatically preserved between common operations
+* Press **Enter** to confirm dialogs and create new systems
+* Click the **+** button inside the System Name field to create a system
+* Context-menu actions organized into **New**, **Add**, and optional **Quick Actions** submenus
+* Project Settings support for plugin options
+* Script tooltips
+* **Double-click** systems and folders to expand or collapse them
+* **Ctrl + Click** expands or collapses systems and folders with a single click
+* **Ctrl + Shift** collapses the entire tree when a system or folder is selected
+* **Middle Mouse Button** while hovering an item locks or unlocks it
+* **Ctrl + L** locks or unlocks the selected item
+* **Ctrl + Delete** opens the delete dialog
+* **Ctrl + B** formats the active script when CSharpier is installed
+* Expansion state and selection are preserved during common operations
 
 ---
 
@@ -177,7 +212,7 @@ Project
 
 ---
 
-## Script Templates
+# Script Templates
 
 New scripts are generated using:
 
@@ -202,10 +237,10 @@ using Godot;
 
 namespace MyNamespace
 {
-	public sealed class {{CLASS_NAME}}
-	{
+    public sealed class {{CLASS_NAME}}
+    {
 
-	}
+    }
 }
 ```
 
@@ -221,7 +256,7 @@ System Explorer stores its configuration in:
 addons/system_explorer/Resources/systems.json
 ```
 
-This file stores all System Explorer data, including systems, folders, scene links, and plugin state.
+This file stores all System Explorer data, including systems, folders, scripts, scene links, lock states, and plugin state.
 
 It can safely be committed to source control.
 
@@ -241,10 +276,13 @@ They typically disappear after rebuilding or reopening the project.
 
 # Future Ideas
 
-- Multiple architecture views
-- Custom icons
-- More C# workflow tools
-- Lightweight autocomplete suggestions in script editor
+* System notes and TODO descriptions
+* Customizable keyboard shortcuts
+* Multiple architecture views
+* Custom icons
+* Additional C# workflow and refactoring tools
+* Lightweight autocomplete suggestions in the Script Editor
+* Faster navigation between scripts and the scenes that use them
 
 ---
 
