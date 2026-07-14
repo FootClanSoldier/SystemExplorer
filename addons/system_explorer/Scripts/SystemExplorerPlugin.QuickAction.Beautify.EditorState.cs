@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using Godot;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
 {

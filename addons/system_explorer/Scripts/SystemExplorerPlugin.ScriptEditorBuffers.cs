@@ -4,24 +4,19 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
 {
 	#region Shared Script Editor Buffers
 
-	private readonly struct OpenScriptEditorBuffer
-	{
-		public OpenScriptEditorBuffer(string path, TextEdit textEditor)
-		{
-			Path = NormalizeScriptPath(path);
-			TextEditor = textEditor;
-		}
-
-		public string Path { get; }
-		public TextEdit TextEditor { get; }
-	}
-
 	private static readonly UTF8Encoding Utf8NoBomEncoding = new(false);
+	private static readonly ScriptEditorBufferLocator OpenScriptEditorBufferLocator = new(
+		NormalizeScriptPath,
+		ReadTextFile,
+		ScriptTextsMatchForDiskVerification,
+		FileAccess.FileExists
+	);
 
 	private static string ReadTextFile(string path)
 	{
@@ -295,137 +290,15 @@ public partial class SystemExplorerPlugin
 		out string unsafeOpenScriptList
 	)
 	{
-		unsafeOpenScriptList = "";
-		Dictionary<string, OpenScriptEditorBuffer> result = new(StringComparer.OrdinalIgnoreCase);
+		ScriptEditorBufferLookupResult lookupResult =
+			OpenScriptEditorBufferLocator.LocateByScriptTextsWithoutActivation(
+				EditorInterface.Singleton?.GetScriptEditor(),
+				originalTextsByPath,
+				updatedTextsByPath
+			);
 
-		if (
-			originalTextsByPath == null
-			|| updatedTextsByPath == null
-			|| updatedTextsByPath.Count == 0
-		)
-			return result;
-
-		HashSet<string> targetPaths = updatedTextsByPath
-			.Keys.Where(path => !string.IsNullOrWhiteSpace(path))
-			.Select(NormalizeScriptPath)
-			.ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-		if (targetPaths.Count == 0)
-			return result;
-
-		ScriptEditor scriptEditor = EditorInterface.Singleton?.GetScriptEditor();
-
-		if (scriptEditor == null)
-			return result;
-
-		HashSet<string> openTargetPaths = GetOpenScriptPaths(scriptEditor, targetPaths);
-		HashSet<TextEdit> usedTextEditors = new();
-
-		Script currentScript = scriptEditor.GetCurrentScript();
-		string currentScriptPath = NormalizeScriptPath(currentScript?.ResourcePath);
-
-		if (targetPaths.Contains(currentScriptPath))
-		{
-			ScriptEditorBase currentEditor = scriptEditor.GetCurrentEditor();
-
-			if (currentEditor?.GetBaseEditor() is TextEdit currentTextEditor)
-				AddOpenScriptEditorBuffer(
-					result,
-					usedTextEditors,
-					currentScriptPath,
-					currentTextEditor
-				);
-		}
-
-		List<TextEdit> openTextEditors = GetOpenScriptTextEditors(scriptEditor);
-		List<string> unsafeOpenScripts = new();
-
-		List<string> pathsToMatch = openTargetPaths
-			.Concat(targetPaths)
-			.Distinct(StringComparer.OrdinalIgnoreCase)
-			.ToList();
-
-		foreach (string targetPath in pathsToMatch)
-		{
-			if (result.ContainsKey(targetPath))
-				continue;
-
-			if (
-				!originalTextsByPath.TryGetValue(targetPath, out string originalText)
-				|| !updatedTextsByPath.TryGetValue(targetPath, out string updatedText)
-			)
-			{
-				if (openTargetPaths.Contains(targetPath))
-					unsafeOpenScripts.Add(targetPath);
-
-				continue;
-			}
-
-			List<TextEdit> matchingEditors = openTextEditors
-				.Where(textEditor =>
-					textEditor != null
-					&& !usedTextEditors.Contains(textEditor)
-					&& TextEditorMatchesScriptTexts(
-						textEditor,
-						targetPath,
-						originalTextsByPath,
-						updatedTextsByPath
-					)
-				)
-				.ToList();
-
-			if (matchingEditors.Count == 1)
-			{
-				TextEdit matchingEditor = matchingEditors[0];
-				int matchingPathCount = pathsToMatch.Count(path =>
-					!result.ContainsKey(path)
-					&& TextEditorMatchesScriptTexts(
-						matchingEditor,
-						path,
-						originalTextsByPath,
-						updatedTextsByPath
-					)
-				);
-
-				if (matchingPathCount == 1)
-				{
-					AddOpenScriptEditorBuffer(result, usedTextEditors, targetPath, matchingEditor);
-					continue;
-				}
-			}
-
-			if (matchingEditors.Count > 0 || openTargetPaths.Contains(targetPath))
-				unsafeOpenScripts.Add(targetPath);
-		}
-
-		unsafeOpenScriptList = string.Join(
-			"\n",
-			unsafeOpenScripts.Distinct(StringComparer.OrdinalIgnoreCase)
-		);
-		return result;
-	}
-
-	private static bool TextEditorMatchesScriptTexts(
-		TextEdit textEditor,
-		string scriptPath,
-		Dictionary<string, string> originalTextsByPath,
-		Dictionary<string, string> updatedTextsByPath
-	)
-	{
-		if (textEditor == null || string.IsNullOrWhiteSpace(scriptPath))
-			return false;
-
-		if (
-			!originalTextsByPath.TryGetValue(scriptPath, out string originalText)
-			|| !updatedTextsByPath.TryGetValue(scriptPath, out string updatedText)
-		)
-		{
-			return false;
-		}
-
-		string editorText = textEditor.Text ?? "";
-		return ScriptTextsMatchForDiskVerification(editorText, originalText)
-			|| ScriptTextsMatchForDiskVerification(editorText, updatedText);
+		unsafeOpenScriptList = string.Join("\n", lookupResult.UnsafeOpenScriptPaths);
+		return lookupResult.OpenEditorsByPath;
 	}
 
 	private static bool TryGetOpenScriptEditorsByIndexedScriptEditorPaths(
@@ -436,352 +309,43 @@ public partial class SystemExplorerPlugin
 		HashSet<string> requiredPaths = null
 	)
 	{
-		failureMessage = "";
-		openEditorsByPath = new Dictionary<string, OpenScriptEditorBuffer>(
-			StringComparer.OrdinalIgnoreCase
-		);
-
-		if (scriptEditor == null || targetPaths == null || targetPaths.Count == 0)
-			return true;
-
-		Godot.Collections.Array<Script> openScripts = scriptEditor.GetOpenScripts();
-		Godot.Collections.Array<ScriptEditorBase> openScriptEditors =
-			scriptEditor.GetOpenScriptEditors();
-
-		HashSet<TextEdit> usedTextEditors = new();
-
-		AddCurrentOpenScriptEditorBufferIfTarget(
-			scriptEditor,
-			targetPaths,
-			openEditorsByPath,
-			usedTextEditors
-		);
-
-		if (openScripts.Count == openScriptEditors.Count)
-		{
-			for (int i = 0; i < openScripts.Count; i++)
-			{
-				Script openScript = openScripts[i];
-
-				if (openScript == null)
-					continue;
-
-				string scriptPath = NormalizeScriptPath(openScript.ResourcePath);
-
-				if (!targetPaths.Contains(scriptPath))
-					continue;
-
-				if (!scriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-					continue;
-
-				Control baseEditor = openScriptEditors[i]?.GetBaseEditor();
-
-				bool isRequiredScript = requiredPaths?.Contains(scriptPath) == true;
-
-				if (baseEditor is not TextEdit textEditor)
-				{
-					if (isRequiredScript)
-					{
-						failureMessage =
-							$"Refactor Namespace cancelled: System Explorer could not access the open script editor buffer for '{scriptPath}' before scanning namespace usages.";
-						return false;
-					}
-
-					continue;
-				}
-
-				if (usedTextEditors.Contains(textEditor))
-				{
-					if (isRequiredScript)
-					{
-						failureMessage =
-							$"Refactor Namespace cancelled: System Explorer found the same open script editor buffer for more than one script while preparing namespace refactor '{scriptPath}'.";
-						return false;
-					}
-
-					continue;
-				}
-
-				if (
-					openEditorsByPath.TryGetValue(
-						scriptPath,
-						out OpenScriptEditorBuffer existingOpenEditor
-					)
-					&& existingOpenEditor.TextEditor != textEditor
-				)
-				{
-					if (isRequiredScript)
-					{
-						failureMessage =
-							$"Refactor Namespace cancelled: System Explorer found duplicate open script editor buffers for '{scriptPath}'. Save/reopen it before refactoring.";
-						return false;
-					}
-
-					continue;
-				}
-
-				if (
-					!IndexedScriptEditorPairLooksSafe(
-						openScript,
-						scriptPath,
-						textEditor,
-						out string unsafePairReason
-					)
-				)
-				{
-					if (isRequiredScript)
-					{
-						failureMessage = unsafePairReason;
-						return false;
-					}
-
-					continue;
-				}
-
-				openEditorsByPath[scriptPath] = new OpenScriptEditorBuffer(scriptPath, textEditor);
-				usedTextEditors.Add(textEditor);
-			}
-
-			return true;
-		}
-
-		AddOpenScriptEditorBuffersByDiskText(
-			scriptEditor,
-			targetPaths,
-			openEditorsByPath,
-			usedTextEditors
-		);
-
-		List<string> unmatchedRequiredOpenScripts = GetUnmatchedOpenScriptPaths(
-			scriptEditor,
-			requiredPaths,
-			openEditorsByPath
-		);
-
-		if (unmatchedRequiredOpenScripts.Count > 0)
-		{
-			failureMessage =
-				$"Refactor Namespace cancelled: System Explorer could not safely match required open script editor buffer(s) without changing the active editor tab. Save/reopen before refactoring:\n{string.Join("\n", unmatchedRequiredOpenScripts)}";
-			return false;
-		}
-
-		return true;
-	}
-
-	private static void AddCurrentOpenScriptEditorBufferIfTarget(
-		ScriptEditor scriptEditor,
-		HashSet<string> targetPaths,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-		HashSet<TextEdit> usedTextEditors
-	)
-	{
-		if (
-			scriptEditor == null
-			|| targetPaths == null
-			|| targetPaths.Count == 0
-			|| openEditorsByPath == null
-			|| usedTextEditors == null
-		)
-		{
-			return;
-		}
-
-		Script currentScript = scriptEditor.GetCurrentScript();
-		string currentScriptPath = NormalizeScriptPath(currentScript?.ResourcePath);
-
-		if (
-			string.IsNullOrWhiteSpace(currentScriptPath)
-			|| !targetPaths.Contains(currentScriptPath)
-			|| openEditorsByPath.ContainsKey(currentScriptPath)
-		)
-		{
-			return;
-		}
-
-		ScriptEditorBase currentEditor = scriptEditor.GetCurrentEditor();
-		Control baseEditor = currentEditor?.GetBaseEditor();
-
-		if (
-			baseEditor is TextEdit currentTextEditor
-			&& !usedTextEditors.Contains(currentTextEditor)
-		)
-			AddOpenScriptEditorBuffer(
-				openEditorsByPath,
-				usedTextEditors,
-				currentScriptPath,
-				currentTextEditor
-			);
-	}
-
-	private static void AddOpenScriptEditorBuffersByDiskText(
-		ScriptEditor scriptEditor,
-		HashSet<string> targetPaths,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-		HashSet<TextEdit> usedTextEditors
-	)
-	{
-		if (
-			scriptEditor == null
-			|| targetPaths == null
-			|| openEditorsByPath == null
-			|| usedTextEditors == null
-		)
-		{
-			return;
-		}
-
-		List<TextEdit> openTextEditors = GetOpenScriptTextEditors(scriptEditor);
-		Dictionary<string, string> diskTextsByPath = targetPaths
-			.Where(path =>
-				!string.IsNullOrWhiteSpace(path)
-				&& path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-				&& FileAccess.FileExists(path)
-			)
-			.Distinct(StringComparer.OrdinalIgnoreCase)
-			.ToDictionary(NormalizeScriptPath, ReadTextFile, StringComparer.OrdinalIgnoreCase);
-
-		foreach (string targetPath in diskTextsByPath.Keys)
-		{
-			if (openEditorsByPath.ContainsKey(targetPath))
-				continue;
-
-			string diskText = diskTextsByPath[targetPath];
-
-			List<TextEdit> matchingEditors = openTextEditors
-				.Where(textEditor =>
-					textEditor != null
-					&& !usedTextEditors.Contains(textEditor)
-					&& ScriptTextsMatchForDiskVerification(textEditor.Text ?? "", diskText)
-				)
-				.ToList();
-
-			if (matchingEditors.Count != 1)
-				continue;
-
-			TextEdit matchingEditor = matchingEditors[0];
-			int matchingPathCount = diskTextsByPath.Count(pair =>
-				!openEditorsByPath.ContainsKey(pair.Key)
-				&& ScriptTextsMatchForDiskVerification(matchingEditor.Text ?? "", pair.Value)
+		ScriptEditorBufferLookupResult lookupResult =
+			OpenScriptEditorBufferLocator.LocateByIndexedScriptEditorPathsWithoutActivation(
+				scriptEditor,
+				targetPaths,
+				requiredPaths
 			);
 
-			if (matchingPathCount != 1)
-				continue;
-
-			AddOpenScriptEditorBuffer(
-				openEditorsByPath,
-				usedTextEditors,
-				targetPath,
-				matchingEditor
-			);
-		}
+		openEditorsByPath = lookupResult.OpenEditorsByPath;
+		failureMessage = BuildScriptEditorBufferLookupFailureMessage(lookupResult);
+		return lookupResult.Success;
 	}
 
-	private static List<string> GetUnmatchedOpenScriptPaths(
-		ScriptEditor scriptEditor,
-		HashSet<string> targetPaths,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath
+	private static string BuildScriptEditorBufferLookupFailureMessage(
+		ScriptEditorBufferLookupResult lookupResult
 	)
 	{
-		if (scriptEditor == null || targetPaths == null || targetPaths.Count == 0)
-			return new List<string>();
+		if (lookupResult == null)
+			return "";
 
-		return GetOpenScriptPaths(scriptEditor, targetPaths)
-			.Where(path => openEditorsByPath == null || !openEditorsByPath.ContainsKey(path))
-			.Distinct(StringComparer.OrdinalIgnoreCase)
-			.ToList();
-	}
+		string scriptPath = lookupResult.FailurePath;
 
-	private static bool IndexedScriptEditorPairLooksSafe(
-		Script openScript,
-		string scriptPath,
-		TextEdit textEditor,
-		out string failureMessage
-	)
-	{
-		failureMessage = "";
-
-		if (openScript == null || textEditor == null || string.IsNullOrWhiteSpace(scriptPath))
+		return lookupResult.Failure switch
 		{
-			failureMessage =
-				"Refactor Namespace cancelled: an open script editor buffer could not be matched safely before scanning namespace usages.";
-			return false;
-		}
-
-		string editorText = textEditor.Text ?? "";
-		string diskText = ReadTextFile(scriptPath);
-
-		if (textEditor.GetVersion() == textEditor.GetSavedVersion())
-		{
-			if (ScriptTextsMatchForDiskVerification(editorText, diskText))
-				return true;
-
-			failureMessage =
-				$"Refactor Namespace cancelled: the open editor buffer for '{scriptPath}' does not match the file on disk before scanning namespace usages. Save/reopen it before refactoring.";
-			return false;
-		}
-
-		return true;
-	}
-
-	private static HashSet<string> GetOpenScriptPaths(
-		ScriptEditor scriptEditor,
-		HashSet<string> targetPaths
-	)
-	{
-		HashSet<string> result = new(StringComparer.OrdinalIgnoreCase);
-
-		if (scriptEditor == null || targetPaths == null || targetPaths.Count == 0)
-			return result;
-
-		foreach (Script openScript in scriptEditor.GetOpenScripts())
-		{
-			if (openScript == null)
-				continue;
-
-			string scriptPath = NormalizeScriptPath(openScript.ResourcePath);
-
-			if (targetPaths.Contains(scriptPath))
-				result.Add(scriptPath);
-		}
-
-		return result;
-	}
-
-	private static List<TextEdit> GetOpenScriptTextEditors(ScriptEditor scriptEditor)
-	{
-		List<TextEdit> result = new();
-
-		if (scriptEditor == null)
-			return result;
-
-		foreach (ScriptEditorBase scriptEditorBase in scriptEditor.GetOpenScriptEditors())
-		{
-			Control baseEditor = scriptEditorBase?.GetBaseEditor();
-
-			if (baseEditor is TextEdit textEditor && !result.Contains(textEditor))
-				result.Add(textEditor);
-		}
-
-		return result;
-	}
-
-	private static void AddOpenScriptEditorBuffer(
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-		HashSet<TextEdit> usedTextEditors,
-		string scriptPath,
-		TextEdit textEditor
-	)
-	{
-		if (openEditorsByPath == null || usedTextEditors == null || textEditor == null)
-			return;
-
-		string normalizedPath = NormalizeScriptPath(scriptPath);
-
-		if (string.IsNullOrWhiteSpace(normalizedPath))
-			return;
-
-		openEditorsByPath[normalizedPath] = new OpenScriptEditorBuffer(normalizedPath, textEditor);
-		usedTextEditors.Add(textEditor);
+			ScriptEditorBufferLookupFailure.RequiredEditorUnavailable =>
+				$"Refactor Namespace cancelled: System Explorer could not access the open script editor buffer for '{scriptPath}' before scanning namespace usages.",
+			ScriptEditorBufferLookupFailure.RequiredEditorAlreadyUsed =>
+				$"Refactor Namespace cancelled: System Explorer found the same open script editor buffer for more than one script while preparing namespace refactor '{scriptPath}'.",
+			ScriptEditorBufferLookupFailure.DuplicateEditorForPath =>
+				$"Refactor Namespace cancelled: System Explorer found duplicate open script editor buffers for '{scriptPath}'. Save/reopen it before refactoring.",
+			ScriptEditorBufferLookupFailure.UnsafeIndexedPair =>
+				"Refactor Namespace cancelled: an open script editor buffer could not be matched safely before scanning namespace usages.",
+			ScriptEditorBufferLookupFailure.SavedEditorDiskMismatch =>
+				$"Refactor Namespace cancelled: the open editor buffer for '{scriptPath}' does not match the file on disk before scanning namespace usages. Save/reopen it before refactoring.",
+			ScriptEditorBufferLookupFailure.UnmatchedRequiredOpenScripts =>
+				$"Refactor Namespace cancelled: System Explorer could not safely match required open script editor buffer(s) without changing the active editor tab. Save/reopen before refactoring:\n{string.Join("\n", lookupResult.UnmatchedRequiredPaths)}",
+			_ => "",
+		};
 	}
 
 	private static bool TryFindUnmatchedOpenScriptEditorUsingReference(

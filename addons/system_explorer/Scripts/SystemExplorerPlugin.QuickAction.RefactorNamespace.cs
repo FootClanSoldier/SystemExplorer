@@ -3,15 +3,40 @@ using Godot;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using SystemExplorer.QuickActions.RefactorNamespace;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
 {
 	#region Quick Actions - Refactor Namespace
 	private static readonly Vector2I RefactorNamespaceDialogSize = new(520, 285);
+	private static readonly NamespaceRefactorScopeResolver RefactorNamespaceScopeResolver = new(
+		NormalizeScriptPath,
+		path => ProjectSettings.GlobalizePath(path),
+		path => ProjectSettings.LocalizePath(path)
+	);
+	private static readonly NamespaceRefactorSnapshotLoader RefactorNamespaceSnapshotLoader = new(
+		NormalizeScriptPath,
+		FileAccess.FileExists,
+		ReadTextFile
+	);
+	private static readonly NamespaceRefactorPreparationService
+		RefactorNamespacePreparationService = new(
+			RefactorNamespaceScopeResolver,
+			RefactorNamespaceSnapshotLoader
+		);
 
 	private Dictionary<string, string> _deferredRefactorNamespaceOriginalTextsByPath = new(
 		StringComparer.OrdinalIgnoreCase
 	);
+
+	private static string ReadNamespaceFromScript(string scriptPath)
+	{
+		if (!FileAccess.FileExists(scriptPath))
+			return "";
+
+		return NamespaceTextRewriter.GetNamespaceFromText(ReadTextFile(scriptPath));
+	}
 
 	private void OpenRefactorNamespaceDialog()
 	{
@@ -130,7 +155,7 @@ public partial class SystemExplorerPlugin
 		{
 			DebugLogOperation("Refactor Namespace Add Confirmed", newNamespace);
 
-			if (!IsValidNamespaceName(newNamespace))
+			if (!NamespaceTextRewriter.IsValidNamespaceName(newNamespace))
 			{
 				DebugLog(
                     "Refactor Namespace add cancelled: new namespace must be a valid C# namespace name."
@@ -151,7 +176,7 @@ public partial class SystemExplorerPlugin
 
 		DebugLogOperation("Refactor Namespace Confirmed", $"{oldNamespace} -> {newNamespace}");
 
-		if (!IsValidNamespaceName(oldNamespace) || !IsValidNamespaceName(newNamespace))
+		if (!NamespaceTextRewriter.IsValidNamespaceName(oldNamespace) || !NamespaceTextRewriter.IsValidNamespaceName(newNamespace))
 		{
 			GD.PushWarning(
                 "Refactor Namespace cancelled: namespace values must be valid C# namespace names."
@@ -435,59 +460,43 @@ public partial class SystemExplorerPlugin
 		selectedScriptPath = "";
 		originalTextsByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		pendingWrites = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		NamespaceRefactorPreparationResult preparationResult =
+			RefactorNamespacePreparationService.PrepareAdd(scriptPaths, newNamespace);
 
-		foreach (
-			string scriptPath in scriptPaths
-				.Where(path => !string.IsNullOrWhiteSpace(path))
-				.Select(NormalizeScriptPath)
-				.Distinct(StringComparer.OrdinalIgnoreCase)
-		)
-		{
-			if (!FileAccess.FileExists(scriptPath))
-			{
-				DebugLog($"Refactor Namespace add skipped missing script '{scriptPath}'.");
-				continue;
-			}
+		foreach (string scriptPath in preparationResult.SnapshotLoadResult.MissingPaths)
+			DebugLog($"Refactor Namespace add skipped missing script '{scriptPath}'.");
 
-			string scriptText = ReadTextFile(scriptPath);
+		foreach (string scriptPath in preparationResult.SnapshotLoadResult.FailedPaths)
+			DebugLog($"Refactor Namespace add skipped unreadable script '{scriptPath}'.");
 
-			if (!string.IsNullOrWhiteSpace(GetNamespaceFromText(scriptText)))
-			{
-				DebugLog(
-					$"Refactor Namespace add skipped '{scriptPath}' because it already has a namespace."
-				);
-				continue;
-			}
+		NamespaceRefactorPlanResult result = preparationResult.PlanResult;
 
-			string updatedScriptText = AddNamespaceBlockToScriptText(
-				scriptText,
-				newNamespace,
-				out bool namespaceAdded
-			);
-
-			if (!namespaceAdded)
-			{
-				DebugLog(
-					$"Refactor Namespace add skipped '{scriptPath}' because the namespace block could not be inserted."
-				);
-				continue;
-			}
-
-			if (string.IsNullOrWhiteSpace(selectedScriptPath))
-				selectedScriptPath = scriptPath;
-
-			originalTextsByPath[scriptPath] = scriptText;
-			pendingWrites[scriptPath] = updatedScriptText;
-		}
-
-		if (pendingWrites.Count == 0)
+		foreach (string scriptPath in result.AlreadyNamespacedPaths)
 		{
 			DebugLog(
-                "Refactor Namespace add cancelled: no scripts without namespace could be updated."
+				$"Refactor Namespace add skipped '{scriptPath}' because it already has a namespace."
 			);
+		}
+
+		foreach (string scriptPath in result.NamespaceAddFailedPaths)
+		{
+			DebugLog(
+				$"Refactor Namespace add skipped '{scriptPath}' because the namespace block could not be inserted."
+			);
+		}
+
+		if (!preparationResult.Success)
+		{
+			DebugLog("Refactor Namespace add cancelled: no scripts without namespace could be updated.");
 			return false;
 		}
 
+		CopyNamespaceRefactorPlanToPendingWrites(
+			result.Plan,
+			out selectedScriptPath,
+			out originalTextsByPath,
+			out pendingWrites
+		);
 		return true;
 	}
 
@@ -675,81 +684,84 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		string selectedEntry = GetEntryFromMetadata(metadata);
-		selectedScriptPath = NormalizeScriptPath(GetScriptPathFromEntry(selectedEntry));
+		string targetScriptPath = NormalizeScriptPath(GetScriptPathFromEntry(selectedEntry));
 
-		if (!FileAccess.FileExists(selectedScriptPath))
+		if (!FileAccess.FileExists(targetScriptPath))
 		{
-			OpenMissingScriptDialog(selectedEntry, selectedScriptPath);
+			OpenMissingScriptDialog(selectedEntry, targetScriptPath);
 			return false;
 		}
 
-		string selectedScriptText = ReadTextFile(selectedScriptPath);
-		string selectedScriptNamespace = GetNamespaceFromText(selectedScriptText);
-
-		if (string.IsNullOrWhiteSpace(selectedScriptNamespace))
-		{
-			GD.PushWarning(
-				$"Refactor Namespace cancelled: no namespace declaration was found in '{selectedScriptPath}'."
-			);
-			return false;
-		}
-
-		if (selectedScriptNamespace != oldNamespace)
-		{
-			GD.PushWarning(
-				$"Refactor Namespace cancelled: selected script namespace is '{selectedScriptNamespace}', not '{oldNamespace}'."
-			);
-			return false;
-		}
-
-		string updatedSelectedScriptText = ReplaceNamespaceDeclaration(
-			selectedScriptText,
-			oldNamespace,
-			newNamespace,
-			out bool namespaceChanged
-		);
-
-		if (!namespaceChanged)
-		{
-			GD.PushWarning(
-				$"Refactor Namespace cancelled: namespace declaration could not be updated in '{selectedScriptPath}'."
-			);
-			return false;
-		}
-
-		originalTextsByPath[selectedScriptPath] = selectedScriptText;
-		pendingWrites[selectedScriptPath] = updatedSelectedScriptText;
-
-		foreach (string linkedScriptPath in GetLinkedCSharpFilePaths())
-		{
-			string scriptPath = NormalizeScriptPath(linkedScriptPath);
-
-			if (!FileAccess.FileExists(scriptPath))
-				continue;
-
-			string scriptText =
-				scriptPath == selectedScriptPath
-					? updatedSelectedScriptText
-					: ReadTextFile(scriptPath);
-
-			string updatedScriptText = ReplaceUsingStatements(
-				scriptText,
+		NamespaceRefactorPreparationResult preparationResult =
+			RefactorNamespacePreparationService.PrepareReplace(
+				new[] { targetScriptPath },
+				GetLinkedCSharpFilePaths(),
+				GetRefactorNamespaceProjectCSharpFilePaths(),
 				oldNamespace,
-				newNamespace,
-				out bool usingChanged
+				newNamespace
 			);
 
-			if (!usingChanged)
-				continue;
-
-			if (!originalTextsByPath.ContainsKey(scriptPath))
-				originalTextsByPath[scriptPath] =
-					scriptPath == selectedScriptPath ? selectedScriptText : scriptText;
-
-			pendingWrites[scriptPath] = updatedScriptText;
+		if (!preparationResult.SnapshotLoadResult.SnapshotsByPath.ContainsKey(targetScriptPath))
+		{
+			OpenMissingScriptDialog(selectedEntry, targetScriptPath);
+			return false;
 		}
 
+		NamespaceRefactorPlanResult result = preparationResult.PlanResult;
+
+		if (!preparationResult.Success)
+		{
+			if (string.IsNullOrWhiteSpace(result.FirstTargetNamespace))
+			{
+				GD.PushWarning(
+					$"Refactor Namespace cancelled: no namespace declaration was found in '{targetScriptPath}'."
+				);
+			}
+			else if (result.FirstTargetNamespace != oldNamespace)
+			{
+				GD.PushWarning(
+					$"Refactor Namespace cancelled: selected script namespace is '{result.FirstTargetNamespace}', not '{oldNamespace}'."
+				);
+			}
+			else
+			{
+				GD.PushWarning(
+					$"Refactor Namespace cancelled: namespace declaration could not be updated in '{targetScriptPath}'."
+				);
+			}
+
+			return false;
+		}
+
+		CopyNamespaceRefactorPlanToPendingWrites(
+			result.Plan,
+			out selectedScriptPath,
+			out originalTextsByPath,
+			out pendingWrites
+		);
 		return true;
+	}
+
+	private static void CopyNamespaceRefactorPlanToPendingWrites(
+		NamespaceRefactorPlan plan,
+		out string selectedScriptPath,
+		out Dictionary<string, string> originalTextsByPath,
+		out Dictionary<string, string> pendingWrites
+	)
+	{
+		selectedScriptPath = plan?.SelectedScriptPath ?? "";
+		originalTextsByPath = plan == null
+			? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+			: new Dictionary<string, string>(
+				plan.OriginalTextsByPath,
+				StringComparer.OrdinalIgnoreCase
+			);
+		pendingWrites = plan == null
+			? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+			: new Dictionary<string, string>(
+				plan.PendingWrites,
+				StringComparer.OrdinalIgnoreCase
+			);
 	}
 
 	private bool TryAutosaveOpenRefactorNamespaceCandidateScriptsBeforeBuild(
@@ -989,31 +1001,20 @@ public partial class SystemExplorerPlugin
 
 	private HashSet<string> GetRefactorNamespaceCandidateScriptPaths(string metadata)
 	{
-		HashSet<string> result = new(StringComparer.OrdinalIgnoreCase);
+		List<string> targetScriptPaths = new();
 
 		if (!string.IsNullOrWhiteSpace(metadata) && metadata.StartsWith("script::"))
 		{
 			string selectedEntry = GetEntryFromMetadata(metadata);
-			string selectedScriptPath = NormalizeScriptPath(GetScriptPathFromEntry(selectedEntry));
+			targetScriptPaths.Add(GetScriptPathFromEntry(selectedEntry));
+		}
 
-			if (
-				!string.IsNullOrWhiteSpace(selectedScriptPath)
-				&& selectedScriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+		return RefactorNamespaceScopeResolver
+			.CombineScriptPaths(
+				targetScriptPaths,
+				GetRefactorNamespaceProjectCSharpFilePaths()
 			)
-			{
-				result.Add(selectedScriptPath);
-			}
-		}
-
-		foreach (string linkedScriptPath in GetLinkedCSharpFilePaths())
-		{
-			string scriptPath = NormalizeScriptPath(linkedScriptPath);
-
-			if (!string.IsNullOrWhiteSpace(scriptPath))
-				result.Add(scriptPath);
-		}
-
-		return result;
+			.ToHashSet(StringComparer.OrdinalIgnoreCase);
 	}
 
 	private void DebugDumpRefactorNamespaceEditorState(string metadata, string label)
@@ -1117,15 +1118,12 @@ public partial class SystemExplorerPlugin
 
 	private IEnumerable<string> GetLinkedCSharpFilePaths()
 	{
-		return _systems
+		IEnumerable<string> linkedScriptPaths = _systems
 			.Values.SelectMany(entries => entries)
 			.Where(IsScriptEntry)
-			.Select(GetScriptPathFromEntry)
-			.Where(path =>
-				!string.IsNullOrWhiteSpace(path)
-				&& path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-			)
-			.Distinct(StringComparer.OrdinalIgnoreCase);
+			.Select(GetScriptPathFromEntry);
+
+		return RefactorNamespaceScopeResolver.NormalizeScriptPaths(linkedScriptPaths);
 	}
 
 	private static bool IsScriptEntry(string entry)

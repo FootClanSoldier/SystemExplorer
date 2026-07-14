@@ -38,10 +38,11 @@ SystemExplorerPlugin.ScriptOpenPosition.cs
 - Releases tree focus after navigation when requested and logs skipped/failed top-reset attempts through DebugLog(...).
 
 SystemExplorerPlugin.ScriptEditorBuffers.cs
-- Contains shared helpers for working with Godot’s open script editor buffers and script text files.
-- Handles script path normalization, global file path resolution, safe text file reading/writing, locating open script editor buffers by activating script paths when explicitly needed, and applying updated text back to open editor buffers.
-- Provides non-activating open-buffer matching for batch/preserve-context operations, including current-editor fallback, disk-text matching when Godot's open script/editor lists cannot be index-matched, and defensive detection of unmatched open buffers that still contain namespace using references.
-- Shared by Refactor Namespace and Beautify so editor-buffer safety logic is centralized instead of living inside a feature-specific Quick Action partial.
+- Contains shared wrappers and orchestration for working with Godot’s open script editor buffers and script text files.
+- Handles script path normalization, global file path resolution, safe text file reading/writing, locating open script editor buffers by activating script paths when explicitly needed, autosaving and applying updated text to open buffers, and refreshing changed Godot resources.
+- Keeps thin compatibility wrappers for non-activating lookup and delegates the matching implementation to EditorIntegration/ScriptEditing/ScriptEditorBufferLocator.cs.
+- Keeps Refactor Namespace-specific unmatched-using protection, operation-specific failure messages, payload handling, and the remaining shared buffer orchestration used by Refactor Namespace and Beautify.
+- Activating lookup, autosave, apply, file I/O, deferred payload handling, and editor/view-state responsibilities have not yet been extracted.
 
 SystemExplorerPlugin.ScriptEditorSync.cs
 - Handles synchronization between Godot's active Script Editor script and the System Explorer tree selection.
@@ -104,17 +105,6 @@ SystemExplorerPlugin.Settings.cs
 - Handles plugin Project Settings registration and reading configurable settings under addons/system_explorer/..
 - Contains settings-backed toggles for context menu icons and Quick Actions.
 
-SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
-- Handles the Quick Action flow for refactoring a selected script namespace.
-- Owns context/action entry points, dialog setup/confirmation, single-script orchestration, pending writes, write application, editor-buffer refresh, target script restoration for single-script operations, and operation diagnostics.
-- For batch namespace/add-namespace flows, relies on ScriptEditorSync batch context preservation and non-activating editor-buffer lookup rather than restoring the previously active script or tree selection after the batch.
-- Delegates shared script path normalization, text file reading/writing, Godot file refresh, and open editor-buffer handling to SystemExplorerPlugin.ScriptEditorBuffers.cs.
-- Delegates pure namespace/script-text parsing and rewrite helpers to SystemExplorerPlugin.QuickAction.RefactorNamespace.Text.cs.
-
-SystemExplorerPlugin.QuickAction.RefactorNamespace.Text.cs
-- Contains pure Refactor Namespace text helpers for namespace detection, namespace name validation, namespace declaration replacement, adding namespace blocks around scripts without namespaces, insertion-point parsing after top using directives, body indentation, and matching using-directive rewrites.
-- Keeps namespace/text parsing logic separate from dialog, tree, editor-state, and persistence orchestration.
-
 SystemExplorerPlugin.QuickAction.Beautify.cs
 - Handles the Quick Action flow for Beautify Script / Beautify Scripts.
 - Collects and validates single-script, active-editor script, and batch targets; stores pending beautify actions when CSharpier needs installation; and routes formatting through the shared CSharpier helpers.
@@ -134,7 +124,106 @@ SystemExplorerPlugin.QuickAction.CSharpier.cs
 - Runs CSharpier formatting through the cached command with fallback probing when a cached command becomes invalid.
 - Contains process execution helpers, command display/debug helpers, global tool path resolution, and CSharpier install/uninstall result parsing.
 
+SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
+- Handles the Quick Action flow for refactoring a selected script namespace and adding namespaces to selected scripts.
+- Owns context/action entry points, dialog setup/confirmation, metadata validation, plugin-data extraction, safe file reads, thin compatibility wrappers, write application, editor-buffer refresh, target script restoration for single-script operations, and operation diagnostics.
+- Owns the shared NamespaceRefactorScopeResolver, NamespaceRefactorSnapshotLoader, and NamespaceRefactorPreparationService instances, supplying small Godot path/file delegates only to the lower-level resolver and loader.
+- Converts plugin-owned linked entries and selected script metadata into raw path roles, while NamespaceRefactorPreparationService normalizes those roles, loads snapshots once, and delegates plan construction.
+- For single-script replacement, keeps the selected script as the only target, linked C# scripts as the using-reference candidates, and project-wide C# inventory as declaration-only candidates for full-versus-partial move detection.
+- For Add Namespace, keeps validation, save-first preflight, diagnostics, compatibility dictionary outputs, and safe apply in the plugin while preparation owns target normalization, snapshot loading, and BuildAddPlan(...).
+- Includes project-wide C# candidates in the single-operation save-first pre-scan so namespace inventory is based on current saved text.
+- Keeps ApplyRefactorNamespacePendingWrites(...) and all Godot editor integration responsible for safely applying completed plans.
+- Keeps CopyNamespaceRefactorPlanToPendingWrites(...) as a thin adapter from read-only NamespaceRefactorPlan dictionaries to the existing concrete Dictionary outputs.
+- For batch namespace/add-namespace flows, relies on ScriptEditorSync batch context preservation and non-activating editor-buffer lookup rather than restoring the previously active script or tree selection after the batch.
+- Delegates shared script path normalization, text file reading/writing, Godot file refresh, and open editor-buffer handling to SystemExplorerPlugin.ScriptEditorBuffers.cs.
+- Keeps the file-based ReadNamespaceFromScript(...) wrapper, which preserves the existing FileAccess existence check and safe ReadTextFile(...) path before delegating text parsing to NamespaceTextRewriter.
+
 SystemExplorerPlugin.QuickAction.RefactorNamespace.Batch.cs
 - Handles batch-specific Refactor Namespace behavior for System and Folder Quick Actions.
-- Collects scoped C# scripts, scans unique namespaces, detects scripts without namespaces, configures the batch apply UI, filters target scripts, and routes either namespace replacement or namespace insertion to the shared Refactor Namespace helpers.
-- Keeps batch flow separate from the core Refactor Namespace partial while shared editor-buffer and script text handling lives in SystemExplorerPlugin.ScriptEditorBuffers.cs.
+- Interprets System/Folder metadata, converts plugin entries into neutral NamespaceRefactorScriptEntry objects, configures the batch apply UI, filters targets, and orchestrates namespace replacement or namespace insertion.
+- Keeps thin compatibility wrappers for scoped targets and project inventory; those wrappers delegate folder matching, path normalization/deduplication, recursive project scanning, and linked-script fallback to NamespaceRefactorScopeResolver.
+- Passes ordered batch targets plus the same project-wide inventory as both using-reference and declaration candidates to NamespaceRefactorPreparationService.
+- Keeps missing/failed target logging, namespace rewrite failure logging, cancel messages, and completed-plan copying in the plugin while preparation owns snapshot/plan orchestration.
+- Keeps ReadRefactorNamespaceNamespacesByPath(...) as a thin wrapper around NamespaceRefactorPreparationService.ScanNamespaces(...), preserving the existing missing/failed debug messages and Dictionary return shape used by dialog setup.
+- Preserves existing batch UI, save-first preflight, editor-context preservation, and shared safe apply/editor-integration behavior.
+- Keeps batch flow separate from the core Refactor Namespace partial while shared editor-buffer and file text handling lives in SystemExplorerPlugin.ScriptEditorBuffers.cs.
+
+## Editor integration classes
+
+EditorIntegration/ScriptEditing/OpenScriptEditorBuffer.cs
+- Defines the internal immutable buffer reference model under SystemExplorer.EditorIntegration.ScriptEditing.
+- Stores an already-normalized script path together with its matched Godot TextEdit instance.
+- Does not normalize paths, perform matching, access files, or orchestrate editor operations.
+
+EditorIntegration/ScriptEditing/ScriptEditorBufferLookupResult.cs
+- Defines the small non-activating lookup result model and failure enum under SystemExplorer.EditorIntegration.ScriptEditing.
+- Carries matched buffers, unsafe text-match paths, unmatched required paths, and structured failure information without embedding Refactor Namespace-specific warning text.
+- Preserves the existing case-insensitive buffer dictionary shape used by compatibility wrappers.
+
+EditorIntegration/ScriptEditing/ScriptEditorBufferLocator.cs
+- Owns the non-activating open-buffer matching previously implemented in SystemExplorerPlugin.ScriptEditorBuffers.cs.
+- Preserves current-editor-first matching, original/updated text matching, unique-text ambiguity checks, used-TextEdit protection, the existing indexed GetOpenScripts()/GetOpenScriptEditors() relation, saved-buffer disk verification, and the disk-text fallback when list counts differ.
+- Receives path normalization, disk-text reading, text comparison, and file-existence behavior through injected delegates so the existing verified plugin behavior remains unchanged.
+- Does not activate scripts, call EditorInterface.EditScript(...), autosave or write files, apply text, change editor focus/view state, manage ScriptEditorSync or batch context, inspect namespaces/usings, show UI, or mutate the System Explorer tree.
+
+##Refactored classes
+
+QuickActions/RefactorNamespace/NamespaceTextRewriter.cs
+- Defines the standalone internal static class SystemExplorer.QuickActions.RefactorNamespace.NamespaceTextRewriter.
+- Owns pure C# text logic for namespace name validation, namespace detection, namespace declaration replacement, adding namespace blocks around scripts without namespaces, replacing matching using directives, and adding a normal using directive after a matching existing using without duplicates.
+- Privately owns insertion-point calculation after top using/global using directives and namespace-body indentation.
+- Has no filesystem, Godot editor-state, dialog, batch orchestration, tree, persistence, or SystemExplorerPlugin dependency.
+
+
+QuickActions/RefactorNamespace/NamespaceScriptSnapshot.cs
+- Defines the immutable, Godot-independent representation of an already-read C# script under SystemExplorer.QuickActions.RefactorNamespace.
+- Stores the normalized script path and the script text captured at snapshot time through get-only properties.
+- Has no Godot, editor, filesystem, mutation, or behavior dependencies.
+
+
+QuickActions/RefactorNamespace/NamespaceRefactorScopeResolver.cs
+- Defines the Godot-independent NamespaceRefactorScopeResolver under SystemExplorer.QuickActions.RefactorNamespace.
+- Builds normalized, case-insensitively deduplicated C# script-path scopes while preserving the first occurrence order within each supplied group.
+- Combines already-normalized or raw path groups into one ordered, case-insensitively deduplicated load scope used by NamespaceRefactorPreparationService.
+- Filters System and Folder targets from neutral NamespaceRefactorScriptEntry objects; exact folder matches and descendants are included without matching siblings or text-prefix-only folder names.
+- Builds recursive project-wide C# inventory through System.IO.Directory and combines scanned paths with normalized linked-script fallback paths.
+- Reports project scan failures through NamespaceRefactorProjectInventoryResult without Godot warnings, dialogs, or debug logging.
+- NamespaceRefactorScriptEntry is an immutable neutral model containing only ScriptPath and FolderPath; it has no metadata, system, lock, scene, plugin, Godot, or mutable collection dependency.
+- NamespaceRefactorProjectInventoryResult exposes the resolved script paths, an optional failure message, and whether fallback was used.
+- Receives only path normalization/globalization/localization delegates, does not access _systems directly, and does not cache operation paths.
+- Does not read script text, load snapshots, build namespace plans, manage editor buffers, write files, or apply changes.
+
+QuickActions/RefactorNamespace/NamespaceRefactorSnapshotLoader.cs
+- Defines the Godot-independent NamespaceRefactorSnapshotLoader and NamespaceSnapshotLoadResult under SystemExplorer.QuickActions.RefactorNamespace.
+- Reads already-decided C# script paths into immutable NamespaceScriptSnapshot objects through small normalization, existence-check, and text-read delegates supplied by the plugin.
+- Filters blank/non-C# paths, normalizes and deduplicates paths case-insensitively, and builds a read-only snapshot index using StringComparer.OrdinalIgnoreCase.
+- Preserves the first-request order separately for target-sensitive plan input and can reuse an existing snapshot index through LoadInto(...) without rereading paths.
+- When existing snapshots are reused, normalizes each snapshot's own Path as its identity, recreates only snapshots whose stored path is not already normalized, and prevents an external dictionary key from creating an alias or disagreeing with the indexed snapshot path.
+- If multiple imported snapshots normalize to the same path, the later enumerated snapshot retains the existing dictionary assignment behavior and wins.
+- Reports missing paths and delegate failures as separate read-only lists without Godot warnings, dialogs, or debug logging.
+- Receives one combined operation path list from NamespaceRefactorPreparationService, so a path shared by target/reference/declaration roles is read at most once within that preparation.
+- Does not decide System/Folder/single scope, inspect _systems, assign operational snapshot roles, build namespace-plan semantics, write files, cache snapshots across operations, or handle editor buffers/state.
+
+QuickActions/RefactorNamespace/NamespaceRefactorPreparationService.cs
+- Defines the Godot-independent NamespaceRefactorPreparationService plus immutable NamespaceRefactorPreparationResult and NamespaceRefactorNamespaceScanResult models under SystemExplorer.QuickActions.RefactorNamespace.
+- Accepts already-decided target, using-reference, and namespace-declaration path roles from the plugin rather than interpreting metadata or systems data.
+- Normalizes and case-insensitively deduplicates each path role separately through NamespaceRefactorScopeResolver while preserving the first occurrence order, especially target order.
+- Combines all roles into one load scope, loads them through NamespaceRefactorSnapshotLoader, and maps the same indexed NamespaceScriptSnapshot instances back into each operational role without rereading shared paths.
+- Delegates replace and add plan semantics directly to NamespaceRefactorPlanBuilder without parsing declarations, deciding full/partial moves, rewriting usings, or constructing pending-write text itself.
+- Scans batch-dialog namespaces from loaded snapshots through NamespaceTextRewriter.GetNamespaceFromText(...), returning a case-insensitive read-only namespace dictionary plus missing and failed paths.
+- NamespaceRefactorPreparationResult exposes the plan result, shared snapshot-load result, normalized role paths, and target-filtered missing/failed path lists needed by existing plugin diagnostics.
+- NamespaceRefactorNamespaceScanResult defensively exposes namespace, missing-path, and failed-path collections without logging or UI behavior.
+- Does not reference SystemExplorerPlugin, _systems, Tree/TreeItem, editor controls, Godot APIs, FileAccess, editor buffers, dialogs, warnings, debug logging, file writes, or plan application.
+
+QuickActions/RefactorNamespace/NamespaceRefactorPlanBuilder.cs
+- Defines the Godot-independent NamespaceRefactorPlanBuilder and its immutable plan/result models under SystemExplorer.QuickActions.RefactorNamespace.
+- NamespaceRefactorPlan contains the selected script path plus read-only original-text and final pending-write dictionaries using case-insensitive path comparison.
+- NamespaceRefactorPlanResult and NamespaceRefactorPlanFailure provide the completed plan plus the limited skip/failure information needed by existing plugin warnings and debug logging.
+- Builds side-effect-free replace-namespace plans shared by single-script and batch flows, including target declaration rewrites and matching using-directive updates through NamespaceTextRewriter.
+- Receives already-role-mapped snapshots from NamespaceRefactorPreparationService and keeps target scripts, using-reference candidates, and namespace declaration inventory semantically separate.
+- Determines whether the old namespace remains after the planned target rewrites, including failed or non-matching targets and unselected project scripts.
+- Replaces old using directives during a full namespace move; during a partial move it preserves the old using and adds the new using without duplication.
+- Builds add-namespace plans for scripts without namespaces through NamespaceTextRewriter.
+- Preserves original source text once per path while producing one final pending write after all applicable namespace and using changes.
+- Does not normalize paths, read or write files, use Godot, manage dialogs/editor state, or reference SystemExplorerPlugin.
+- The completed responsibility chain is plugin metadata and systems data -> NamespaceRefactorScopeResolver -> editor save-first preflight in the plugin -> NamespaceRefactorPreparationService -> NamespaceRefactorSnapshotLoader and NamespaceRefactorPlanBuilder -> safe apply/editor integration in SystemExplorerPlugin.
