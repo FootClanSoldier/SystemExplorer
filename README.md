@@ -134,7 +134,7 @@ Quick Actions are disabled by default and can be enabled through the plugin's Pr
 
 ### Beautify Scripts
 
-System Explorer integrates with the open-source **CSharpier** formatter.
+System Explorer integrates with the open-source **[CSharpier](https://github.com/belav/csharpier)** formatter.
 
 * Install CSharpier directly from the Godot editor
 * Format individual C# scripts
@@ -266,11 +266,13 @@ It can safely be committed to source control.
 
 ## Godot Editor Cache Warnings
 
-When deleting scripts from the filesystem through the plugin, Godot may occasionally display warnings related to scripts that no longer exist.
+In **System Explorer v1.4 and earlier**, deleting scripts from the filesystem through the plugin may occasionally cause Godot to display warnings related to scripts that no longer exist.
 
 These warnings originate from Godot's internal editor cache and do not affect plugin functionality.
 
 They typically disappear after rebuilding or reopening the project.
+
+> **Fixed for v1.5:** This issue has been resolved in the current [`main`](https://github.com/FootClanSoldier/SystemExplorer/tree/main) branch. Version 1.5 has not yet been released.
 
 ---
 
