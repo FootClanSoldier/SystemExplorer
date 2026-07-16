@@ -33,19 +33,28 @@ SystemExplorerPlugin.NavigationRecovery.cs
 
 SystemExplorerPlugin.ScriptOpenPosition.cs
 - Contains the shared System Explorer script-open helper used by tree navigation and newly created scripts.
+- Uses EditorIntegration/ScriptEditing/ScriptPathUtility.cs for general script-path string normalization.
 - Tracks which script paths have been opened from System Explorer during the current editor session.
 - After the first System Explorer open for a script in a session, verifies the active script editor and attempts to place the TextEdit caret/scroll position at the top.
 - Releases tree focus after navigation when requested and logs skipped/failed top-reset attempts through DebugLog(...).
 
 SystemExplorerPlugin.ScriptEditorBuffers.cs
-- Contains shared wrappers and orchestration for working with Godot’s open script editor buffers and script text files.
-- Handles script path normalization, global file path resolution, safe text file reading/writing, locating open script editor buffers by activating script paths when explicitly needed, autosaving and applying updated text to open buffers, and refreshing changed Godot resources.
+- Contains shared compatibility wrappers and orchestration for working with Godot’s open script editor buffers and script text files.
+- Uses EditorIntegration/ScriptEditing/ScriptPathUtility.cs for general script-path string normalization.
+- Keeps thin compatibility wrappers for general text-file reading/writing plus disk-verification comparison/normalization, delegating their implementation to EditorIntegration/ScriptEditing/ScriptTextFileService.cs.
+- Keeps compatibility wrappers for unsaved-buffer checks and committed text application, delegating TextEdit saved-state transitions to EditorIntegration/ScriptEditing/ScriptEditorBufferStateService.cs.
+- Retains the existing dictionary iteration, path matching, missing-entry handling, and newline result formatting used when checking or applying multiple open buffers.
+- Retains activating open-buffer lookup and deferred path-payload build/parse orchestration.
+- Keeps the TryAutosaveOpenScriptEditorBufferIfNeeded(...) compatibility wrapper, operation-specific autosave failure-message formatting, and TryAutosaveOpenScriptEditorBuffersIfNeeded(...) dictionary iteration while delegating general per-buffer autosave and disk verification to EditorIntegration/ScriptEditing/ScriptEditorBufferAutosaveService.cs.
+- Keeps Beautify's specialized autosave workflow separate because it returns original text and participates in editor-first application and failed-write restoration.
 - Keeps thin compatibility wrappers for non-activating lookup and delegates the matching implementation to EditorIntegration/ScriptEditing/ScriptEditorBufferLocator.cs.
-- Keeps Refactor Namespace-specific unmatched-using protection, operation-specific failure messages, payload handling, and the remaining shared buffer orchestration used by Refactor Namespace and Beautify.
-- Activating lookup, autosave, apply, file I/O, deferred payload handling, and editor/view-state responsibilities have not yet been extracted.
+- Keeps Refactor Namespace-specific unmatched-using protection, operation-specific lookup failure messages, payload handling, and the remaining shared buffer orchestration used by Refactor Namespace and Beautify.
+- Applies committed text across multiple open editor buffers through ScriptEditorBufferStateService while preserving the existing operation-specific dictionary behavior.
+- Godot resource refresh is owned by EditorIntegration/ScriptEditing/ScriptResourceRefreshService.cs; general per-buffer autosave and verified saved-version transition are owned by ScriptEditorBufferAutosaveService, while operation-specific messages, batch iteration, activating lookup, deferred payload handling, and editor/view-state responsibilities remain in the plugin partials.
 
 SystemExplorerPlugin.ScriptEditorSync.cs
 - Handles synchronization between Godot's active Script Editor script and the System Explorer tree selection.
+- Keeps the specialized NormalizeScriptPathForSync(...) wrapper, using ScriptPathUtility.Normalize(...) before and after ProjectSettings.LocalizePath(...) while retaining its res:// and .cs validation.
 - Connects to ScriptEditor active-script changes when available, with a light polling fallback if the editor signal cannot be connected.
 - Primes the initially active editor script without changing tree selection, then syncs only after subsequent active-script changes or explicit post-operation requests.
 - Provides follow-active-script behavior and post-operation selection resync helpers for stabilizing tree selection after single-script refactor/format operations.
@@ -56,6 +65,7 @@ SystemExplorerPlugin.ScriptEditorSync.cs
 
 SystemExplorerPlugin.Shortcuts.cs
 - Handles global plugin shortcut routing through _Input(...), including Ctrl+L lock, Ctrl+B Beautify, Ctrl+Delete remove, and Ctrl+Shift collapse detection helpers.
+- Uses ScriptPathUtility.Normalize(...) for the active Script Editor script path before routing Beautify.
 - Routes selected-item shortcut actions such as Beautify and remove without changing the underlying tree mutation safeguards.
 - Allows only Ctrl+B / Beautify to pass through when focus is safely verified inside the active Godot script editor, so the active editor script can be formatted without falling back to the selected System Explorer tree item.
 
@@ -66,6 +76,7 @@ SystemExplorerPlugin.TreeInput.cs
 SystemExplorerPlugin.ContextMenu.cs
 - Handles context menu constants, hidden submenu icon state, context menu construction, submenu direction/icon behavior, and context menu action routing.
 - Handles pending metadata setup, New/Add/Quick Actions menu composition, Open File Path / Open Folder Path routing, visibility of file-manager actions, and context-specific system/folder/script/scene menu entries.
+- Captures the exact selected script's system/folder/entry, filter, expansion, and pre-dialog focus context before the context menu takes focus so script rename can restore the same location after rebuilding.
 - Delegates physical file/folder target resolution and OS file-manager opening to SystemExplorerPlugin.ContextMenu.FileManager.cs.
 
 SystemExplorerPlugin.ContextMenu.FileManager.cs
@@ -92,6 +103,21 @@ SystemExplorerPlugin.DragDrop.cs
 SystemExplorerPlugin.RenameRemove.cs
 - Handles rename and remove operations for systems, folders, scripts, linked scenes, and direct scene entries.
 - Handles file deletion, file/folder renames, forced expansion after renames, and updating script/scene entries after path changes.
+- Physical remove now validates all target paths before mutation, safely autosaves and closes matching open C# Script Editor tabs through ScriptEditorTabService, verifies that Godot released the old Script resources, deletes files and UID sidecars with explicit result reporting, and only then mutates/persists _systems and performs one final EditorFileSystem scan.
+- Script rename begins from the already-open script selected through System Explorer, captures exact Script/TextEdit instance IDs, saved/unsaved buffer text, caret, horizontal/vertical scroll, selection, active-script state, exact system/folder/entry identity, filter selection, expansion state, and intended tree focus.
+- Reuses the existing autosave I/O and disk-verification policy before close; autosave failure leaves the tab, filesystem, _systems, JSON, tree selection, and filesystem scan untouched.
+- Detects case-insensitive duplicate open Script resources before mutation, lists their actual ResourcePath values, and cancels rather than choosing an arbitrary resource.
+- Uses EditorIntegration/ScriptEditing/ScriptEditorTabService.cs under ScriptEditorSync suppression to close the exact old Script/TextEdit pair through Godot 4.6's own Script Editor close lifecycle, then verifies through GetOpenScripts() that neither the old instance nor old path remains open before filesystem mutation.
+- Supports normal one-step rename and case-only rename through a unique temporary sibling .cs path, with rollback to the original path when the second step fails; recovery of the unchanged original script after rename or close failure uses the same deferred reopen/verification flow as a successful rename.
+- After verified filesystem success, refreshes Godot once, mutates and saves _systems defensively, rebuilds the tree with preserved expansion, and then treats EditorInterface.EditScript(...) only as a request to open the freshly cache-ignored Script resource from the final path.
+- Owns a single operation-specific PendingScriptRenameEditorRestore state at a time. A new script rename is blocked while that state is active, and ScriptEditorSync suppression remains active until the pending editor and final tree restore sequence completes or is cancelled during plugin shutdown.
+- Verifies reopen on up to three separate deferred passes. Temporary states such as a missing current editor/TextEdit, a not-yet-current unique final Script, or a not-yet-listed final Script are retried without an unbounded queue; definitive ambiguity, missing-file, old-instance, old-path, duplicate-final-path, casing, or buffer-text failures stop immediately.
+- Uses the exact normalized final path plus the unique Script resource exposed through GetOpenScripts() as the source of truth. The current Script does not have to be the exact Script instance originally passed to EditScript(...), but it must be that unique final-path resource and must not be the old closed Script instance.
+- Retains old ScriptEditorBase/TextEdit instance IDs for diagnostics only. Reuse of either editor control is not itself a failure when the unique final Script/path relationship, old-path rejection, and captured buffer text are safe.
+- Restores caret, horizontal/vertical scroll, and selection only after deferred Script/TextEdit verification, then requests restoration of the previously active script when the renamed target was not previously active.
+- Mutates _systems only after verified final filesystem success, updates every matching stored script path case-insensitively to the exact final casing, preserves folder, linked-scene, lock and ordering data, saves only after an actual entry update, rebuilds with preserved expansion, and reselects the exact originating system/folder/entry including filtered results.
+- Restores System Explorer tree selection before reopen without taking final focus, then restores selection and tree focus again after editor success or failure; only that terminal path ends ScriptEditorSync suppression. A successful filesystem rename is never rolled back because of a later editor-state failure.
+- Does not use Resource.TakeOverPath(...), does not keep a parallel resource-rebind strategy, does not write Godot's .godot editor cache files, and does not repair already-existing duplicate tabs automatically.
 
 SystemExplorerPlugin.EntryHelpers.cs
 - Contains shared helpers for selection lookup, entry mutation, metadata parsing, path/folder utilities, display names, and entry normalization.
@@ -107,8 +133,11 @@ SystemExplorerPlugin.Settings.cs
 
 SystemExplorerPlugin.QuickAction.Beautify.cs
 - Handles the Quick Action flow for Beautify Script / Beautify Scripts.
+- Uses ScriptPathUtility.Normalize(...) for general script and folder path string normalization while retaining .cs filtering, folder Trim('/'), case-insensitive collection policies, and operation ordering at their existing call sites.
 - Collects and validates single-script, active-editor script, and batch targets; stores pending beautify actions when CSharpier needs installation; and routes formatting through the shared CSharpier helpers.
 - Handles beautify result summaries, unchanged/skipped/failed handling, safe write checks, and main operation orchestration.
+- Uses ScriptResourceRefreshService at the existing unchanged-after-autosave, failed-write rollback, and successful-write refresh points.
+- Preserves refresh ordering relative to rollback, committed open-buffer application, and editor view-state restoration.
 - Uses ScriptEditorSync batch context preservation for Beautify Scripts so batch formatting does not trigger post-operation active-script selection sync.
 - Delegates editor view-state capture/restore and open editor-buffer validation/application helpers to SystemExplorerPlugin.QuickAction.Beautify.EditorState.cs.
 
@@ -116,7 +145,9 @@ SystemExplorerPlugin.QuickAction.Beautify.EditorState.cs
 - Contains Beautify-specific editor-state and open editor-buffer safeguards.
 - Captures/restores TextEdit caret, first visible line, horizontal/vertical scroll, and focus state for single-script Beautify.
 - Handles deferred restore passes so Godot does not unnecessarily throw the user to the top of the file after formatting or refresh.
-- Validates/autosaves open editor buffers before formatting, applies formatted text to open editors before disk writes, and restores open editor text after failed writes.
+- Retains Beautify autosave I/O, exact text verification, and the preliminary editor-first text assignment performed before disk writes.
+- Keeps the preliminary assignment separate from committed application so it does not clear undo history or mark the buffer saved before the disk write succeeds.
+- Restores open editor text after failed writes through the shared committed-apply compatibility wrapper; generic saved-state primitives delegate to ScriptEditorBufferStateService.
 
 SystemExplorerPlugin.QuickAction.CSharpier.cs
 - Contains the CSharpier-specific backend used by Beautify.
@@ -126,8 +157,9 @@ SystemExplorerPlugin.QuickAction.CSharpier.cs
 
 SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
 - Handles the Quick Action flow for refactoring a selected script namespace and adding namespaces to selected scripts.
-- Owns context/action entry points, dialog setup/confirmation, metadata validation, plugin-data extraction, safe file reads, thin compatibility wrappers, write application, editor-buffer refresh, target script restoration for single-script operations, and operation diagnostics.
-- Owns the shared NamespaceRefactorScopeResolver, NamespaceRefactorSnapshotLoader, and NamespaceRefactorPreparationService instances, supplying small Godot path/file delegates only to the lower-level resolver and loader.
+- Owns context/action entry points, dialog setup/confirmation, metadata validation, plugin-data extraction, safe file reads, thin compatibility wrappers, write application, open editor-buffer orchestration, target script restoration for single-script operations, and operation diagnostics.
+- Uses ScriptResourceRefreshService after write failure and after successful write/application, before the existing deferred open-buffer refresh flow.
+- Owns the shared NamespaceRefactorScopeResolver, NamespaceRefactorSnapshotLoader, and NamespaceRefactorPreparationService instances, supplying ScriptPathUtility.Normalize plus small Godot path/file delegates to the lower-level resolver and loader.
 - Converts plugin-owned linked entries and selected script metadata into raw path roles, while NamespaceRefactorPreparationService normalizes those roles, loads snapshots once, and delegates plan construction.
 - For single-script replacement, keeps the selected script as the only target, linked C# scripts as the using-reference candidates, and project-wide C# inventory as declaration-only candidates for full-versus-partial move detection.
 - For Add Namespace, keeps validation, save-first preflight, diagnostics, compatibility dictionary outputs, and safe apply in the plugin while preparation owns target normalization, snapshot loading, and BuildAddPlan(...).
@@ -135,18 +167,23 @@ SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
 - Keeps ApplyRefactorNamespacePendingWrites(...) and all Godot editor integration responsible for safely applying completed plans.
 - Keeps CopyNamespaceRefactorPlanToPendingWrites(...) as a thin adapter from read-only NamespaceRefactorPlan dictionaries to the existing concrete Dictionary outputs.
 - For batch namespace/add-namespace flows, relies on ScriptEditorSync batch context preservation and non-activating editor-buffer lookup rather than restoring the previously active script or tree selection after the batch.
-- Delegates shared script path normalization, text file reading/writing, Godot file refresh, and open editor-buffer handling to SystemExplorerPlugin.ScriptEditorBuffers.cs.
+- Uses ScriptPathUtility.Normalize(...) directly for general script-path string normalization and ScriptResourceRefreshService for synchronous Godot resource refresh; open editor-buffer orchestration, autosave, payload handling, and compatibility text-file wrappers remain in SystemExplorerPlugin.ScriptEditorBuffers.cs, whose wrappers delegate general text-file I/O to ScriptTextFileService.
 - Keeps the file-based ReadNamespaceFromScript(...) wrapper, which preserves the existing FileAccess existence check and safe ReadTextFile(...) path before delegating text parsing to NamespaceTextRewriter.
 
 SystemExplorerPlugin.QuickAction.RefactorNamespace.Batch.cs
 - Handles batch-specific Refactor Namespace behavior for System and Folder Quick Actions.
+- Uses ScriptPathUtility.Normalize(...) at its direct batch call sites while preserving existing filtering, deduplication, and target ordering.
 - Interprets System/Folder metadata, converts plugin entries into neutral NamespaceRefactorScriptEntry objects, configures the batch apply UI, filters targets, and orchestrates namespace replacement or namespace insertion.
 - Keeps thin compatibility wrappers for scoped targets and project inventory; those wrappers delegate folder matching, path normalization/deduplication, recursive project scanning, and linked-script fallback to NamespaceRefactorScopeResolver.
 - Passes ordered batch targets plus the same project-wide inventory as both using-reference and declaration candidates to NamespaceRefactorPreparationService.
 - Keeps missing/failed target logging, namespace rewrite failure logging, cancel messages, and completed-plan copying in the plugin while preparation owns snapshot/plan orchestration.
 - Keeps ReadRefactorNamespaceNamespacesByPath(...) as a thin wrapper around NamespaceRefactorPreparationService.ScanNamespaces(...), preserving the existing missing/failed debug messages and Dictionary return shape used by dialog setup.
 - Preserves existing batch UI, save-first preflight, editor-context preservation, and shared safe apply/editor-integration behavior.
-- Keeps batch flow separate from the core Refactor Namespace partial while shared editor-buffer and file text handling lives in SystemExplorerPlugin.ScriptEditorBuffers.cs.
+- Keeps batch flow separate from the core Refactor Namespace partial while shared editor-buffer orchestration and compatibility text-file wrappers remain in SystemExplorerPlugin.ScriptEditorBuffers.cs; ScriptTextFileService owns the underlying general text-file I/O and disk comparison.
+
+----------------------------------------------------
+Refactored Classes
+----------------------------------------------------
 
 ## Editor integration classes
 
@@ -155,18 +192,67 @@ EditorIntegration/ScriptEditing/OpenScriptEditorBuffer.cs
 - Stores an already-normalized script path together with its matched Godot TextEdit instance.
 - Does not normalize paths, perform matching, access files, or orchestrate editor operations.
 
+EditorIntegration/ScriptEditing/ScriptPathUtility.cs
+- Defines the internal stateless ScriptPathUtility under SystemExplorer.EditorIntegration.ScriptEditing.
+- Owns general script-path string normalization by trimming surrounding whitespace, replacing backslashes with forward slashes, and returning an empty string for null.
+- Preserves casing and does not localize or globalize paths.
+- Does not validate res://, .cs, or file existence and does not deduplicate collections.
+- Has no Godot, filesystem, editor-buffer, Refactor Namespace, Beautify, CSharpier, tree, or operation-specific dependencies.
+
 EditorIntegration/ScriptEditing/ScriptEditorBufferLookupResult.cs
 - Defines the small non-activating lookup result model and failure enum under SystemExplorer.EditorIntegration.ScriptEditing.
 - Carries matched buffers, unsafe text-match paths, unmatched required paths, and structured failure information without embedding Refactor Namespace-specific warning text.
 - Preserves the existing case-insensitive buffer dictionary shape used by compatibility wrappers.
 
+EditorIntegration/ScriptEditing/ScriptEditorTabService.cs
+- Defines the internal Godot 4.6-specific Script Editor tab lifecycle adapter under SystemExplorer.EditorIntegration.ScriptEditing.
+- Validates the exact active Script, ScriptEditorBase, and TextEdit instance before locating the unique Script Editor File menu by the verified Godot 4.6 menu-ID signature.
+- Invokes only Godot's own FILE_MENU_CLOSE route and verifies through ScriptEditor.GetOpenScripts() that the exact old Script instance and case-insensitive old path are no longer open.
+- Returns an explicit success/failure result and safely aborts when the target editor pair, File menu, close command, or close verification is ambiguous or unavailable.
+- Verifies only the live Script Editor state; persistence and pruning of closed-script sections in Godot's internal cache remain Godot-owned and are never manipulated by the service.
+- Does not rename files, load/rewrite script text, own autosave policy, mutate _systems/JSON/tree state, scan the filesystem, write .godot cache files, or know about Refactor Namespace, Beautify, CSharpier, or delete/remove workflows.
+
+EditorIntegration/ScriptEditing/ScriptEditorBufferStateService.cs
+- Defines the internal stateless TextEdit buffer-state service under SystemExplorer.EditorIntegration.ScriptEditing.
+- Owns saved/unsaved checks through GetVersion()/GetSavedVersion() and collects unsaved OpenScriptEditorBuffer paths with case-insensitive deduplication while preserving first-occurrence order.
+- Owns generic TagSavedVersion() transitions after successful autosaves.
+- Applies already-committed text to an identified TextEdit, assigning only when text differs, then clearing undo history before marking the current version saved even when the text was already identical.
+- Does not read/write files, normalize or match paths, iterate operation-specific dictionaries, activate scripts, refresh Godot resources, manage view state, show messages, or know about Refactor Namespace, Beautify, CSharpier, the tree, or _systems.
+
+EditorIntegration/ScriptEditing/ScriptEditorBufferAutosaveService.cs
+- Defines the internal per-buffer autosave service plus its structured result and failure enum under SystemExplorer.EditorIntegration.ScriptEditing.
+- Owns generic saved-buffer disk verification, unsaved TextEdit writes to the existing script path, normalized read-back verification, and the saved-version transition only after successful write and verification.
+- Returns whether the operation succeeded, whether an autosave occurred, the affected script path, and a structured failure kind without embedding operation-specific user messages.
+- Receives general read, write, and disk-verification comparison delegates through constructor injection; the plugin supplies ScriptTextFileService.ReadText, WriteText, and TextsMatchForDiskVerification directly.
+- Uses ScriptEditorBufferStateService only for saved/unsaved detection and MarkCurrentVersionSaved(...).
+- Does not know about Refactor Namespace, Beautify, rename/remove, editor activation/focus, rollback policy, resource refresh, tree state, _systems, or JSON persistence.
+
 EditorIntegration/ScriptEditing/ScriptEditorBufferLocator.cs
 - Owns the non-activating open-buffer matching previously implemented in SystemExplorerPlugin.ScriptEditorBuffers.cs.
 - Preserves current-editor-first matching, original/updated text matching, unique-text ambiguity checks, used-TextEdit protection, the existing indexed GetOpenScripts()/GetOpenScriptEditors() relation, saved-buffer disk verification, and the disk-text fallback when list counts differ.
-- Receives path normalization, disk-text reading, text comparison, and file-existence behavior through injected delegates so the existing verified plugin behavior remains unchanged.
+- Delegates only its saved/unsaved TextEdit check to ScriptEditorBufferStateService; its matching algorithm, lookup priority, path behavior, and disk-verification flow are otherwise unchanged.
+- Receives path normalization and file-existence behavior through injected delegates; the plugin supplies ScriptPathUtility.Normalize for path normalization, while disk-text reading and disk-verification comparison delegates are supplied directly by ScriptTextFileService.
 - Does not activate scripts, call EditorInterface.EditScript(...), autosave or write files, apply text, change editor focus/view state, manage ScriptEditorSync or batch context, inspect namespaces/usings, show UI, or mutate the System Explorer tree.
 
-##Refactored classes
+EditorIntegration/ScriptEditing/ScriptTextFileService.cs
+- Defines the internal stateless text-file service under SystemExplorer.EditorIntegration.ScriptEditing.
+- Owns safe general text-file reading and writing, including res:// and user:// globalization before System.IO access.
+- Owns UTF-8 writes without BOM and preserves the existing empty-string/false fallback behavior for missing files and caught I/O failures.
+- Owns CRLF/standalone-CR to LF normalization and ordinal disk-text comparison after that normalization.
+- Does not normalize general script paths, create directories, refresh Godot resources, autosave or update editor buffers, display UI, log, or hold mutable operation state.
+
+EditorIntegration/ScriptEditing/ScriptResourceRefreshService.cs
+- Defines the internal stateless Godot editor-integration service under SystemExplorer.EditorIntegration.ScriptEditing.
+- Owns synchronous refresh of script resource paths after their text has already changed.
+- Filters blank paths, normalizes with ScriptPathUtility.Normalize(...), and deduplicates case-insensitively while preserving the first occurrence order.
+- Materializes the normalized unique paths before retrieving EditorFileSystem through EditorInterface.Singleton.
+- Calls EditorFileSystem.UpdateFile(...) synchronously once for each unique path and returns without side effects when EditorFileSystem is unavailable.
+- Does not read or write files, apply text to editor buffers, handle deferred buffer refresh, call EditorFileSystem.Scan(), load resources, show UI, or log.
+- Does not know about Beautify, Refactor Namespace, CSharpier, the tree, _systems, or JSON persistence.
+
+
+
+## RefactorNamespace classes
 
 QuickActions/RefactorNamespace/NamespaceTextRewriter.cs
 - Defines the standalone internal static class SystemExplorer.QuickActions.RefactorNamespace.NamespaceTextRewriter.
@@ -190,12 +276,12 @@ QuickActions/RefactorNamespace/NamespaceRefactorScopeResolver.cs
 - Reports project scan failures through NamespaceRefactorProjectInventoryResult without Godot warnings, dialogs, or debug logging.
 - NamespaceRefactorScriptEntry is an immutable neutral model containing only ScriptPath and FolderPath; it has no metadata, system, lock, scene, plugin, Godot, or mutable collection dependency.
 - NamespaceRefactorProjectInventoryResult exposes the resolved script paths, an optional failure message, and whether fallback was used.
-- Receives only path normalization/globalization/localization delegates, does not access _systems directly, and does not cache operation paths.
+- Receives only path normalization/globalization/localization delegates; the plugin supplies ScriptPathUtility.Normalize for general normalization, and the resolver does not access _systems directly or cache operation paths.
 - Does not read script text, load snapshots, build namespace plans, manage editor buffers, write files, or apply changes.
 
 QuickActions/RefactorNamespace/NamespaceRefactorSnapshotLoader.cs
 - Defines the Godot-independent NamespaceRefactorSnapshotLoader and NamespaceSnapshotLoadResult under SystemExplorer.QuickActions.RefactorNamespace.
-- Reads already-decided C# script paths into immutable NamespaceScriptSnapshot objects through small normalization, existence-check, and text-read delegates supplied by the plugin.
+- Reads already-decided C# script paths into immutable NamespaceScriptSnapshot objects through small normalization, existence-check, and text-read delegates supplied by the plugin; the normalization delegate is ScriptPathUtility.Normalize.
 - Filters blank/non-C# paths, normalizes and deduplicates paths case-insensitively, and builds a read-only snapshot index using StringComparer.OrdinalIgnoreCase.
 - Preserves the first-request order separately for target-sensitive plan input and can reuse an existing snapshot index through LoadInto(...) without rereading paths.
 - When existing snapshots are reused, normalizes each snapshot's own Path as its identity, recreates only snapshots whose stored path is not already normalized, and prevents an external dictionary key from creating an alias or disagreeing with the indexed snapshot path.
