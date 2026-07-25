@@ -10,12 +10,17 @@ public partial class SystemExplorerPlugin
 	private void MoveDraggedItem(string draggedMetadata, TreeItem targetItem)
 	{
 		string targetMetadata = targetItem?.GetMetadata(0).AsString() ?? "";
+		string targetSystemToExpand = "";
+		string targetFolderToExpand = "";
 
 		if (string.IsNullOrWhiteSpace(draggedMetadata) || string.IsNullOrWhiteSpace(targetMetadata))
 		{
 			DebugLogger.Log("Drag Move cancelled: missing metadata.");
 			return;
 		}
+
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope("Move Failed");
 
 		if (!EnsureSystemsLoadedForTreeOperation("Drag Move"))
 			return;
@@ -38,12 +43,18 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
+			string detail =
+				$"Dragged='{draggedMetadata}', "
+				+ $"CapturedSourceSystem='{_draggedSourceSystemName}', "
+				+ $"CapturedSourceFolder='{_draggedSourceFolderPath}', "
+				+ $"SourceEntry='{GetEntryFromMetadata(draggedMetadata)}'.";
 			DebugLogger.LogOperation(
 				"Drag Move cancelled: invalid captured source context",
-				$"Dragged='{draggedMetadata}', "
-					+ $"CapturedSourceSystem='{_draggedSourceSystemName}', "
-					+ $"CapturedSourceFolder='{_draggedSourceFolderPath}', "
-					+ $"SourceEntry='{GetEntryFromMetadata(draggedMetadata)}'."
+				detail
+			);
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the exact dragged tree item after the move was accepted.",
+				detail
 			);
 			return;
 		}
@@ -154,6 +165,8 @@ public partial class SystemExplorerPlugin
 			&& IsValidScriptOrSceneDropTargetMetadata(targetMetadata)
 		)
 		{
+			targetSystemToExpand = GetSystemNameFromTreeItem(targetItem);
+			targetFolderToExpand = GetDropFolderPathFromTargetItem(targetItem);
 			moved = MoveScriptOrSceneToDropTarget(
 				draggedMetadata,
 				targetItem,
@@ -182,8 +195,18 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (SaveSystems())
-			BuildTree();
+		if (!SaveSystems())
+			return;
+
+		if (!string.IsNullOrWhiteSpace(targetSystemToExpand))
+		{
+			if (string.IsNullOrWhiteSpace(targetFolderToExpand))
+				ForceExpandSystem(targetSystemToExpand);
+			else
+				ForceExpandFolderPath(targetSystemToExpand, targetFolderToExpand);
+		}
+
+		BuildTree();
 	}
 
 	private bool TryResolveDraggedSourceContext(
@@ -244,7 +267,16 @@ public partial class SystemExplorerPlugin
 		int draggedIndex = orderedSystems.FindIndex(system => system.Key == draggedSystemName);
 		int targetIndex = orderedSystems.FindIndex(system => system.Key == targetSystemName);
 
-		if (draggedIndex < 0 || targetIndex < 0 || draggedIndex == targetIndex)
+		if (draggedIndex < 0 || targetIndex < 0)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the systems involved in the move.",
+				$"DraggedSystem='{draggedSystemName}', TargetSystem='{targetSystemName}', DraggedIndex={draggedIndex}, TargetIndex={targetIndex}"
+			);
+			return false;
+		}
+
+		if (draggedIndex == targetIndex)
 			return false;
 
 		bool moveDown = draggedIndex < targetIndex;
@@ -255,7 +287,13 @@ public partial class SystemExplorerPlugin
 		targetIndex = orderedSystems.FindIndex(system => system.Key == targetSystemName);
 
 		if (targetIndex < 0)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not complete the system move because the verified target disappeared during reordering.",
+				$"DraggedSystem='{draggedSystemName}', TargetSystem='{targetSystemName}'"
+			);
 			return false;
+		}
 
 		int insertIndex = moveDown ? targetIndex + 1 : targetIndex;
 
@@ -314,7 +352,13 @@ public partial class SystemExplorerPlugin
 			|| !_systems.TryGetValue(sourceSystemName, out List<string> currentSourceEntries)
 			|| !object.ReferenceEquals(sourceEntries, currentSourceEntries)
 		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the exact source entry for the move.",
+				$"SourceSystem='{sourceSystemName}', SourceFolder='{sourceFolderPath}', SourceIndex={sourceIndex}, Entry='{draggedEntry}'"
+			);
 			return false;
+		}
 
 		string targetSystemName = GetSystemNameFromTreeItem(targetItem);
 		string targetFolderPath = GetDropFolderPathFromTargetItem(targetItem);
@@ -327,7 +371,13 @@ public partial class SystemExplorerPlugin
 			|| !_systems.TryGetValue(targetSystemName, out List<string> targetEntries)
 			|| targetEntries == null
 		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the selected move destination.",
+				$"TargetMetadata='{targetMetadata}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}'"
+			);
 			return false;
+		}
 
 		string newEntry = IsSceneEntry(draggedEntry)
 			? BuildSceneEntry(targetFolderPath, draggedPath, IsEntryLocked(draggedEntry))
@@ -352,7 +402,13 @@ public partial class SystemExplorerPlugin
 			: -1;
 
 		if (IsScriptOrSceneMetadata(targetMetadata) && targetIndexBeforeRemove < 0)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the exact target entry for the move.",
+				$"TargetSystem='{targetSystemName}', TargetEntry='{targetEntry}'"
+			);
 			return false;
+		}
 
 		sourceEntries.RemoveAt(sourceIndex);
 
@@ -364,7 +420,14 @@ public partial class SystemExplorerPlugin
 			int targetIndexAfterRemove = targetEntries.IndexOf(targetEntry);
 
 			if (targetIndexAfterRemove < 0)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not complete the move after removing the source entry, and the in-memory tree state may be incomplete.",
+					$"SourceSystem='{sourceSystemName}', TargetSystem='{targetSystemName}', TargetEntry='{targetEntry}'",
+					TreeOperationOutcomeSeverity.FinalStateUnclear
+				);
 				return false;
+			}
 
 			if (!targetEntries.Contains(newEntry))
 			{
@@ -381,11 +444,6 @@ public partial class SystemExplorerPlugin
 			int insertIndex = GetAppendIndexForScriptDrop(targetEntries, targetFolderPath);
 			targetEntries.Insert(insertIndex, newEntry);
 		}
-
-		if (string.IsNullOrWhiteSpace(targetFolderPath))
-			ForceExpandSystem(targetSystemName);
-		else
-			ForceExpandFolderPath(targetSystemName, targetFolderPath);
 
 		DebugLogger.LogOperation(
 			"Move Script/Scene Mutated",
@@ -414,7 +472,16 @@ public partial class SystemExplorerPlugin
 			targetSystemName = GetSystemNameFromEntryMetadata(targetMetadata);
 		}
 
-		if (string.IsNullOrWhiteSpace(draggedSystemName) || draggedSystemName != targetSystemName)
+		if (string.IsNullOrWhiteSpace(draggedSystemName) || string.IsNullOrWhiteSpace(targetSystemName))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not identify the system that owns the moved entry.",
+				$"DraggedMetadata='{draggedMetadata}', TargetMetadata='{targetMetadata}'"
+			);
+			return false;
+		}
+
+		if (draggedSystemName != targetSystemName)
 			return false;
 
 		if (!EnsureSystemAvailable(draggedSystemName, "Move Entry"))
@@ -424,14 +491,29 @@ public partial class SystemExplorerPlugin
 		string targetEntry = GetEntryFromMetadata(targetMetadata);
 
 		if (string.IsNullOrWhiteSpace(draggedEntry) || string.IsNullOrWhiteSpace(targetEntry))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the entries involved in the move.",
+				$"DraggedMetadata='{draggedMetadata}', TargetMetadata='{targetMetadata}'"
+			);
 			return false;
+		}
 
 		List<string> entries = _systems[draggedSystemName];
 
 		int draggedIndex = FindEntryIndex(entries, draggedEntry);
 		int targetIndex = FindEntryIndex(entries, targetEntry);
 
-		if (draggedIndex < 0 || targetIndex < 0 || draggedIndex == targetIndex)
+		if (draggedIndex < 0 || targetIndex < 0)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the exact entries involved in the move.",
+				$"System='{draggedSystemName}', DraggedIndex={draggedIndex}, TargetIndex={targetIndex}"
+			);
+			return false;
+		}
+
+		if (draggedIndex == targetIndex)
 			return false;
 
 		string draggedParentPath = GetParentFolderPathFromEntryMetadata(draggedMetadata);
@@ -447,7 +529,14 @@ public partial class SystemExplorerPlugin
 		targetIndex = FindEntryIndex(entries, targetEntry);
 
 		if (targetIndex < 0)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not finish reordering the entry, and the in-memory order may be incomplete.",
+				$"System='{draggedSystemName}', TargetEntry='{targetEntry}'",
+				TreeOperationOutcomeSeverity.FinalStateUnclear
+			);
 			return false;
+		}
 
 		int insertIndex = moveDown ? targetIndex + 1 : targetIndex;
 

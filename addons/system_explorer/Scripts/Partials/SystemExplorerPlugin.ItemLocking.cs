@@ -37,6 +37,9 @@ public partial class SystemExplorerPlugin
 		if (!IsLockableMetadata(metadata))
 			return;
 
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope("Lock Change Failed");
+
 		if (!EnsureSystemsLoadedForTreeOperation("Toggle Item Lock"))
 			return;
 
@@ -66,7 +69,13 @@ public partial class SystemExplorerPlugin
 		string oldEntry = GetLockableEntryFromMetadata(metadata);
 
 		if (string.IsNullOrWhiteSpace(oldEntry))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the selected item before changing its lock state.",
+				metadata
+			);
 			return;
+		}
 
 		string newEntry = SetEntryLocked(oldEntry, !IsEntryLocked(oldEntry));
 		bool replacedEntry = metadata.StartsWith("folder::")
@@ -74,36 +83,44 @@ public partial class SystemExplorerPlugin
 				GetSystemNameFromMetadata(metadata),
 				oldEntry,
 				newEntry,
-                "Toggle Folder Lock"
+				"Toggle Folder Lock"
 			)
 			: ReplaceEntry(oldEntry, newEntry);
 
 		if (!replacedEntry)
 		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not update the selected item's lock state.",
+					oldEntry
+				);
+			}
+
 			DebugLogger.LogOperation("Toggle Item Lock cancelled: mutation failed", oldEntry);
 			return;
 		}
 
-		if (SaveSystems())
-		{
-			SaveExpansionState();
-			ClearDragState();
-			BuildTree(keepCurrentExpansionState: true);
+		if (!SaveSystems())
+			return;
 
-			string toggledMetadataAfterBuild = GetMetadataAfterLockToggle(metadata, newEntry);
+		SaveExpansionState();
+		ClearDragState();
+		BuildTree(keepCurrentExpansionState: true);
 
-			if (!selectToggledItemAfterBuild)
-				_hoveredTreeItemMetadata = toggledMetadataAfterBuild;
+		string toggledMetadataAfterBuild = GetMetadataAfterLockToggle(metadata, newEntry);
 
-			RestoreSelectionAfterItemLockBuild(
-				toggledMetadataAfterBuild,
-				selectedMetadataBeforeToggle,
-				selectedScriptOccurrenceBeforeToggle,
-				selectToggledItemAfterBuild
-			);
+		if (!selectToggledItemAfterBuild)
+			_hoveredTreeItemMetadata = toggledMetadataAfterBuild;
 
-			UpdateTreeLockIconVisibility();
-		}
+		RestoreSelectionAfterItemLockBuild(
+			toggledMetadataAfterBuild,
+			selectedMetadataBeforeToggle,
+			selectedScriptOccurrenceBeforeToggle,
+			selectToggledItemAfterBuild
+		);
+
+		UpdateTreeLockIconVisibility();
 	}
 
 	private void ToggleSystemLock(
@@ -134,24 +151,24 @@ public partial class SystemExplorerPlugin
 			DebugLogger.LogOperation("Toggle System Lock Mutated", $"{systemName} locked");
 		}
 
-		if (SaveSystems())
-		{
-			SaveExpansionState();
-			ClearDragState();
-			BuildTree(keepCurrentExpansionState: true);
+		if (!SaveSystems())
+			return;
 
-			if (!selectToggledItemAfterBuild)
-				_hoveredTreeItemMetadata = metadata;
+		SaveExpansionState();
+		ClearDragState();
+		BuildTree(keepCurrentExpansionState: true);
 
-			RestoreSelectionAfterItemLockBuild(
-				metadata,
-				selectedMetadataBeforeToggle,
-				selectedScriptOccurrenceBeforeToggle,
-				selectToggledItemAfterBuild
-			);
+		if (!selectToggledItemAfterBuild)
+			_hoveredTreeItemMetadata = metadata;
 
-			UpdateTreeLockIconVisibility();
-		}
+		RestoreSelectionAfterItemLockBuild(
+			metadata,
+			selectedMetadataBeforeToggle,
+			selectedScriptOccurrenceBeforeToggle,
+			selectToggledItemAfterBuild
+		);
+
+		UpdateTreeLockIconVisibility();
 	}
 
 	private void RestoreSelectionAfterItemLockBuild(

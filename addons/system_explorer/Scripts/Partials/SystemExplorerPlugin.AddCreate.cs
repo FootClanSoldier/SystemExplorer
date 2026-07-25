@@ -7,6 +7,13 @@ using System.Text.Json;
 
 public partial class SystemExplorerPlugin
 {
+	private enum AddTreeMutationResult
+	{
+		Success,
+		NoChange,
+		Failed,
+	}
+
 	#region Add and Create Tree Items
 	private void OnAddSystemPressed()
 	{
@@ -19,6 +26,9 @@ public partial class SystemExplorerPlugin
 			DebugLogger.Log("Add System cancelled: empty name.");
 			return;
 		}
+
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope("Add System Failed");
 
 		if (FileAccess.FileExists(SavePath) && !EnsureSystemsLoadedForTreeOperation("Add System"))
 			return;
@@ -37,10 +47,12 @@ public partial class SystemExplorerPlugin
 
 		_systemNameInput.Text = "";
 		UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
-		ForceExpandSystem(systemName);
 
-		if (SaveSystems())
-			BuildTree();
+		if (!SaveSystems())
+			return;
+
+		ForceExpandSystem(systemName);
+		BuildTree();
 	}
 
 	private void OpenAddFolderDialog()
@@ -55,7 +67,26 @@ public partial class SystemExplorerPlugin
 
 	private void OnAddFolderConfirmed()
 	{
-		DebugLogger.LogOperation("Add Folder Confirmed", _addFolderInput.Text.Trim());
+		string folderName = _addFolderInput.Text.Trim().Trim('/');
+		DebugLogger.LogOperation("Add Folder Confirmed", folderName);
+
+		if (string.IsNullOrWhiteSpace(folderName))
+		{
+			DebugLogger.Log("Add Folder cancelled: empty name.");
+			return;
+		}
+
+		string targetSystemName = GetSystemNameFromMetadata(_pendingAddFolderMetadata);
+		string parentFolderPath = GetFolderPathFromMetadata(_pendingAddFolderMetadata);
+		string addedFolderPath = string.IsNullOrWhiteSpace(parentFolderPath)
+			? folderName
+			: $"{parentFolderPath}/{folderName}";
+
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope(
+				"Add Folder Failed",
+				closeOriginatingUi: CloseAddFolderUiAfterFailure
+			);
 
 		FolderMutationResult result = AddFolderToPendingLocation();
 
@@ -68,16 +99,25 @@ public partial class SystemExplorerPlugin
 
 		if (result == FolderMutationResult.Failed)
 		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not add the folder because the selected tree location could no longer be updated."
+				);
+			}
+
 			DebugLogger.Log("Add Folder cancelled: mutation failed.");
 			return;
 		}
 
+		if (!SaveSystems())
+			return;
+
+		ForceExpandFolderPath(targetSystemName, addedFolderPath);
 		_addFolderDialog.Hide();
 		_pendingAddFolderMetadata = "";
 		_addFolderInput.Text = "";
-
-		if (SaveSystems())
-			BuildTree();
+		BuildTree();
 	}
 
 	private FolderMutationResult AddFolderToPendingLocation()
@@ -92,7 +132,13 @@ public partial class SystemExplorerPlugin
 		);
 
 		if (string.IsNullOrWhiteSpace(systemName) || string.IsNullOrWhiteSpace(folderName))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not identify the selected location for the new folder.",
+				$"PendingMetadata='{_pendingAddFolderMetadata}', System='{systemName}', Folder='{folderName}'"
+			);
 			return FolderMutationResult.Failed;
+		}
 
 		if (!EnsureSystemsLoadedForTreeOperation("Add Folder"))
 			return FolderMutationResult.Failed;
@@ -118,8 +164,6 @@ public partial class SystemExplorerPlugin
 		entries.Add(BuildFolderEntry(folderPath));
 		DebugLogger.LogOperation("Add Folder Mutated", $"{systemName}/{folderPath}");
 
-		ForceExpandFolderPath(systemName, folderPath);
-
 		return FolderMutationResult.Success;
 	}
 
@@ -140,8 +184,39 @@ public partial class SystemExplorerPlugin
 	{
 		DebugLogger.LogOperation("Add Existing Scripts Selected", string.Join(", ", paths));
 
-		if (!AddScriptsToSelectedTreeLocation(paths))
+		if (string.IsNullOrWhiteSpace(GetSelectedSystemName()))
 		{
+			GD.PushWarning("Select a system or folder before adding a script.");
+			DebugLogger.LogOperation(
+				"Add Existing Scripts cancelled: no selected destination",
+				string.Join(", ", paths)
+			);
+			return;
+		}
+
+		string targetSystemName = GetSelectedSystemName();
+		string targetFolderPath = GetSelectedFolderPath();
+
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope(
+				"Add Scripts Failed",
+				closeOriginatingUi: CloseAddScriptUiAfterFailure
+			);
+
+		AddTreeMutationResult result = AddScriptsToSelectedTreeLocation(paths);
+
+		if (result == AddTreeMutationResult.NoChange)
+			return;
+
+		if (result == AddTreeMutationResult.Failed)
+		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not add the selected scripts to the verified tree location."
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Add Existing Scripts cancelled: mutation failed",
 				string.Join(", ", paths)
@@ -149,16 +224,19 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (SaveSystems())
-			BuildTree();
+		if (!SaveSystems())
+			return;
+
+		ForceExpandTreeLocation(targetSystemName, targetFolderPath);
+		BuildTree();
 	}
 
-	private bool AddScriptToSelectedTreeLocation(string path)
+	private AddTreeMutationResult AddScriptToSelectedTreeLocation(string path)
 	{
 		return AddScriptsToSelectedTreeLocation(new[] { path });
 	}
 
-	private bool AddScriptsToSelectedTreeLocation(IEnumerable<string> paths)
+	private AddTreeMutationResult AddScriptsToSelectedTreeLocation(IEnumerable<string> paths)
 	{
 		List<string> scriptPaths = paths
 			.Where(path => !string.IsNullOrWhiteSpace(path))
@@ -166,7 +244,7 @@ public partial class SystemExplorerPlugin
 			.ToList();
 
 		if (scriptPaths.Count == 0)
-			return false;
+			return AddTreeMutationResult.NoChange;
 
 		string systemName = GetSelectedSystemName();
 		string folderPath = GetSelectedFolderPath();
@@ -177,14 +255,7 @@ public partial class SystemExplorerPlugin
 		);
 
 		if (string.IsNullOrWhiteSpace(systemName))
-		{
-			GD.PushWarning("Select a system or folder before adding a script.");
-			DebugLogger.LogOperation(
-				"Add Script failed: no selected system",
-				string.Join(", ", scriptPaths)
-			);
-			return false;
-		}
+			return AddTreeMutationResult.Failed;
 
 		if (DebugState)
 		{
@@ -193,10 +264,10 @@ public partial class SystemExplorerPlugin
 		}
 
 		if (!EnsureSystemsLoadedForTreeOperation("Add Script"))
-			return false;
+			return AddTreeMutationResult.Failed;
 
 		if (!EnsureSystemAvailable(systemName, "Add Script"))
-			return false;
+			return AddTreeMutationResult.Failed;
 
 		List<string> entries = _systems[systemName];
 		bool mutated = false;
@@ -218,10 +289,10 @@ public partial class SystemExplorerPlugin
 			}
 		}
 
-		if (mutated)
-			ForceExpandTreeLocation(systemName, folderPath);
+		if (!mutated)
+			return AddTreeMutationResult.NoChange;
 
-		return mutated;
+		return AddTreeMutationResult.Success;
 	}
 
 	private void OnAddScenePressed()
@@ -241,8 +312,39 @@ public partial class SystemExplorerPlugin
 	{
 		DebugLogger.LogOperation("Add Existing Scenes Selected", string.Join(", ", paths));
 
-		if (!AddScenesToSelectedTreeLocation(paths))
+		if (string.IsNullOrWhiteSpace(GetSelectedSystemName()))
 		{
+			GD.PushWarning("Select a system or folder before adding a scene.");
+			DebugLogger.LogOperation(
+				"Add Existing Scenes cancelled: no selected destination",
+				string.Join(", ", paths)
+			);
+			return;
+		}
+
+		string targetSystemName = GetSelectedSystemName();
+		string targetFolderPath = GetSelectedFolderPath();
+
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope(
+				"Add Scenes Failed",
+				closeOriginatingUi: CloseAddSceneUiAfterFailure
+			);
+
+		AddTreeMutationResult result = AddScenesToSelectedTreeLocation(paths);
+
+		if (result == AddTreeMutationResult.NoChange)
+			return;
+
+		if (result == AddTreeMutationResult.Failed)
+		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not add the selected scenes to the verified tree location."
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Add Existing Scenes cancelled: mutation failed",
 				string.Join(", ", paths)
@@ -250,16 +352,19 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (SaveSystems())
-			BuildTree();
+		if (!SaveSystems())
+			return;
+
+		ForceExpandTreeLocation(targetSystemName, targetFolderPath);
+		BuildTree();
 	}
 
-	private bool AddSceneToSelectedTreeLocation(string path)
+	private AddTreeMutationResult AddSceneToSelectedTreeLocation(string path)
 	{
 		return AddScenesToSelectedTreeLocation(new[] { path });
 	}
 
-	private bool AddScenesToSelectedTreeLocation(IEnumerable<string> paths)
+	private AddTreeMutationResult AddScenesToSelectedTreeLocation(IEnumerable<string> paths)
 	{
 		List<string> scenePaths = paths
 			.Where(path => !string.IsNullOrWhiteSpace(path))
@@ -267,10 +372,7 @@ public partial class SystemExplorerPlugin
 			.ToList();
 
 		if (scenePaths.Count == 0)
-			return false;
-
-		if (!EnsureSystemsLoadedForTreeOperation("Add Scene"))
-			return false;
+			return AddTreeMutationResult.NoChange;
 
 		string systemName = GetSelectedSystemName();
 		string folderPath = GetSelectedFolderPath();
@@ -281,17 +383,13 @@ public partial class SystemExplorerPlugin
 		);
 
 		if (string.IsNullOrWhiteSpace(systemName))
-		{
-			GD.PushWarning("Select a system or folder before adding a scene.");
-			DebugLogger.LogOperation(
-				"Add Scene failed: no selected system",
-				string.Join(", ", scenePaths)
-			);
-			return false;
-		}
+			return AddTreeMutationResult.Failed;
+
+		if (!EnsureSystemsLoadedForTreeOperation("Add Scene"))
+			return AddTreeMutationResult.Failed;
 
 		if (!EnsureSystemAvailable(systemName, "Add Scene"))
-			return false;
+			return AddTreeMutationResult.Failed;
 
 		List<string> entries = _systems[systemName];
 		bool mutated = false;
@@ -312,10 +410,10 @@ public partial class SystemExplorerPlugin
 			}
 		}
 
-		if (mutated)
-			ForceExpandTreeLocation(systemName, folderPath);
+		if (!mutated)
+			return AddTreeMutationResult.NoChange;
 
-		return mutated;
+		return AddTreeMutationResult.Success;
 	}
 
 	private void ForceExpandTreeLocation(string systemName, string folderPath)
@@ -346,6 +444,22 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (string.IsNullOrWhiteSpace(GetSelectedSystemName()))
+		{
+			GD.PushWarning("Select a system or folder before creating a script.");
+			DebugLogger.LogOperation("Create Script cancelled: no selected destination", path);
+			return;
+		}
+
+		string targetSystemName = GetSelectedSystemName();
+		string targetFolderPath = GetSelectedFolderPath();
+
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope(
+				"Create Script Failed",
+				closeOriginatingUi: CloseCreateScriptUiAfterFailure
+			);
+
 		if (!EnsureSystemsLoadedForTreeOperation("Create Script"))
 			return;
 
@@ -359,18 +473,42 @@ public partial class SystemExplorerPlugin
 
 		DebugLogger.LogOperation("Create Script File Written", path);
 
-		if (!AddScriptToSelectedTreeLocation(path))
+		AddTreeMutationResult addResult = AddScriptToSelectedTreeLocation(path);
+
+		if (addResult == AddTreeMutationResult.Failed)
 		{
-			DebugLogger.LogOperation("Create Script warning: file created but tree mutation failed", path);
+			ReportTreeOperationFailure(
+				"The script file was created, but System Explorer could not add it to the selected tree location.",
+				$"Path='{path}'",
+				TreeOperationOutcomeSeverity.Incomplete
+			);
 			EditorInterface.Singleton.GetResourceFilesystem().Scan();
 			return;
 		}
 
-		if (SaveSystems())
+		if (addResult == AddTreeMutationResult.Success && !SaveSystems())
+		{
+			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+			ReportTreeOperationFailure(
+				metadataStateUnclear
+					? "The script file was created, but the final state of System Explorer's updated metadata could not be verified."
+					: "The script file was created, but System Explorer could not save the updated tree metadata.",
+				$"Path='{path}'",
+				metadataStateUnclear
+					? TreeOperationOutcomeSeverity.FinalStateUnclear
+					: TreeOperationOutcomeSeverity.Incomplete
+			);
+			EditorInterface.Singleton.GetResourceFilesystem().Scan();
+			return;
+		}
+
+		if (addResult == AddTreeMutationResult.Success)
+		{
+			ForceExpandTreeLocation(targetSystemName, targetFolderPath);
 			BuildTree();
+		}
 
 		EditorInterface.Singleton.GetResourceFilesystem().Scan();
-
 		CallDeferred(nameof(OpenCreatedScript), path);
 	}
 
@@ -389,8 +527,8 @@ public partial class SystemExplorerPlugin
 		}
 		catch (Exception exception)
 		{
-			GD.PushWarning(
-				$"System Explorer could not read the script template at '{ScriptTemplatePath}'. Script creation was cancelled."
+			ReportTreeOperationFailure(
+				"System Explorer could not read the script template, so the script was not created."
 			);
 			DebugLogger.LogOperation(
 				"Create Script cancelled: template open threw",
@@ -403,8 +541,8 @@ public partial class SystemExplorerPlugin
 		{
 			Error openError = FileAccess.GetOpenError();
 
-			GD.PushWarning(
-				$"System Explorer could not read the script template at '{ScriptTemplatePath}'. Script creation was cancelled."
+			ReportTreeOperationFailure(
+				"System Explorer could not read the script template, so the script was not created."
 			);
 			DebugLogger.LogOperation(
 				"Create Script cancelled: template open returned null",
@@ -452,8 +590,8 @@ public partial class SystemExplorerPlugin
 
 		if (!string.IsNullOrWhiteSpace(readFailureDetail))
 		{
-			GD.PushWarning(
-				$"System Explorer could not read the script template at '{ScriptTemplatePath}'. Script creation was cancelled."
+			ReportTreeOperationFailure(
+				"System Explorer could not read the script template, so the script was not created."
 			);
 			DebugLogger.LogOperation(
 				"Create Script cancelled: template read",
@@ -476,7 +614,7 @@ public partial class SystemExplorerPlugin
 		}
 		catch (Exception exception)
 		{
-			GD.PushWarning($"System Explorer could not create script file at '{path}'.");
+			ReportTreeOperationFailure($"System Explorer could not create the script file at '{path}'.");
 			DebugLogger.LogOperation(
 				"Create Script failed: target open threw",
 				$"Path='{path}', Exception='{exception}'"
@@ -488,7 +626,7 @@ public partial class SystemExplorerPlugin
 		{
 			Error openError = FileAccess.GetOpenError();
 
-			GD.PushWarning($"System Explorer could not create script file at '{path}'.");
+			ReportTreeOperationFailure($"System Explorer could not create the script file at '{path}'.");
 			DebugLogger.LogOperation(
 				"Create Script failed: target open returned null",
 				$"Path='{path}', Error='{openError}'"
@@ -520,14 +658,14 @@ public partial class SystemExplorerPlugin
 
 		if (!string.IsNullOrWhiteSpace(writeFailureDetail))
 		{
-			GD.PushWarning($"System Explorer could not create script file at '{path}'.");
+			ReportTreeOperationFailure($"System Explorer could not create the script file at '{path}'.");
 			DebugLogger.LogOperation("Create Script failed: target write", writeFailureDetail);
 			return false;
 		}
 
 		if (!FileAccess.FileExists(path))
 		{
-			GD.PushWarning($"System Explorer could not create script file at '{path}'.");
+			ReportTreeOperationFailure($"System Explorer could not create the script file at '{path}'.");
 			DebugLogger.LogOperation(
 				"Create Script failed: target missing after write",
 				path
@@ -542,7 +680,11 @@ public partial class SystemExplorerPlugin
 	{
 		if (!FileAccess.FileExists(path))
 		{
-			GD.PushWarning($"Created script does not exist: {path}");
+			QueueStandaloneTreeOperationDialog(
+				"Create Script Incomplete",
+				"The script file was created, but it could not be found when Godot tried to open it.",
+				$"Path='{path}'"
+			);
 			return;
 		}
 
@@ -550,7 +692,11 @@ public partial class SystemExplorerPlugin
 
 		if (script == null)
 		{
-			GD.PushWarning($"Could not load created script: {path}");
+			QueueStandaloneTreeOperationDialog(
+				"Create Script Incomplete",
+				"The script file was created, but Godot could not load it in the Script Editor.",
+				$"Path='{path}'"
+			);
 			return;
 		}
 

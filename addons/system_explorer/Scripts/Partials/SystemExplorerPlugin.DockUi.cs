@@ -175,6 +175,7 @@ public partial class SystemExplorerPlugin
 		);
 
 		CreateNamespaceRefactorDialogs();
+		CreateTreeOperationDialog();
 
 
 		_csharpierInstallResultDialog = new AcceptDialog
@@ -244,6 +245,7 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_contextMenu);
 		_dock.AddChild(_removeDialog);
 		_dock.AddChild(_physicalRemoveIncompleteDialog);
+		_dock.AddChild(_treeOperationDialog);
 		_dock.AddChild(_missingScriptDialog);
 		_dock.AddChild(_missingSceneDialog);
 		_dock.AddChild(_renameDialog);

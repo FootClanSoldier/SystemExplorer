@@ -150,27 +150,48 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(_pendingMissingScriptEntry))
 			return;
 
-		if (!RemoveEntry(_pendingMissingScriptEntry))
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Remove Failed",
+			CloseMissingScriptRecoveryUiAfterFailure
+		);
+
+		string missingEntry = _pendingMissingScriptEntry;
+
+		if (!RemoveEntry(missingEntry))
 		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not remove the missing script reference from the tree.",
+					missingEntry
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Remove Missing Script cancelled: mutation failed",
-				_pendingMissingScriptEntry
+				missingEntry
 			);
 			return;
 		}
 
-		_missingScriptDialog.Hide();
+		if (!SaveSystems())
+			return;
 
+		HideTreeOperationOriginWindow(_missingScriptDialog);
+		HideTreeOperationOriginWindow(_relinkScriptDialog);
 		ClearMissingScriptState();
-
-		if (SaveSystems())
-			BuildTree();
+		BuildTree();
 	}
 
 	private void OnRelinkScriptFileSelected(string newScriptPath)
 	{
 		if (string.IsNullOrWhiteSpace(_pendingMissingScriptEntry))
 			return;
+
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Relink Script Failed",
+			CloseMissingScriptRecoveryUiAfterFailure
+		);
 
 		string oldEntry = _pendingMissingScriptEntry;
 		string folderPath = GetFolderPathFromEntry(oldEntry);
@@ -184,6 +205,14 @@ public partial class SystemExplorerPlugin
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not update the missing script reference.",
+					$"{oldEntry} -> {newEntry}"
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Relink Script cancelled: mutation failed",
 				$"{oldEntry} -> {newEntry}"
@@ -191,11 +220,13 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (!SaveSystems())
+			return;
+
+		HideTreeOperationOriginWindow(_missingScriptDialog);
+		HideTreeOperationOriginWindow(_relinkScriptDialog);
 		ClearMissingScriptState();
-
-		if (SaveSystems())
-			BuildTree();
-
+		BuildTree();
 		OpenScriptOrMissingDialog(newEntry, newScriptPath);
 	}
 

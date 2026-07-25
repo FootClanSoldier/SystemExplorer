@@ -179,6 +179,10 @@ public partial class SystemExplorerPlugin
 				"Coordinated metadata persistence failed",
 				$"Operation='{operationName}', FailedSave=folder_bindings.json, BindingRollbackAttempted=false, BindingRollbackSucceeded=false"
 			);
+			ReportTreeOperationFailure(
+				$"System Explorer could not complete {operationName} because the metadata could not be saved. The in-memory metadata was restored.",
+				$"Operation='{operationName}', FailedSave='folder_bindings.json'"
+			);
 			return false;
 		}
 
@@ -192,6 +196,10 @@ public partial class SystemExplorerPlugin
 				"Coordinated metadata persistence failed",
 				$"Operation='{operationName}', FailedSave=systems.json, BindingRollbackAttempted=false, BindingRollbackSucceeded=false"
 			);
+			ReportTreeOperationFailure(
+				$"System Explorer could not complete {operationName} because the metadata could not be saved. The in-memory metadata was restored.",
+				$"Operation='{operationName}', FailedSave='systems.json'"
+			);
 			return false;
 		}
 
@@ -201,6 +209,10 @@ public partial class SystemExplorerPlugin
 			DebugLogger.LogOperation(
 				"Coordinated metadata persistence failed",
 				$"Operation='{operationName}', FailedSave=folder_bindings.json, BindingRollbackAttempted=false, BindingRollbackSucceeded=false"
+			);
+			ReportTreeOperationFailure(
+				$"System Explorer could not complete {operationName} because the metadata could not be saved. The in-memory metadata was restored.",
+				$"Operation='{operationName}', FailedSave='folder_bindings.json'"
 			);
 			return false;
 		}
@@ -224,8 +236,17 @@ public partial class SystemExplorerPlugin
 
 		if (!bindingRollbackSucceeded)
 		{
-			GD.PushWarning(
-				"System Explorer could not fully roll back the metadata operation because folder_bindings.json could not be restored. Restart Godot and inspect the plugin metadata files before continuing."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not safely complete or fully restore the metadata operation. Restart Godot and inspect systems.json and folder_bindings.json before continuing.",
+				$"Operation='{operationName}', FailedSave='systems.json', BindingRollbackSucceeded=false",
+				TreeOperationOutcomeSeverity.FinalStateUnclear
+			);
+		}
+		else
+		{
+			ReportTreeOperationFailure(
+				$"System Explorer could not complete {operationName} because systems.json could not be saved. The previous folder bindings and the in-memory metadata were restored.",
+				$"Operation='{operationName}', FailedSave='systems.json', BindingRollbackSucceeded=true"
 			);
 		}
 
@@ -1193,7 +1214,7 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private void PushMetadataWriteFailureWarning(
+	private static string BuildMetadataWriteFailureMessage(
 		string displayName,
 		MetadataWriteResult result
 	)
@@ -1202,17 +1223,32 @@ public partial class SystemExplorerPlugin
 			? "metadata file"
 			: displayName.Trim();
 
-		string warning = result.FinalState switch
+		return result.FinalState switch
 		{
 			MetadataWriteFinalState.PreviousTargetPreserved =>
-				$"System Explorer could not save {displayName}, but the previous metadata state was preserved.",
+				$"System Explorer could not save {displayName}, but the previous file on disk was preserved.",
 			MetadataWriteFinalState.PreviousTargetRestoredAndVerified =>
 				$"System Explorer could not save {displayName}, but the previous metadata file was restored and verified.",
 			_ =>
 				$"System Explorer could not safely complete the metadata save, and the final state of {displayName} could not be verified. Restart Godot and inspect the metadata file before continuing.",
 		};
+	}
 
-		GD.PushWarning(warning);
+	private void ReportMetadataWriteFailure(
+		string displayName,
+		MetadataWriteResult result
+	)
+	{
+		TreeOperationOutcomeSeverity severity =
+			result.FinalState == MetadataWriteFinalState.FinalTargetStateUnclear
+				? TreeOperationOutcomeSeverity.FinalStateUnclear
+				: TreeOperationOutcomeSeverity.Failed;
+
+		ReportTreeOperationFailureOrWarning(
+			BuildMetadataWriteFailureMessage(displayName, result),
+			$"DisplayName='{displayName}', FinalState='{result.FinalState}', {result.FailureDetail}",
+			severity
+		);
 	}
 
 	private bool SaveSystems()
@@ -1262,7 +1298,10 @@ public partial class SystemExplorerPlugin
 					"System Explorer blocked saving an empty systems file because systems.json could not be safely read or verified.";
 			}
 
-			GD.PushWarning(warning);
+			ReportTreeOperationFailureOrWarning(
+				warning,
+				emptySaveBlockReason
+			);
 			DebugLogger.LogOperation("Save Systems blocked: suspicious empty state", emptySaveBlockReason);
 			DebugLogStateSnapshot("Blocked Save");
 			return false;
@@ -1270,8 +1309,9 @@ public partial class SystemExplorerPlugin
 
 		if (WouldOverwriteExistingDataWithUnrelatedSystems(diskReadResult))
 		{
-			GD.PushWarning(
-				"System Explorer blocked saving because the in-memory systems do not match the existing systems file. Restart Godot to avoid data loss."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer blocked saving because the in-memory systems do not match the existing systems file. Restart Godot to avoid data loss.",
+				"The in-memory systems appeared unrelated to the existing systems.json data."
 			);
 			DebugLogger.Log(
 				"Save Systems blocked: in-memory systems appear unrelated to existing disk data."
@@ -1295,7 +1335,7 @@ public partial class SystemExplorerPlugin
 
 		if (!writeResult.Succeeded)
 		{
-			PushMetadataWriteFailureWarning("systems.json", writeResult);
+			ReportMetadataWriteFailure("systems.json", writeResult);
 			DebugLogger.LogOperation(
 				"Save Systems failed: staged metadata write failed",
 				$"FinalState='{writeResult.FinalState}', {writeResult.FailureDetail}"
@@ -1650,8 +1690,9 @@ public partial class SystemExplorerPlugin
 
 		if (!recovered)
 		{
-			GD.PushWarning(
-				$"System Explorer could not complete '{reason}' because the in-memory system list was empty and recovery from disk failed."
+			ReportTreeOperationFailureOrWarning(
+				$"System Explorer could not complete '{reason}' because the in-memory system list was empty and recovery from disk failed.",
+				$"Reason='{reason}', SavePath='{SavePath}'"
 			);
 		}
 
@@ -1677,15 +1718,19 @@ public partial class SystemExplorerPlugin
 			return true;
 		}
 
-		GD.PushWarning(
-			$"System Explorer could not find system '{systemName}' for '{reason}'. The tree will be rebuilt from the current in-memory state."
+		ReportTreeOperationFailureOrWarning(
+			$"System Explorer could not find the selected system while completing '{reason}'. The operation was not completed.",
+			$"Reason='{reason}', System='{systemName}'"
 		);
 		DebugLogger.LogOperation(
 			"Recovery Guard failed: system still missing",
 			$"Reason='{reason}', System='{systemName}'"
 		);
 		DebugLogStateSnapshot("Recovery Failed");
-		BuildTree();
+
+		if (_activeTreeOperationDialogContext == null)
+			BuildTree();
+
 		return false;
 	}
 
@@ -1720,15 +1765,19 @@ public partial class SystemExplorerPlugin
 			}
 		}
 
-		GD.PushWarning(
-			$"System Explorer could not find required system(s) for '{reason}': {string.Join(", ", missingNames)}. The tree will be rebuilt from the current in-memory state."
+		ReportTreeOperationFailureOrWarning(
+			$"System Explorer could not find all required systems while completing '{reason}'. The operation was not completed.",
+			$"Reason='{reason}', Systems='{string.Join(", ", missingNames)}'"
 		);
 		DebugLogger.LogOperation(
 			"Recovery Guard failed: systems still missing",
 			$"Reason='{reason}', Systems='{string.Join(", ", missingNames)}'"
 		);
 		DebugLogStateSnapshot("Recovery Failed");
-		BuildTree();
+
+		if (_activeTreeOperationDialogContext == null)
+			BuildTree();
+
 		return false;
 	}
 

@@ -166,8 +166,9 @@ public partial class SystemExplorerPlugin
 	{
 		if (!EnsureResourcesFolderExists())
 		{
-			GD.PushWarning(
-				$"System Explorer could not save folder bindings because '{ResourcesFolderPath}' is unavailable."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not save folder bindings because the metadata folder is unavailable.",
+				$"ResourcesFolderPath='{ResourcesFolderPath}'"
 			);
 			return false;
 		}
@@ -215,7 +216,7 @@ public partial class SystemExplorerPlugin
 
 			if (!writeResult.Succeeded)
 			{
-				PushMetadataWriteFailureWarning("folder_bindings.json", writeResult);
+				ReportMetadataWriteFailure("folder_bindings.json", writeResult);
 				DebugLogger.LogOperation(
 					"Save Folder Bindings failed: staged metadata write failed",
 					$"FinalState='{writeResult.FinalState}', {writeResult.FailureDetail}"
@@ -231,7 +232,10 @@ public partial class SystemExplorerPlugin
 		}
 		catch (Exception exception)
 		{
-			GD.PushWarning("System Explorer could not save folder_bindings.json.");
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not save folder_bindings.json.",
+				exception.ToString()
+			);
 			DebugLogger.LogOperation("Save Folder Bindings failed", exception.ToString());
 			return false;
 		}
@@ -442,10 +446,6 @@ public partial class SystemExplorerPlugin
 	private void OnFolderBindingDirectorySelected(string selectedDirectory)
 	{
 		string metadata = _pendingFolderBindingMetadata;
-
-		if (!TryGetPendingFolderBindingTarget(out string systemName, out string virtualFolderPath))
-			return;
-
 		string physicalFolderPath = NormalizeBoundFolderPath(selectedDirectory);
 
 		if (string.IsNullOrWhiteSpace(physicalFolderPath))
@@ -460,11 +460,22 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Folder Binding Failed",
+			CloseFolderBindingUiAfterFailure
+		);
+
+		if (!TryGetPendingFolderBindingTarget(out string systemName, out string virtualFolderPath))
+			return;
+
 		using (DirAccess directory = DirAccess.Open(physicalFolderPath))
 		{
 			if (directory == null)
 			{
-				GD.PushWarning($"System Explorer could not open folder: {physicalFolderPath}");
+				ReportTreeOperationFailure(
+					"System Explorer could not open the selected folder for binding.",
+					physicalFolderPath
+				);
 				return;
 			}
 		}
@@ -480,6 +491,12 @@ public partial class SystemExplorerPlugin
 			showUserWarnings: true
 		);
 
+		if (HasActiveTreeOperationFailure)
+		{
+			RestoreSystemsAndFolderBindingsSnapshot(snapshot);
+			return;
+		}
+
 		if (
 			!TryPersistReversibleSystemsAndFolderBindingsMutation(
 				snapshot,
@@ -489,9 +506,14 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
-			GD.PushWarning(
-				$"System Explorer cancelled binding '{virtualFolderPath}' because the metadata files could not be saved consistently. The in-memory metadata was restored."
-			);
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					$"System Explorer could not bind '{virtualFolderPath}'. The in-memory metadata was restored.",
+					$"System='{systemName}', Folder='{virtualFolderPath}', PhysicalPath='{physicalFolderPath}'"
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Bind Folder cancelled: coordinated persistence failed",
 				$"System='{systemName}', Folder='{virtualFolderPath}', PhysicalPath='{physicalFolderPath}'"
@@ -499,6 +521,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		HideTreeOperationOriginWindow(_folderBindingDialog);
 		_pendingFolderBindingMetadata = "";
 		BuildTree();
 		SelectTreeItemByMetadata(metadata);
@@ -508,18 +531,39 @@ public partial class SystemExplorerPlugin
 	{
 		string metadata = _pendingFolderBindingMetadata;
 
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Folder Binding Failed",
+			CloseFolderBindingUiAfterFailure
+		);
+
 		if (!TryGetPendingFolderBindingTarget(out string systemName, out string virtualFolderPath))
 			return;
 
 		if (!TryGetFolderBinding(systemName, virtualFolderPath, out string physicalFolderPath))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the selected folder binding before removing it.",
+				$"System='{systemName}', Folder='{virtualFolderPath}'"
+			);
 			return;
+		}
 
 		if (!RemoveExactFolderBinding(systemName, virtualFolderPath))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not remove the selected folder binding.",
+				$"System='{systemName}', Folder='{virtualFolderPath}'"
+			);
 			return;
+		}
 
 		if (!SaveFolderBindings())
 		{
 			SetFolderBinding(systemName, virtualFolderPath, physicalFolderPath);
+			ReportTreeOperationFailure(
+				"System Explorer could not save the folder binding change. The in-memory binding was restored.",
+				$"System='{systemName}', Folder='{virtualFolderPath}'"
+			);
 			DebugLogger.LogOperation(
 				"Unbind Folder rolled back after bindings save failure",
 				$"System='{systemName}', Folder='{virtualFolderPath}'"
@@ -527,6 +571,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		HideTreeOperationOriginWindow(_folderBindingDialog);
 		_pendingFolderBindingMetadata = "";
 		BuildTree();
 		SelectTreeItemByMetadata(metadata);
@@ -544,7 +589,12 @@ public partial class SystemExplorerPlugin
 			string.IsNullOrWhiteSpace(_pendingFolderBindingMetadata)
 			|| !_pendingFolderBindingMetadata.StartsWith("folder::")
 		)
+		{
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not verify the selected folder for the folder binding operation."
+			);
 			return false;
+		}
 
 		if (!EnsureSystemsLoadedForTreeOperation("Folder Binding"))
 			return false;
@@ -562,14 +612,16 @@ public partial class SystemExplorerPlugin
 			|| !DoesVirtualFolderExist(systemName, virtualFolderPath)
 		)
 		{
-			GD.PushWarning(
-				"System Explorer could not find the selected folder for the folder binding operation."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not find the selected folder for the folder binding operation.",
+				_pendingFolderBindingMetadata
 			);
 			return false;
 		}
 
 		return true;
 	}
+
 	#endregion
 
 	#region Bound Folder Synchronization
@@ -579,10 +631,34 @@ public partial class SystemExplorerPlugin
 			CaptureSystemsAndFolderBindingsSnapshot();
 		int addedEntries = SynchronizeAllBoundFolders();
 
-		if (addedEntries == 0 || SaveSystems())
+		if (addedEntries == 0)
+		{
+			ClearPersistentTreeOperationFailure("BoundFolderSync");
 			return;
+		}
+
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Folder Binding Failed",
+			persistentDeduplicationKey: "BoundFolderSync"
+		);
+
+		if (SaveSystems())
+		{
+			ClearPersistentTreeOperationFailure("BoundFolderSync");
+			return;
+		}
 
 		RestoreSystemsAndFolderBindingsSnapshot(snapshot);
+		bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+		ReportTreeOperationFailure(
+			metadataStateUnclear
+				? "System Explorer found new files in bound folders, but the final state of systems.json could not be verified. The in-memory metadata was restored."
+				: "System Explorer found new files in bound folders but could not save the updated metadata. The in-memory metadata was restored.",
+			$"Startup sync added entries={addedEntries}",
+			metadataStateUnclear
+				? TreeOperationOutcomeSeverity.FinalStateUnclear
+				: TreeOperationOutcomeSeverity.Failed
+		);
 		DebugLogger.LogOperation(
 			"Bound Folder startup sync rolled back: systems save failed",
 			$"AddedEntries={addedEntries}"
@@ -712,9 +788,16 @@ public partial class SystemExplorerPlugin
 		string message = $"Bound folder is unavailable: {physicalFolderPath}";
 
 		if (showUserWarnings)
-			GD.PushWarning(message);
+		{
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not open the selected bound folder.",
+				message
+			);
+		}
 		else
+		{
 			DebugLogger.LogOperation("Bound Folder Sync skipped", message);
+		}
 	}
 
 	private static bool IsSupportedBoundFolderFile(string fileName)
@@ -831,11 +914,29 @@ public partial class SystemExplorerPlugin
 			int addedEntries = SynchronizeAllBoundFolders();
 
 			if (addedEntries == 0)
+			{
+				ClearPersistentTreeOperationFailure("BoundFolderSync");
 				return;
+			}
+
+			using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+				"Folder Binding Failed",
+				persistentDeduplicationKey: "BoundFolderSync"
+			);
 
 			if (!SaveSystems())
 			{
 				RestoreSystemsAndFolderBindingsSnapshot(snapshot);
+				bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+				ReportTreeOperationFailure(
+					metadataStateUnclear
+						? "System Explorer found new files in bound folders, but the final state of systems.json could not be verified. The in-memory metadata was restored."
+						: "System Explorer found new files in bound folders but could not save the updated metadata. The in-memory metadata was restored.",
+					$"Queued sync added entries={addedEntries}",
+					metadataStateUnclear
+						? TreeOperationOutcomeSeverity.FinalStateUnclear
+						: TreeOperationOutcomeSeverity.Failed
+				);
 				DebugLogger.LogOperation(
 					"Queued Bound Folder sync rolled back: systems save failed",
 					$"AddedEntries={addedEntries}"
@@ -843,6 +944,7 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
+			ClearPersistentTreeOperationFailure("BoundFolderSync");
 			BuildTree();
 
 			if (!string.IsNullOrWhiteSpace(selectedMetadata))
@@ -853,6 +955,7 @@ public partial class SystemExplorerPlugin
 			_boundFolderSyncRunning = false;
 		}
 	}
+
 	#endregion
 
 	#region Folder Binding Rename and Remove Migration

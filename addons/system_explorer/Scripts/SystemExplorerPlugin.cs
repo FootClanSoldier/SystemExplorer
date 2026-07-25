@@ -197,6 +197,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		AddDock(_editorDock);
 
 		BuildTree();
+		SchedulePendingTreeOperationDialogPresentation();
 		InitializeScriptEditorSync();
 
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));
@@ -253,8 +254,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		if (pluginDirectory == null)
 		{
-			GD.PushWarning(
-				$"System Explorer could not open plugin folder '{PluginFolderPath}' to create the Resources folder."
+			ReportTreeOperationFailureOrWarning(
+				$"System Explorer could not open the plugin folder needed to save its metadata.",
+				$"PluginFolderPath='{PluginFolderPath}', ResourcesFolderPath='{ResourcesFolderPath}'"
 			);
 			return false;
 		}
@@ -263,8 +265,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		if (error != Error.Ok && !DirAccess.DirExistsAbsolute(ResourcesFolderPath))
 		{
-			GD.PushWarning(
-				$"System Explorer could not create Resources folder at '{ResourcesFolderPath}'. Error: {error}."
+			ReportTreeOperationFailureOrWarning(
+				$"System Explorer could not create the Resources folder needed to save its metadata.",
+				$"ResourcesFolderPath='{ResourcesFolderPath}', Error='{error}'"
 			);
 			return false;
 		}
@@ -298,8 +301,9 @@ public sealed class {{CLASS_NAME}}
 		}
 		catch (Exception exception)
 		{
-			GD.PushWarning(
-				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not create the script template.",
+				$"Path='{ScriptTemplatePath}', Exception='{exception}'"
 			);
 			DebugLogger.LogOperation(
 				"Create Script Template failed: open threw",
@@ -312,8 +316,9 @@ public sealed class {{CLASS_NAME}}
 		{
 			Error openError = FileAccess.GetOpenError();
 
-			GD.PushWarning(
-				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not create the script template.",
+				$"Path='{ScriptTemplatePath}', Error='{openError}'"
 			);
 			DebugLogger.LogOperation(
 				"Create Script Template failed: open returned null",
@@ -347,8 +352,9 @@ public sealed class {{CLASS_NAME}}
 
 		if (!string.IsNullOrWhiteSpace(writeFailureDetail))
 		{
-			GD.PushWarning(
-				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not create the script template.",
+				writeFailureDetail
 			);
 			DebugLogger.LogOperation(
 				"Create Script Template failed: write",
@@ -359,8 +365,9 @@ public sealed class {{CLASS_NAME}}
 
 		if (!FileAccess.FileExists(ScriptTemplatePath))
 		{
-			GD.PushWarning(
-				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer could not create the script template.",
+				$"Path='{ScriptTemplatePath}', TargetMissingAfterWrite=true"
 			);
 			DebugLogger.LogOperation(
 				"Create Script Template failed: target missing after write",
@@ -387,6 +394,7 @@ public sealed class {{CLASS_NAME}}
 		DebugLogger.LogOperation("Exit Tree");
 
 		CancelPendingScriptRenameEditorRestore();
+		ShutdownTreeOperationDialogs();
 		ShutdownScriptEditorSync();
 		ShutdownFolderBindingFilesystemLifecycle();
 		_namespaceRefactorHost = null;

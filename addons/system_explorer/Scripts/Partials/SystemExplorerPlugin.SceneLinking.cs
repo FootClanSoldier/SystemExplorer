@@ -32,11 +32,18 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(_pendingSceneLinkEntry))
 			return;
 
-		UpdateLinkedScenePath(
-			_pendingSceneLinkEntry,
-			scenePath,
-			_pendingSceneLinkSourceOccurrence
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Link Scene Failed",
+			CloseLinkSceneUiAfterFailure
 		);
+
+		string entry = _pendingSceneLinkEntry;
+		ScriptTreeOccurrence? sourceOccurrence = _pendingSceneLinkSourceOccurrence;
+
+		if (!UpdateLinkedScenePath(entry, scenePath, sourceOccurrence))
+			return;
+
+		HideTreeOperationOriginWindow(_linkSceneDialog);
 		_pendingSceneLinkEntry = "";
 		_pendingSceneLinkSourceOccurrence = null;
 	}
@@ -51,6 +58,10 @@ public partial class SystemExplorerPlugin
 
 		string entry = GetEntryFromMetadata(_pendingRenameMetadata);
 		ScriptTreeOccurrence? sourceOccurrence = CaptureSelectedScriptOccurrence(entry);
+
+		using TreeOperationDialogScope operationScope =
+			BeginTreeOperationDialogScope("Unlink Scene Failed");
+
 		UpdateLinkedScenePath(entry, "", sourceOccurrence);
 		_pendingSceneLinkSourceOccurrence = null;
 	}
@@ -153,20 +164,45 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(_pendingMissingSceneEntry))
 			return;
 
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Remove Scene Link Failed",
+			CloseMissingSceneRecoveryUiAfterFailure
+		);
+
 		string entry = _pendingMissingSceneEntry;
 		ScriptTreeOccurrence? sourceOccurrence = _pendingMissingSceneScriptOccurrence;
-		_missingSceneDialog.Hide();
-		ClearMissingSceneState();
 
 		if (IsSceneEntry(entry))
 		{
-			if (RemoveEntry(entry) && SaveSystems())
-				BuildTree();
+			if (!RemoveEntry(entry))
+			{
+				if (!HasActiveTreeOperationFailure)
+				{
+					ReportTreeOperationFailure(
+						"System Explorer could not remove the missing scene reference.",
+						entry
+					);
+				}
 
+				return;
+			}
+
+			if (!SaveSystems())
+				return;
+
+			HideTreeOperationOriginWindow(_missingSceneDialog);
+			HideTreeOperationOriginWindow(_relinkSceneDialog);
+			ClearMissingSceneState();
+			BuildTree();
 			return;
 		}
 
-		UpdateLinkedScenePath(entry, "", sourceOccurrence);
+		if (!UpdateLinkedScenePath(entry, "", sourceOccurrence))
+			return;
+
+		HideTreeOperationOriginWindow(_missingSceneDialog);
+		HideTreeOperationOriginWindow(_relinkSceneDialog);
+		ClearMissingSceneState();
 	}
 
 	private void OnRelinkSceneFileSelected(string newScenePath)
@@ -174,17 +210,23 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(_pendingMissingSceneEntry))
 			return;
 
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Relink Scene Failed",
+			CloseMissingSceneRecoveryUiAfterFailure
+		);
+
 		string entry = _pendingMissingSceneEntry;
 		ScriptTreeOccurrence? sourceOccurrence = _pendingMissingSceneScriptOccurrence;
-		ClearMissingSceneState();
+		bool updated = IsSceneEntry(entry)
+			? UpdateScenePath(entry, newScenePath)
+			: UpdateLinkedScenePath(entry, newScenePath, sourceOccurrence);
 
-		if (IsSceneEntry(entry))
-		{
-			UpdateScenePath(entry, newScenePath);
+		if (!updated)
 			return;
-		}
 
-		UpdateLinkedScenePath(entry, newScenePath, sourceOccurrence);
+		HideTreeOperationOriginWindow(_missingSceneDialog);
+		HideTreeOperationOriginWindow(_relinkSceneDialog);
+		ClearMissingSceneState();
 	}
 
 	private void ClearMissingSceneState()
@@ -202,8 +244,19 @@ public partial class SystemExplorerPlugin
 		string folderPath = GetFolderPathFromEntry(oldEntry);
 		string newEntry = BuildSceneEntry(folderPath, newScenePath, IsEntryLocked(oldEntry));
 
+		if (string.Equals(oldEntry, newEntry, System.StringComparison.Ordinal))
+			return true;
+
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not update the selected scene reference.",
+					$"{oldEntry} -> {newEntry}"
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Update Scene cancelled: mutation failed",
 				$"{oldEntry} -> {newEntry}"
@@ -211,9 +264,10 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
-		if (SaveSystems())
-			BuildTree();
+		if (!SaveSystems())
+			return false;
 
+		BuildTree();
 		return true;
 	}
 
@@ -246,6 +300,10 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(scriptPath))
 		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the script before updating its scene link.",
+				oldEntry
+			);
 			DebugLogger.LogOperation(
 				"Update Linked Scene cancelled: script path unavailable",
 				oldEntry
@@ -340,6 +398,10 @@ public partial class SystemExplorerPlugin
 
 		if (matchedEntryCount == 0)
 		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the selected script reference before updating its scene link.",
+				scriptPath
+			);
 			DebugLogger.LogOperation(
 				"Update Linked Scene cancelled: no matching script references",
 				scriptPath
@@ -352,17 +414,21 @@ public partial class SystemExplorerPlugin
 			$"Path='{scriptPath}', Matched={matchedEntryCount}, Changed={changedEntryCount}"
 		);
 
-		if (changedEntryCount > 0 && SaveSystems())
+		if (changedEntryCount == 0)
 		{
-			BuildTree();
-
 			if (updatedSourceOccurrence.HasValue)
 				RestoreLinkedSceneSourceOccurrence(updatedSourceOccurrence.Value);
+
+			return true;
 		}
-		else if (changedEntryCount == 0 && updatedSourceOccurrence.HasValue)
-		{
+
+		if (!SaveSystems())
+			return false;
+
+		BuildTree();
+
+		if (updatedSourceOccurrence.HasValue)
 			RestoreLinkedSceneSourceOccurrence(updatedSourceOccurrence.Value);
-		}
 
 		return true;
 	}

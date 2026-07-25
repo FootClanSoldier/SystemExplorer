@@ -104,7 +104,7 @@ public partial class SystemExplorerPlugin
 
 			if (_pendingScriptRenameTreeState == null || !_pendingScriptRenameTreeState.IsValid)
 			{
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
                     "System Explorer could not identify the exact selected script entry before opening the rename dialog."
 				);
 				return;
@@ -137,6 +137,11 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(_pendingRemoveMetadata))
 			return;
 
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Remove Failed",
+			CloseRemoveUiAfterFailure
+		);
+
 		string removeMetadata = _pendingRemoveMetadata;
 
 		if (!EnsureSystemsLoadedForTreeOperation("Remove Item"))
@@ -163,7 +168,7 @@ public partial class SystemExplorerPlugin
 					)
 				)
 				{
-					GD.PushWarning(authorizationFailureMessage);
+					ReportTreeOperationFailureOrWarning(authorizationFailureMessage);
 					DebugLogger.LogOperation(
 						"Remove last system cancelled: persistence state could not be verified",
 						systemName
@@ -190,6 +195,14 @@ public partial class SystemExplorerPlugin
 
 			if (!mutationResult.Removed)
 			{
+				if (!HasActiveTreeOperationFailure)
+				{
+					ReportTreeOperationFailure(
+						"System Explorer could not remove the verified tree item.",
+						removeMetadata
+					);
+				}
+
 				DebugLogger.LogOperation("Remove cancelled: mutation failed", removeMetadata);
 				return;
 			}
@@ -223,9 +236,14 @@ public partial class SystemExplorerPlugin
 				)
 			)
 			{
-				GD.PushWarning(
-					"System Explorer cancelled the remove operation because the metadata files could not be saved consistently. The in-memory metadata was restored."
-				);
+				if (!HasActiveTreeOperationFailure)
+				{
+					ReportTreeOperationFailure(
+						"System Explorer could not save the remove operation. The in-memory metadata was restored.",
+						removeMetadata
+					);
+				}
+
 				DebugLogger.LogOperation(
 					"Virtual remove cancelled: coordinated persistence failed",
 					removeMetadata
@@ -249,7 +267,9 @@ public partial class SystemExplorerPlugin
 		)
 		{
 			if (!string.IsNullOrWhiteSpace(preparationFailureMessage))
-				GD.PushWarning(preparationFailureMessage);
+				ReportTreeOperationFailureOrWarning(preparationFailureMessage);
+			else if (!HasActiveTreeOperationFailure)
+				ReportTreeOperationFailure("System Explorer could not prepare the selected files for removal.");
 
 			DebugLogger.LogOperation(
 				"Physical remove cancelled during preparation",
@@ -309,6 +329,57 @@ public partial class SystemExplorerPlugin
 		bool deletedAnyPhysicalPath =
 			deleteResult.DeletedAnyResource || deleteResult.DeletedUidSidecarPaths.Count > 0;
 
+		if (!systemsSaved && systemsChanged)
+		{
+			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+			string userMessage = metadataStateUnclear
+				? deletedAnyPhysicalPath
+					? "One or more files were deleted, but the final state of the repaired systems metadata could not be verified. The repaired in-memory tree was kept."
+					: "The final state of the repaired systems metadata could not be verified after the removal attempt. The repaired in-memory tree was kept."
+				: deletedAnyPhysicalPath
+					? "One or more files were deleted, but System Explorer could not save the repaired systems metadata. The repaired in-memory tree was kept."
+					: "System Explorer could not save the repaired systems metadata after the removal attempt. The repaired in-memory tree was kept.";
+
+			ReportTreeOperationFailure(
+				userMessage,
+				$"Metadata='{removeMetadata}', FolderBindingsSaveSkipped={metadataRepairResult.FolderBindingsChanged}",
+				metadataStateUnclear
+					? TreeOperationOutcomeSeverity.FinalStateUnclear
+					: deletedAnyPhysicalPath
+						? TreeOperationOutcomeSeverity.Incomplete
+						: TreeOperationOutcomeSeverity.Failed
+			);
+			DebugLogger.LogOperation(
+				"Physical remove completed but systems metadata could not be persisted",
+				$"Metadata='{removeMetadata}', FolderBindingsSaveSkipped={metadataRepairResult.FolderBindingsChanged}"
+			);
+		}
+		else if (!folderBindingsSaved)
+		{
+			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+			string userMessage = metadataStateUnclear
+				? deletedAnyPhysicalPath
+					? "One or more files were deleted and systems.json was saved, but the final state of the folder binding cleanup could not be verified. The repaired in-memory state was kept."
+					: "The final state of the folder binding cleanup could not be verified after the removal attempt. The repaired in-memory state was kept."
+				: deletedAnyPhysicalPath
+					? "One or more files were deleted and systems.json was saved, but System Explorer could not save the folder binding cleanup. The repaired in-memory state was kept."
+					: "System Explorer could not save the folder binding cleanup after the removal attempt. The repaired in-memory state was kept.";
+
+			ReportTreeOperationFailure(
+				userMessage,
+				removeMetadata,
+				metadataStateUnclear
+					? TreeOperationOutcomeSeverity.FinalStateUnclear
+					: deletedAnyPhysicalPath
+						? TreeOperationOutcomeSeverity.Incomplete
+						: TreeOperationOutcomeSeverity.Failed
+			);
+			DebugLogger.LogOperation(
+				"Physical remove completed but folder binding cleanup could not be persisted",
+				removeMetadata
+			);
+		}
+
 		BuildTree(keepCurrentExpansionState: true);
 
 		if (deletedAnyPhysicalPath)
@@ -321,29 +392,19 @@ public partial class SystemExplorerPlugin
 			$"RequestedResources={filePathsToDelete.Count}, DeletedResources={deleteResult.DeletedResourcePaths.Count}, DeletedUidSidecars={deleteResult.DeletedUidSidecarPaths.Count}, FailedResources={deleteResult.Failures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.ResourceFile)}, FailedUidSidecars={deleteResult.Failures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.UidSidecar)}, RemovedEntries={metadataRepairResult.RemovedEntryCount}, ClearedSceneLinks={metadataRepairResult.ClearedSceneLinkCount}, FolderBindingsChanged={metadataRepairResult.FolderBindingsChanged}, SaveSystemsSucceeded={systemsSaved}, SaveFolderBindingsSucceeded={folderBindingsSaved}"
 		);
 
-		if (!systemsSaved && systemsChanged)
-		{
-			GD.PushWarning(
-				"System Explorer completed the physical deletion, but the repaired systems metadata could not be saved. The repaired in-memory state was kept to avoid restoring references to deleted files."
-			);
-			DebugLogger.LogOperation(
-				"Physical remove completed but systems metadata could not be persisted",
-				$"Metadata='{removeMetadata}', FolderBindingsSaveSkipped={metadataRepairResult.FolderBindingsChanged}"
-			);
-		}
-		else if (!folderBindingsSaved)
-		{
-			GD.PushWarning(
-				"System Explorer completed the physical deletion and saved systems.json, but folder_bindings.json cleanup could not be saved. The repaired in-memory state was kept without rollback."
-			);
-			DebugLogger.LogOperation(
-				"Physical remove completed but folder binding cleanup could not be persisted",
-				removeMetadata
-			);
-		}
-
 		if (deleteResult.HasFailures)
-			ShowPhysicalRemoveIncompleteDialog(deleteResult.Failures);
+		{
+			HideTreeOperationOriginWindow(_removeDialog);
+			string metadataFailureMessage = GetActiveTreeOperationFailureUserMessage();
+
+			if (!string.IsNullOrWhiteSpace(metadataFailureMessage))
+				SuppressActiveTreeOperationDialogPresentation();
+
+			ShowPhysicalRemoveIncompleteDialog(
+				deleteResult.Failures,
+				metadataFailureMessage
+			);
+		}
 	}
 
 	private void ClearPendingPhysicalRemoveState()
@@ -391,7 +452,7 @@ public partial class SystemExplorerPlugin
 				)
 			)
 			{
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					"System Explorer could not identify the exact selected script occurrence. The remove operation was cancelled."
 				);
 				DebugLogger.LogOperation(
@@ -953,7 +1014,11 @@ public partial class SystemExplorerPlugin
 				if (!closeResult.Success)
 				{
 					failureMessage =
-						$"System Explorer could not safely close the Script Editor tab before deleting:\n{scriptPath}\n\n{closeResult.FailureMessage}\n\nNo files or System Explorer metadata were changed.";
+						$"System Explorer could not safely close the Script Editor tab before deleting:\n{scriptPath}\n\nNo files or System Explorer metadata were changed.";
+					DebugLogger.LogOperation(
+						"Physical remove failed: Script Editor tab close",
+						closeResult.FailureMessage
+					);
 					return false;
 				}
 
@@ -1127,7 +1192,8 @@ public partial class SystemExplorerPlugin
 	}
 
 	private void ShowPhysicalRemoveIncompleteDialog(
-		IReadOnlyList<PhysicalDeleteFailure> failures
+		IReadOnlyList<PhysicalDeleteFailure> failures,
+		string additionalResultMessage = ""
 	)
 	{
 		if (_physicalRemoveIncompleteDialog == null || failures == null || failures.Count == 0)
@@ -1143,8 +1209,11 @@ public partial class SystemExplorerPlugin
 			return;
 
 		string noun = failedPaths.Count == 1 ? "file" : "files";
+		string resultSuffix = string.IsNullOrWhiteSpace(additionalResultMessage)
+			? ""
+			: $"\n\n{additionalResultMessage.Trim()}";
 		_physicalRemoveIncompleteDialog.DialogText =
-			$"The following {noun} could not be deleted from FileSystem:\n\n{string.Join("\n", failedPaths)}";
+			$"The following {noun} could not be deleted from FileSystem:\n\n{string.Join("\n", failedPaths)}{resultSuffix}";
 
 		foreach (PhysicalDeleteFailure failure in failures)
 		{
@@ -1170,6 +1239,28 @@ public partial class SystemExplorerPlugin
 			DebugLogger.Log("Rename cancelled: empty name.");
 			return;
 		}
+
+		if (string.IsNullOrWhiteSpace(_pendingRenameMetadata))
+			return;
+
+		bool renamesPhysicalResource =
+			_pendingRenameMetadata.StartsWith("script::", StringComparison.Ordinal)
+			|| _pendingRenameMetadata.StartsWith("sceneLink::", StringComparison.Ordinal);
+
+		if (
+			renamesPhysicalResource
+			&& (newName.Contains('/') || newName.Contains('\\'))
+		)
+		{
+			GD.PushWarning("The new file name cannot contain folder separators.");
+			CallDeferred(nameof(RestoreRenameInputFocusDeferred));
+			return;
+		}
+
+		using TreeOperationDialogScope operationScope = BeginTreeOperationDialogScope(
+			"Rename Failed",
+			CloseRenameUiAfterFailure
+		);
 
 		RenameMutationResult result;
 		RenameConflictItemType itemType;
@@ -1217,6 +1308,10 @@ public partial class SystemExplorerPlugin
 		}
 		else
 		{
+			ReportTreeOperationFailure(
+				"System Explorer could not identify the selected item for renaming.",
+				_pendingRenameMetadata
+			);
 			DebugLogger.LogOperation(
 				"Rename cancelled: unidentified target",
 				_pendingRenameMetadata
@@ -1234,6 +1329,14 @@ public partial class SystemExplorerPlugin
 
 		if (result == RenameMutationResult.Failed)
 		{
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not complete the rename operation.",
+					$"{_pendingRenameMetadata} -> {newName}"
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Rename cancelled: mutation failed",
 				$"{_pendingRenameMetadata} -> {newName}"
@@ -1245,6 +1348,8 @@ public partial class SystemExplorerPlugin
 		{
 			_renameDialog.Hide();
 			_pendingRenameMetadata = "";
+			_pendingScriptRenameTreeState = null;
+			_renameInput.Text = "";
 			return;
 		}
 
@@ -1260,9 +1365,13 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
-			GD.PushWarning(
-				$"System Explorer cancelled the {(itemType == RenameConflictItemType.System ? "system" : "folder")} rename because the metadata files could not be saved consistently. The in-memory metadata was restored."
-			);
+			if (!HasActiveTreeOperationFailure)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not save the rename operation. The in-memory metadata was restored."
+				);
+			}
+
 			DebugLogger.LogOperation(
 				"Rename cancelled: coordinated persistence failed",
 				$"{_pendingRenameMetadata} -> {newName}"
@@ -1277,6 +1386,7 @@ public partial class SystemExplorerPlugin
 
 		_renameDialog.Hide();
 		_pendingRenameMetadata = "";
+		_renameInput.Text = "";
 
 		if (renameHandledPersistence)
 			return;
@@ -1625,7 +1735,7 @@ public partial class SystemExplorerPlugin
 	{
 		if (_pendingScriptRenameEditorRestore != null)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				"System Explorer is still restoring the previous renamed script in Godot's Script Editor. Try again in a moment."
 			);
 			DebugLogger.LogOperation("Rename Script blocked: previous editor restore pending");
@@ -1643,7 +1753,7 @@ public partial class SystemExplorerPlugin
 
 		if (treeState == null || !treeState.IsValid)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				"System Explorer could not identify the exact selected system/folder entry before renaming the script. The rename was cancelled."
 			);
 			DebugLogger.LogOperation("Rename Script failed: selected tree identity unavailable", entry);
@@ -1652,14 +1762,14 @@ public partial class SystemExplorerPlugin
 
 		if (!FileAccess.FileExists(oldScriptPath))
 		{
-			GD.PushWarning($"File does not exist: {oldScriptPath}");
+			ReportTreeOperationFailureOrWarning($"File does not exist: {oldScriptPath}");
 			DebugLogger.LogOperation("Rename Script failed: file missing", oldScriptPath);
 			return RenameMutationResult.Failed;
 		}
 
 		if (newName.Contains("/") || newName.Contains("\\"))
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				"Script rename only supports changing the file name, not the folder path."
 			);
 			DebugLogger.LogOperation("Rename Script failed: invalid name", newName);
@@ -1697,7 +1807,7 @@ public partial class SystemExplorerPlugin
 
 		if (matchingOpenScripts.Count == 0)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				$"System Explorer could not safely rename the script because its Script Editor tab was not open:\n{oldScriptPath}\n\nOpen the script through System Explorer and try again."
 			);
 			DebugLogger.LogOperation("Rename Script failed: target script tab not open", oldScriptPath);
@@ -1736,7 +1846,7 @@ public partial class SystemExplorerPlugin
 			string groupFailureMessage = hasMultipleMatchingOpenScripts
 				? $"Rename Script cancelled: Godot reported multiple open script entries for '{oldScriptPath}', but System Explorer could not safely verify every associated editor buffer as the same saved script. Save or close the duplicate entries and try again."
 				: $"Rename Script cancelled: System Explorer could not safely verify the open editor buffer for '{oldScriptPath}' against the saved script. Save or reopen the script and try again.";
-			GD.PushWarning(groupFailureMessage);
+			ReportTreeOperationFailureOrWarning(groupFailureMessage);
 			DebugLogger.LogOperation(
 				"Rename Script failed: incomplete or ambiguous editor-buffer group",
 				$"path='{oldScriptPath}', resources={matchingOpenScripts.Count}, groupMembers={openEditorGroup?.Buffers.Count ?? 0}, lookupFailure={groupLookupResult.Failure}, unsafe={targetPathUnsafe}, ambiguous={targetPathAmbiguous}"
@@ -1757,7 +1867,7 @@ public partial class SystemExplorerPlugin
 		{
 			string primaryFailureMessage =
 				$"Rename Script cancelled: multiple verified script entries were open for '{oldScriptPath}', but System Explorer could not identify a unique active or exact-casing entry whose editor state should be preserved.";
-			GD.PushWarning(primaryFailureMessage);
+			ReportTreeOperationFailureOrWarning(primaryFailureMessage);
 			DebugLogger.LogOperation("Rename Script failed: ambiguous primary resource", oldScriptPath);
 			return RenameMutationResult.Failed;
 		}
@@ -1832,10 +1942,9 @@ public partial class SystemExplorerPlugin
 			{
 				string bindingFailureMessage =
 					$"Rename Script cancelled: an open Script resource for '{oldScriptPath}' could not be bound to a unique member of the verified editor-buffer group.";
-				GD.PushWarning(
-					string.IsNullOrWhiteSpace(bindingFailureDetail)
-						? bindingFailureMessage
-						: $"{bindingFailureMessage}\n\n{bindingFailureDetail}"
+				ReportTreeOperationFailure(
+					bindingFailureMessage,
+					bindingFailureDetail
 				);
 				DebugLogger.LogOperation(
 					"Rename Script failed: Script/TextEdit binding",
@@ -1864,7 +1973,7 @@ public partial class SystemExplorerPlugin
 			{
 				string primaryBindingFailureMessage =
 					$"Rename Script cancelled: the deterministic primary Script resource for '{oldScriptPath}' was not present in the fully verified Script/TextEdit binding set.";
-				GD.PushWarning(primaryBindingFailureMessage);
+				ReportTreeOperationFailureOrWarning(primaryBindingFailureMessage);
 				DebugLogger.LogOperation(
 					"Rename Script failed: primary binding missing",
 					$"path='{oldScriptPath}', primaryScriptId={primaryOpenScriptInstanceId}, bindings={resourceBindings.Count}"
@@ -1905,7 +2014,7 @@ public partial class SystemExplorerPlugin
 						"Rename Script"
 					);
 
-				GD.PushWarning(autosaveFailureMessage);
+				ReportTreeOperationFailureOrWarning(autosaveFailureMessage);
 				DebugLogger.LogOperation(
 					"Rename Script failed: group autosave",
 					autosaveFailureMessage
@@ -1965,8 +2074,9 @@ public partial class SystemExplorerPlugin
 						entry,
 						ref closeFailureMessage
 					);
-					GD.PushWarning(
-						$"System Explorer could not safely close every old script tab before renaming. The file was not changed.\n\n{closeFailureMessage}"
+					ReportTreeOperationFailure(
+						"System Explorer could not safely close every old script tab before renaming. The file was not changed.",
+						closeFailureMessage
 					);
 					DebugLogger.LogOperation("Rename Script failed: close reactivation", closeFailureMessage);
 
@@ -2004,8 +2114,9 @@ public partial class SystemExplorerPlugin
 						entry,
 						ref closeFailureMessage
 					);
-					GD.PushWarning(
-						$"System Explorer could not safely close every old script tab before renaming. The file was not changed.\n\n{closeFailureMessage}"
+					ReportTreeOperationFailure(
+						"System Explorer could not safely close every old script tab before renaming. The file was not changed.",
+						closeFailureMessage
 					);
 					DebugLogger.LogOperation("Rename Script failed: close tab group", closeFailureMessage);
 
@@ -2046,8 +2157,9 @@ public partial class SystemExplorerPlugin
 					entry,
 					ref closeFailureMessage
 				);
-				GD.PushWarning(
-					$"System Explorer closed the verified target tabs but Godot still reported old script state. The file was not renamed.\n\n{closeFailureMessage}"
+				ReportTreeOperationFailure(
+					"System Explorer closed the verified target tabs, but Godot still reported the old script state. The file was not renamed.",
+					closeFailureMessage
 				);
 				DebugLogger.LogOperation(
 					"Rename Script failed: old group remained after close verification",
@@ -2110,8 +2222,9 @@ public partial class SystemExplorerPlugin
 					}
 					else
 					{
-						GD.PushWarning(
-							$"The rename failed and System Explorer could not request a deferred restore of the original Script Editor tab:\n{oldScriptPath}\n\n{reopenFailureMessage}"
+						ReportTreeOperationFailure(
+							$"The rename failed, and System Explorer could not request restoration of the original Script Editor tab:\n{oldScriptPath}",
+							reopenFailureMessage
 						);
 						DebugLogger.LogOperation(
 							"Rename Script recovery warning: original reopen request failed",
@@ -2138,7 +2251,7 @@ public partial class SystemExplorerPlugin
 
 			if (!FileAccess.FileExists(newScriptPath))
 			{
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					$"System Explorer completed the filesystem rename call, but the final script path could not be verified:\n{newScriptPath}\n\nThe System Explorer data was not updated."
 				);
 				DebugLogger.LogOperation(
@@ -2152,8 +2265,20 @@ public partial class SystemExplorerPlugin
 
 			editorInterface.GetResourceFilesystem().Scan();
 
+			bool operationIncomplete = false;
+
 			if (!DoesAnySystemContainEntry(entry))
-				TryRecoverSystemsFromDisk("Rename Script");
+			{
+				if (!TryRecoverSystemsFromDisk("Rename Script"))
+				{
+					ReportTreeOperationFailure(
+						"The script was renamed, but System Explorer could not reload the metadata required to update its tree entry.",
+						$"old='{oldScriptPath}', new='{newScriptPath}'",
+						TreeOperationOutcomeSeverity.Incomplete
+					);
+					operationIncomplete = true;
+				}
+			}
 
 			SystemsAndFolderBindingsSnapshot metadataSnapshot =
 				CaptureSystemsAndFolderBindingsSnapshot();
@@ -2169,9 +2294,12 @@ public partial class SystemExplorerPlugin
 
 			if (!entriesUpdated)
 			{
-				GD.PushWarning(
-					$"The script file was renamed, but no matching System Explorer entry could be updated. Verify systems.json manually.\n\nOld: {oldScriptPath}\nNew: {newScriptPath}"
+				ReportTreeOperationFailure(
+					"The script was renamed, but no matching System Explorer tree entry could be updated.",
+					$"old='{oldScriptPath}', new='{newScriptPath}'",
+					TreeOperationOutcomeSeverity.Incomplete
 				);
+				operationIncomplete = true;
 				DebugLogger.LogOperation(
 					"Rename Script warning: no System Explorer entries updated after filesystem success",
 					$"{oldScriptPath} -> {newScriptPath}"
@@ -2202,14 +2330,21 @@ public partial class SystemExplorerPlugin
 					_selectedScriptEntryFromFilter = selectedScriptEntryBeforeMetadataUpdate;
 					bool restoredMetadataSaved = SaveSystems();
 
-					GD.PushWarning(
-						$"System Explorer could not save systems.json after renaming the script, so the physical rename was rolled back and the original script path was restored:\n{oldScriptPath}"
-					);
-
-					if (!restoredMetadataSaved)
+					if (restoredMetadataSaved)
 					{
-						GD.PushWarning(
-							"The original System Explorer metadata was restored in memory, but systems.json could not be verified as restored. Restart Godot and inspect systems.json before continuing."
+						ReportTreeOperationFailure(
+							$"System Explorer could not save the renamed script metadata, so the physical rename was rolled back and the original script path and metadata were restored:\n{oldScriptPath}",
+							$"Original='{oldScriptPath}', Target='{newScriptPath}', MetadataRestoreVerified=true",
+							TreeOperationOutcomeSeverity.Failed,
+							replaceExistingReport: true
+						);
+					}
+					else
+					{
+						ReportTreeOperationFailure(
+							"The physical script rename was rolled back, but the restored systems.json state could not be verified. Restart Godot and inspect systems.json before continuing.",
+							$"Original='{oldScriptPath}', Target='{newScriptPath}', MetadataRestoreVerified=false",
+							TreeOperationOutcomeSeverity.FinalStateUnclear
 						);
 						DebugLogger.LogOperation(
 							"Rename Script rollback warning: restored systems save failed",
@@ -2240,8 +2375,9 @@ public partial class SystemExplorerPlugin
 					}
 					else
 					{
-						GD.PushWarning(
-							$"The script rename was rolled back, but System Explorer could not request reopening of the original Script Editor buffer:\n{oldScriptPath}\n\n{rollbackReopenFailureMessage}"
+						ReportTreeOperationFailure(
+							$"The script rename was rolled back, but System Explorer could not request restoration of the original Script Editor tab:\n{oldScriptPath}",
+							rollbackReopenFailureMessage
 						);
 						DebugLogger.LogOperation(
 							"Rename Script rollback warning: original reopen request failed",
@@ -2260,9 +2396,17 @@ public partial class SystemExplorerPlugin
 
 				if (rollbackResult.State == RenameFilesystemRollbackState.TargetRetained)
 				{
-					GD.PushWarning(
-						$"System Explorer could not save systems.json and could not roll back the physical script rename. The script remains at the new path:\n{newScriptPath}\n\nCheck the plugin metadata before restarting Godot."
+					bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+					ReportTreeOperationFailure(
+						metadataStateUnclear
+							? "The script was renamed and remains at the new path, but the final state of System Explorer's updated metadata could not be verified."
+							: "The script was renamed, but System Explorer could not save the updated metadata or restore the original file path.",
+						$"new='{newScriptPath}', rollback='{rollbackResult.Details}'",
+						metadataStateUnclear
+							? TreeOperationOutcomeSeverity.FinalStateUnclear
+							: TreeOperationOutcomeSeverity.Incomplete
 					);
+					operationIncomplete = true;
 					DebugLogger.LogOperation(
 						"Rename Script warning: save failed and target rename retained",
 						rollbackResult.Details
@@ -2322,7 +2466,7 @@ public partial class SystemExplorerPlugin
 							SaveSystems();
 					}
 
-					GD.PushWarning(
+					ReportTreeOperationFailureOrWarning(
 						$"System Explorer could not save systems.json and the script rollback ended in an unclear physical state. The operation was not reported as successful.\n\nOriginal: {oldScriptPath}\nTarget: {newScriptPath}\nTemporary: {rollbackResult.TemporaryPath}\nVerified script path: {(string.IsNullOrWhiteSpace(verifiedScriptPath) ? "none" : verifiedScriptPath)}\n\nInspect these paths and systems.json before continuing."
 					);
 					DebugLogger.LogOperation(
@@ -2392,9 +2536,12 @@ public partial class SystemExplorerPlugin
 			}
 			else
 			{
-				GD.PushWarning(
-					$"The script was renamed successfully, but System Explorer could not request reopening of its Script Editor buffer. The filesystem rename will not be rolled back.\n\n{editorRestoreRequestFailureMessage}"
+				ReportTreeOperationFailure(
+					"The script was renamed successfully, but Godot's Script Editor could not be fully restored.",
+					editorRestoreRequestFailureMessage,
+					TreeOperationOutcomeSeverity.Incomplete
 				);
+				operationIncomplete = true;
 				DebugLogger.LogOperation(
 					"Rename Script warning: filesystem success; editor reopen request failed",
 					editorRestoreRequestFailureMessage
@@ -2405,6 +2552,15 @@ public partial class SystemExplorerPlugin
 					endSyncSuppression: true
 				);
 				syncSuppressionQueuedForDeferredEnd = true;
+			}
+
+			if (operationIncomplete)
+			{
+				DebugLogger.LogOperation(
+					"Rename Script incomplete",
+					$"{oldScriptPath} -> {newScriptPath}"
+				);
+				return RenameMutationResult.Failed;
 			}
 
 			DebugLogger.LogOperation("Rename Script Mutated", $"{oldScriptPath} -> {newScriptPath}");
@@ -2524,7 +2680,7 @@ public partial class SystemExplorerPlugin
 			|| baseEditor is not TextEdit currentTextEditor
 		)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				$"System Explorer could not safely activate and match the exact Script Editor buffer before {operationName}:\n{targetPath}"
 			);
 			DebugLogger.LogOperation(
@@ -3718,20 +3874,40 @@ public partial class SystemExplorerPlugin
 		{
 			if (!succeeded)
 			{
-				string warningMessage = pendingRestore.Mode switch
+				string dialogTitle;
+				string userMessage;
+
+				if (pendingRestore.Mode == ScriptRenameEditorRestoreMode.SuccessfulRename)
 				{
-					ScriptRenameEditorRestoreMode.SuccessfulRename =>
-						$"The script was renamed successfully, but Godot did not finish exposing a safe reopened Script Editor buffer after {pendingRestore.DeferredAttemptCount} deferred attempt(s).\n\nFinal path:\n{pendingRestore.TargetScriptPath}\n\nThe filesystem and System Explorer data remain on the new path.\n\n{failureMessage}",
-					ScriptRenameEditorRestoreMode.RestoreOriginalAfterCloseFailure =>
-						$"The rename was cancelled before filesystem mutation, but System Explorer could not fully restore the original Script Editor tab after {pendingRestore.DeferredAttemptCount} deferred attempt(s).\n\nOriginal path:\n{pendingRestore.TargetScriptPath}\n\n{failureMessage}",
-					_ =>
-						$"The filesystem rename failed, and System Explorer could not fully restore the original Script Editor tab after {pendingRestore.DeferredAttemptCount} deferred attempt(s).\n\nOriginal path:\n{pendingRestore.TargetScriptPath}\n\nSystem Explorer data remains unchanged.\n\n{failureMessage}",
-				};
+					dialogTitle = "Rename Incomplete";
+					userMessage =
+						$"The script was renamed successfully, but Godot's Script Editor could not be fully restored.\n\nFinal path:\n{pendingRestore.TargetScriptPath}\n\nThe filesystem and System Explorer metadata remain on the new path.";
+				}
+				else if (
+					pendingRestore.Mode
+					== ScriptRenameEditorRestoreMode.RestoreOriginalAfterCloseFailure
+				)
+				{
+					dialogTitle = "Rename Incomplete";
+					userMessage =
+						$"The rename was cancelled before the filesystem changed, but Godot's Script Editor could not fully restore the original tab.\n\nOriginal path:\n{pendingRestore.TargetScriptPath}";
+				}
+				else
+				{
+					dialogTitle = "Rename Failed";
+					userMessage =
+						$"The filesystem rename failed, and Godot's Script Editor could not fully restore the original tab.\n\nOriginal path:\n{pendingRestore.TargetScriptPath}\n\nSystem Explorer metadata remains unchanged.";
+				}
 
-				if (pendingRestore.Mode != ScriptRenameEditorRestoreMode.SuccessfulRename)
-					GD.PushWarning(warningMessage);
-
-				DebugLogger.LogOperation("Rename Script deferred editor restore failed", warningMessage);
+				QueueStandaloneTreeOperationDialog(
+					dialogTitle,
+					userMessage,
+					$"Mode='{pendingRestore.Mode}', Attempts={pendingRestore.DeferredAttemptCount}, {failureMessage}"
+				);
+				DebugLogger.LogOperation(
+					"Rename Script deferred editor restore failed",
+					$"Mode='{pendingRestore.Mode}', Attempts={pendingRestore.DeferredAttemptCount}, {failureMessage}"
+				);
 			}
 			else
 			{
@@ -4180,7 +4356,7 @@ public partial class SystemExplorerPlugin
 
 		if (editorInterface == null || scriptEditor == null)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
                 "System Explorer could not safely inspect Godot's Script Editor before renaming the script. The rename was cancelled."
 			);
 			DebugLogger.LogOperation("Rename Script failed: Script Editor unavailable", scriptPath);
@@ -4342,7 +4518,7 @@ public partial class SystemExplorerPlugin
 
 		if (directory == null)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				$"System Explorer could not inspect the {resourceTypeName} folder before the case-only rename: {folderPath}"
 			);
 			DebugLogger.LogOperation(
@@ -4391,7 +4567,7 @@ public partial class SystemExplorerPlugin
 
 			if (directory == null)
 			{
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					$"System Explorer could not inspect the script folder before checking the UID sidecar rename: {folderPath}"
 				);
 				DebugLogger.LogOperation(
@@ -4426,7 +4602,7 @@ public partial class SystemExplorerPlugin
 		if (!destinationUidExists)
 			return true;
 
-		GD.PushWarning(
+		ReportTreeOperationFailureOrWarning(
 			$"System Explorer could not rename the script because the destination UID sidecar already exists and will not be overwritten:\n{newUidPath}"
 		);
 		DebugLogger.LogOperation("Rename Script failed: destination UID sidecar exists", newUidPath);
@@ -4448,7 +4624,7 @@ public partial class SystemExplorerPlugin
 
 		if (scriptRenameError != Error.Ok)
 		{
-			GD.PushWarning($"Could not rename script: {oldScriptPath} -> {newScriptPath}");
+			ReportTreeOperationFailureOrWarning($"Could not rename script: {oldScriptPath} -> {newScriptPath}");
 			DebugLogger.LogOperation(
 				"Rename Script failed: filesystem rename error",
 				$"{oldScriptPath} -> {newScriptPath} ({scriptRenameError})"
@@ -4472,7 +4648,7 @@ public partial class SystemExplorerPlugin
 
 		if (scriptRollbackError == Error.Ok)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				$"System Explorer could not move the script UID sidecar, so the script rename was rolled back:\n{oldScriptPath}"
 			);
 			DebugLogger.LogOperation(
@@ -4482,7 +4658,7 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
-		GD.PushWarning(
+		ReportTreeOperationFailureOrWarning(
 			$"System Explorer could not move the script UID sidecar and could not roll back the script rename. The script may remain at the target path while its UID remains at the original path.\n\nOriginal: {oldScriptPath}\nTarget: {newScriptPath}"
 		);
 		DebugLogger.LogOperation(
@@ -4505,7 +4681,7 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(temporaryScriptPath))
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				$"System Explorer could not create a unique temporary path for the case-only rename: {oldScriptPath} -> {newScriptPath}"
 			);
 			DebugLogger.LogOperation(
@@ -4524,7 +4700,7 @@ public partial class SystemExplorerPlugin
 
 		if (firstScriptRenameError != Error.Ok)
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				$"Could not begin case-only script rename: {oldScriptPath} -> {newScriptPath}"
 			);
 			DebugLogger.LogOperation(
@@ -4545,7 +4721,7 @@ public partial class SystemExplorerPlugin
 					oldScriptPath
 				);
 				originalPathAvailableAfterFailure = scriptRollbackError == Error.Ok;
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					$"System Explorer could not begin the case-only UID sidecar rename. The script rename was {(scriptRollbackError == Error.Ok ? "rolled back" : "not fully rolled back")}.\n\nOriginal: {oldScriptPath}\nTemporary: {temporaryScriptPath}"
 				);
 				DebugLogger.LogOperation(
@@ -4573,7 +4749,7 @@ public partial class SystemExplorerPlugin
 			originalPathAvailableAfterFailure =
 				temporaryUidRollbackError == Error.Ok && scriptRollbackError == Error.Ok;
 
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				originalPathAvailableAfterFailure
 					? $"System Explorer could not complete the case-only script rename, but the original script and UID sidecar were restored:\n{oldScriptPath}"
 					: $"System Explorer could not complete or fully roll back the case-only script rename.\n\nOriginal: {oldScriptPath}\nTemporary: {temporaryScriptPath}\nTarget: {newScriptPath}"
@@ -4610,7 +4786,7 @@ public partial class SystemExplorerPlugin
 			&& uidRollbackError == Error.Ok
 			&& scriptToOriginalRollbackError == Error.Ok;
 
-		GD.PushWarning(
+		ReportTreeOperationFailureOrWarning(
 			originalPathAvailableAfterFailure
 				? $"System Explorer could not complete the case-only UID sidecar rename, so the script and UID were restored:\n{oldScriptPath}"
 				: $"System Explorer could not complete or fully roll back the case-only UID sidecar rename.\n\nOriginal: {oldScriptPath}\nTemporary: {temporaryScriptPath}\nTarget: {newScriptPath}"
@@ -5248,7 +5424,7 @@ public partial class SystemExplorerPlugin
 
 		if (newName.Contains("/") || newName.Contains("\\"))
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				"Scene rename only supports changing the file name, not the folder path."
 			);
 			DebugLogger.LogOperation("Rename Scene failed: invalid name", newName);
@@ -5284,7 +5460,7 @@ public partial class SystemExplorerPlugin
 
 		if (!FileAccess.FileExists(oldScenePath))
 		{
-			GD.PushWarning($"File does not exist: {oldScenePath}");
+			ReportTreeOperationFailureOrWarning($"File does not exist: {oldScenePath}");
 			DebugLogger.LogOperation("Rename Scene failed: file missing", oldScenePath);
 			return RenameMutationResult.Failed;
 		}
@@ -5327,7 +5503,7 @@ public partial class SystemExplorerPlugin
 
 			if (string.IsNullOrWhiteSpace(temporaryScenePath))
 			{
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					$"System Explorer could not create a unique temporary path for the case-only scene rename: {oldScenePath} -> {newScenePath}"
 				);
 				DebugLogger.LogOperation(
@@ -5344,7 +5520,7 @@ public partial class SystemExplorerPlugin
 
 			if (firstRenameError != Error.Ok)
 			{
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					$"Could not begin case-only scene rename: {oldScenePath} -> {newScenePath}"
 				);
 				DebugLogger.LogOperation(
@@ -5368,7 +5544,7 @@ public partial class SystemExplorerPlugin
 				bool rollbackRestoredOriginal =
 					rollbackError == Error.Ok && FileAccess.FileExists(oldScenePath);
 
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					rollbackRestoredOriginal
 						? $"System Explorer could not complete the case-only scene rename, but the original scene was restored:\n{oldScenePath}"
 						: $"System Explorer could not complete or roll back the case-only scene rename. The scene file may remain at the temporary path.\n\nOriginal: {oldScenePath}\nTemporary: {temporaryScenePath}\nTarget: {newScenePath}"
@@ -5390,7 +5566,7 @@ public partial class SystemExplorerPlugin
 
 			if (renameError != Error.Ok)
 			{
-				GD.PushWarning($"Could not rename scene: {oldScenePath} -> {newScenePath}");
+				ReportTreeOperationFailureOrWarning($"Could not rename scene: {oldScenePath} -> {newScenePath}");
 				DebugLogger.LogOperation(
 					"Rename Scene failed: filesystem rename error",
 					$"error={renameError}, old='{oldScenePath}', target='{newScenePath}'"
@@ -5401,7 +5577,7 @@ public partial class SystemExplorerPlugin
 
 		if (!FileAccess.FileExists(newScenePath))
 		{
-			GD.PushWarning(
+			ReportTreeOperationFailureOrWarning(
 				$"System Explorer completed the filesystem rename call, but the final scene path could not be verified:\n{newScenePath}\n\nThe System Explorer data was not updated."
 			);
 			DebugLogger.LogOperation(
@@ -5412,8 +5588,19 @@ public partial class SystemExplorerPlugin
 			return RenameMutationResult.Failed;
 		}
 
-		if (!DoesAnySystemContainEntry(entry))
-			TryRecoverSystemsFromDisk("Rename Scene");
+		if (
+			!DoesAnySystemContainEntry(entry)
+			&& !TryRecoverSystemsFromDisk("Rename Scene")
+		)
+		{
+			ReportTreeOperationFailure(
+				"The scene file was renamed, but System Explorer could not recover the metadata needed to update its references.",
+				$"Old='{oldScenePath}', New='{newScenePath}'",
+				TreeOperationOutcomeSeverity.Incomplete
+			);
+			EditorInterface.Singleton.GetResourceFilesystem().Scan();
+			return RenameMutationResult.Failed;
+		}
 
 		SystemsAndFolderBindingsSnapshot metadataSnapshot =
 			CaptureSystemsAndFolderBindingsSnapshot();
@@ -5425,13 +5612,17 @@ public partial class SystemExplorerPlugin
 
 		if (!metadataUpdateResult.Changed)
 		{
-			GD.PushWarning(
-				$"The scene file was renamed, but no matching System Explorer scene entry or linked script reference could be updated. Verify systems.json manually.\n\nOld: {oldScenePath}\nNew: {newScenePath}"
+			ReportTreeOperationFailure(
+				$"The scene file was renamed, but no matching System Explorer scene entry or linked script reference could be updated.\n\nOld: {oldScenePath}\nNew: {newScenePath}",
+				$"Old='{oldScenePath}', New='{newScenePath}'",
+				TreeOperationOutcomeSeverity.Incomplete
 			);
 			DebugLogger.LogOperation(
 				"Rename Scene warning: no System Explorer references updated after filesystem success",
 				$"old='{oldScenePath}', target='{newScenePath}'"
 			);
+			EditorInterface.Singleton.GetResourceFilesystem().Scan();
+			return RenameMutationResult.Failed;
 		}
 		else if (!SaveSystems())
 		{
@@ -5450,14 +5641,21 @@ public partial class SystemExplorerPlugin
 				_selectedScriptEntryFromFilter = selectedScriptEntryBeforeMetadataUpdate;
 				bool restoredMetadataSaved = SaveSystems();
 
-				GD.PushWarning(
-					$"System Explorer could not save systems.json after renaming the scene, so the physical rename was rolled back and the original scene path was restored:\n{oldScenePath}"
-				);
-
-				if (!restoredMetadataSaved)
+				if (restoredMetadataSaved)
 				{
-					GD.PushWarning(
-						"The original System Explorer metadata was restored in memory, but systems.json could not be verified as restored. Restart Godot and inspect systems.json before continuing."
+					ReportTreeOperationFailure(
+						$"System Explorer could not save the renamed scene metadata, so the physical rename was rolled back and the original scene path and metadata were restored:\n{oldScenePath}",
+						$"Original='{oldScenePath}', Target='{newScenePath}', MetadataRestoreVerified=true",
+						TreeOperationOutcomeSeverity.Failed,
+						replaceExistingReport: true
+					);
+				}
+				else
+				{
+					ReportTreeOperationFailure(
+						"The physical scene rename was rolled back, but the restored systems.json state could not be verified. Restart Godot and inspect systems.json before continuing.",
+						$"Original='{oldScenePath}', Target='{newScenePath}', MetadataRestoreVerified=false",
+						TreeOperationOutcomeSeverity.FinalStateUnclear
 					);
 					DebugLogger.LogOperation(
 						"Rename Scene rollback warning: restored systems save failed",
@@ -5473,13 +5671,24 @@ public partial class SystemExplorerPlugin
 
 			if (rollbackResult.State == RenameFilesystemRollbackState.TargetRetained)
 			{
-				GD.PushWarning(
-					$"System Explorer could not save systems.json and could not roll back the physical scene rename. The scene remains at the new path:\n{newScenePath}\n\nCheck the plugin metadata before restarting Godot."
+				bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+				ReportTreeOperationFailure(
+					metadataStateUnclear
+						? $"The scene was renamed and remains at the new path, but the final state of System Explorer's updated metadata could not be verified:\n{newScenePath}"
+						: $"The scene was renamed, but System Explorer could not save systems.json or roll back the physical rename. The scene remains at the new path:\n{newScenePath}",
+					rollbackResult.Details,
+					metadataStateUnclear
+						? TreeOperationOutcomeSeverity.FinalStateUnclear
+						: TreeOperationOutcomeSeverity.Incomplete
 				);
 				DebugLogger.LogOperation(
 					"Rename Scene warning: save failed and target rename retained",
 					rollbackResult.Details
 				);
+				SaveExpansionState();
+				BuildTree(keepCurrentExpansionState: true);
+				EditorInterface.Singleton.GetResourceFilesystem().Scan();
+				return RenameMutationResult.Failed;
 			}
 			else
 			{
@@ -5510,7 +5719,7 @@ public partial class SystemExplorerPlugin
 						SaveSystems();
 				}
 
-				GD.PushWarning(
+				ReportTreeOperationFailureOrWarning(
 					$"System Explorer could not save systems.json and the scene rollback ended in an unclear physical state. The operation was not reported as successful.\n\nOriginal: {oldScenePath}\nTarget: {newScenePath}\nTemporary: {rollbackResult.TemporaryPath}\nVerified scene path: {(string.IsNullOrWhiteSpace(verifiedScenePath) ? "none" : verifiedScenePath)}\n\nInspect these paths and systems.json before continuing."
 				);
 				DebugLogger.LogOperation(
