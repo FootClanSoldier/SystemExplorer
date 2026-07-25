@@ -2,7 +2,7 @@ System Explorer partial class map:
 
 SystemExplorerPlugin.cs (Core file)
 - Constants, shared fields, editor lifecycle, icon loading, template bootstrap, dock registration/removal, and core setup/teardown flow.
-- Declares the folder-bindings resource path, shared folder-binding dialog field, and normal/bound folder colors, and invokes folder-binding load, startup sync, and EditorFileSystem lifecycle setup/teardown in the core plugin order.
+- Declares the folder-bindings resource path, shared folder-binding dialog field, and normal/bound folder colors, and coordinates dock creation, atomic persistent-state initialization, startup-only folder synchronization, reload-safe editor integrations, and idempotent teardown in the core plugin order.
 - Acts as the composition root for the shared ScriptEditorBufferLocator, ScriptEditorBufferAutosaveService, ScriptEditorBufferBatchService, and ScriptEditorBufferAutosaveCoordinator instances used across plugin partials and feature hosts.
 - Owns one lazy plugin-instance SystemExplorerDebugLogger and supplies it with the dynamic () => DebugState provider, so the current Project Settings value is read when each log method runs rather than cached during logger construction.
 - Keeps locator construction behind a lazy holder so lazy Refactor Namespace preflight composition always receives a fully constructed non-null locator.
@@ -23,28 +23,35 @@ Diagnostics/SystemExplorerDebugLogger.cs
 - Writes only through GD.Print(...), knows nothing about plugin state or operation-specific diagnostics, and never displays warnings or errors.
 
 Partials/SystemExplorerPlugin.DockUi.cs
-- Builds the dock UI controls, toolbar/input layout, feature-specific dialogs, tree control, context menu nodes, and their plugin-owned signal wiring, including the reusable File Deletion Incomplete information dialog used after best-effort physical remove batches.
+- Builds the dock UI controls, toolbar/input layout, feature-specific dialogs, tree control, context menu nodes, and their plugin-owned reload-safe signal wiring, including the reusable File Deletion Incomplete information dialog used after best-effort physical remove batches.
 - Creates and mounts the single shared technical tree-operation result dialog through TreeOperationDialogs.cs without owning its presentation policy or operation context.
 - Creates exactly one reusable Resources-access EditorFileDialog for folder binding, configured for OpenDir and connected through DirSelected.
-- Invokes the dedicated Refactor Namespace partial to create its plugin-owned dialogs and controls, connects those plugin-owned signals once, mounts both dialogs directly under _dock as siblings after _createScriptDialog and before the CSharpier dialogs, and creates the initial managed host through the same centralized composition method used by recovery.
+- Invokes the dedicated Refactor Namespace partial to create its plugin-owned dialogs and controls, delegates their idempotent named-callable wiring to that partial, mounts both dialogs directly under _dock as siblings after _createScriptDialog and before the CSharpier dialogs, and creates the initial managed host through the same centralized composition method used by recovery.
+- Owns validation, idempotent Connect/IsConnected/Disconnect coordination, named signal adapters, teardown reference clearing, and the named first-run-note margin callback for dock-owned controls.
 - Handles System Name input behavior, including the inline Enter hint icon and cursor updates.
+
+Partials/SystemExplorerPlugin.EditorReloadLifecycle.cs
+- Owns the per-assembly generation token, initialized-generation marker, reentrancy guard, and deduplicated user-facing failure path used to detect and recover a managed C# assembly reload without interpreting legitimately empty metadata as lost state.
+- Reads systems.json first and folder_bindings.json second into local validated models, then replaces _systems and _folderBindings together only after both read paths succeed; the recovery path is read-only and never invokes save, rollback, or startup folder synchronization.
+- Resets reload-unsafe queued and pending managed operation state, validates the surviving dock/dialog objects, and restores dock, TreeOperationDialog, Refactor Namespace, EditorFileSystem, ScriptEditor, and polling-timer integrations idempotently.
+- Provides the shared named-method Callable helpers that use Godot's actual IsConnected state for defensive Connect and Disconnect behavior across plugin partials.
 
 Partials/SystemExplorerPlugin.TreeOperationDialogs.cs
 - Owns the single reusable plugin-level AcceptDialog used for user-facing technical tree-operation failure, incomplete, and unclear-state results.
 - Owns the scoped tree-operation context, nested result merging, severity precedence, per-operation deduplication, and the separation between concise user text and DebugLogger technical diagnostics.
-- Owns deferred and lifecycle-safe popup scheduling, including queued presentation before the dock is mounted, persistent deduplication for automatic folder sync, and shutdown invalidation of stale deferred callbacks.
+- Owns deferred and lifecycle-safe popup scheduling, including queued presentation before the dock is mounted, persistent deduplication for automatic folder sync, reload-state invalidation, named-callable signal wiring, and shutdown invalidation of stale deferred callbacks.
 - Enforces close-origin-before-popup ordering through idempotent feature-owned cleanup callbacks and provides the small shared reporting surface used by deeper persistence and recovery helpers without coupling them to originating dialogs.
 - Defines the boundary between technical failures after an allowed operation enters its mutation/persistence phase and normal policy, validation, conflict, disabled-action, and no-op outcomes that retain their existing UX.
 
 Partials/SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
 - Owns creation and direct SystemExplorerPlugin field retention of the Refactor Namespace main dialog, incomplete-write report dialog, and every Godot control required by NamespaceRefactorDialogView while preserving the existing layout, text, sizing, grouping, initial state, and child order.
-- Connects all Refactor Namespace UI signals exactly once to named SystemExplorerPlugin handlers and reuses the shared IsEnterPressed(...) dialog-input helper for Enter/keypad-Enter confirmation.
+- Connects all Refactor Namespace UI signals idempotently through named method callables, safely disconnects only existing connections, guards reload-sensitive callbacks, and reuses the shared IsEnterPressed(...) dialog-input helper for Enter/keypad-Enter confirmation.
 - Owns the only NamespaceRefactorPluginHost constructor call, injecting the current plugin-owned UI plus the unchanged shared services, providers, metadata helpers, logging callbacks, and editor-context callbacks.
 - Provides the centralized host ensure/recovery path: validates all required Godot objects, reuses a host bound to the current dialogs, or rebuilds only the managed host/view/feature/service graph around the existing UI without creating nodes, adding children, reconnecting signals, searching the dock tree, or rebuilding the dock.
 - Routes context-menu opening and every plugin-owned Refactor Namespace signal through the ensure path, logs invalid component names or composition exceptions, and emits one warning for a failed user action.
 
 Partials/SystemExplorerPlugin.TreeBuilding.cs
-- Builds/rebuilds the tree, restores expansion state, tracks forced expansion, and contains collapse/expand helpers.
+- Builds/rebuilds the tree only after the managed assembly generation and persistent tree state have been verified, restores expansion state, tracks forced expansion, and contains collapse/expand helpers.
 - Provides tree expansion snapshot helpers used by operations that must restore the user's exact visual tree state after temporary editor/script sync work.
 - Handles lock icon visibility/display state and script tooltip text during tree creation.
 - Applies the bound-folder color and exact physical res:// tooltip only to folders with their own loaded binding; normal folders retain the standard folder color and empty tooltip.
@@ -80,7 +87,7 @@ Partials/SystemExplorerPlugin.ScriptEditorSync.cs
 - Resolves active scripts in priority order: exact pending occurrence, current same-path selection, last valid session occurrence, then deterministic first path match.
 - Uses parent-chain system discovery in the normal tree and the current ScriptFilterResult-to-direct-child index mapping in the flat filter tree for exact occurrence capture and lookup.
 - Keeps the specialized NormalizeScriptPathForSync(...) wrapper, using ScriptPathUtility.Normalize(...) before and after ProjectSettings.LocalizePath(...) while retaining its res:// and .cs validation.
-- Connects to ScriptEditor active-script changes when available, with a light polling fallback if the editor signal cannot be connected.
+- Connects to ScriptEditor active-script changes through a named method callable when available, with an idempotently connected named-callable Timer polling fallback if the editor signal cannot be connected.
 - Primes the initially active editor script without changing tree selection, then syncs only after subsequent active-script changes or explicit post-operation requests.
 - Provides follow-active-script behavior and post-operation selection resync helpers for stabilizing tree selection after single-script refactor/format operations.
 - Provides a short-lived active-script suppression scope so internal ScriptEditor activations and pending user activations during batch/editor-buffer operations do not leak into user-facing tree selection or expansion.
@@ -114,12 +121,12 @@ Partials/SystemExplorerPlugin.ContextMenu.FileManager.cs
 
 Partials/SystemExplorerPlugin.FolderBinding.cs
 - Owns folder-binding state keyed by system name and virtual folder path plus the pending folder-context metadata.
-- Owns defensive loading and readable separate JSON serialization/persistence at folder_bindings.json without changing systems.json; the final text write and read-back verification are delegated to Persistence.cs.
+- Owns the non-mutating folder_bindings.json disk-read result and validation against a supplied systems model, plus readable separate JSON serialization/persistence without changing systems.json; final writes and read-back verification remain delegated to Persistence.cs.
 - Owns bind/unbind operations, path normalization and validation, exact binding lookup, the existing local rollback for unbind, and tree rebuild/reselection after successful direct operations.
 - Treats a new binding and any entries added by its first synchronization as one reversible systems/bindings mutation committed through Persistence.cs; failed commits restore both models and do not rebuild the tree.
 - Owns non-mutating identification of script and scene entries whose immediate physical parent directory exactly matches the explicit binding for their current virtual folder.
 - Owns additive, non-recursive synchronization of direct .cs and .tscn files, deterministic case-insensitive discovery, metadata-aware duplicate detection, preservation of existing linked-scene and lock metadata, and inheritance of an existing linked scene when synchronization adds another virtual reference to the same physical script.
-- Owns the EditorFileSystem FilesystemChanged lifecycle, single deferred sync queue, reentrancy guards, idempotent save/build behavior, startup synchronization, snapshot restore without tree rebuild when automatic additions cannot be verified on disk, expansion/selection restoration after successful automatic additions, and persistent deduplication keys for user-facing save failures from automatic sync.
+- Owns the reload-safe named-callable EditorFileSystem FilesystemChanged lifecycle, single deferred sync queue, state-before-count reload guard, reentrancy guards, idempotent save/build behavior, startup synchronization, snapshot restore without tree rebuild when automatic additions cannot be verified on disk, expansion/selection restoration after successful automatic additions, and persistent deduplication keys for user-facing save failures from automatic sync.
 - Owns mutate-only migration/removal helpers for system/folder rename and removal; they leave physical binding paths unchanged, return whether bindings changed, and never persist on their own. Unbind remains limited to the exact selected folder.
 
 Partials/SystemExplorerPlugin.DialogInput.cs
@@ -188,7 +195,7 @@ Partials/SystemExplorerPlugin.EntryHelpers.cs
 - Contains helpers for script entries, scene entries, linked scene metadata, folder entries, lock markers, and selected filter result updates.
 
 Partials/SystemExplorerPlugin.Persistence.cs
-- Handles JSON load/save, recovery, save guards, and defensive checks before tree/system mutations.
+- Handles systems.json disk reads, JSON serialization/deserialization, save, existing operation-specific recovery, save guards, and defensive checks before tree/system mutations; assembly-reload coordination and atomic systems-plus-bindings commit live in EditorReloadLifecycle.cs.
 - Reports user-facing technical failures through the active tree-operation context (or its standalone fallback for automatic mutating flows), keeps low-level details in DebugLogger, and lets the strongest verified metadata outcome win without emitting duplicate unconditional warnings.
 - Provides EnsureSystemsLoadedForTreeOperation(...), EnsureSystemAvailable(...), EnsureSystemsAvailable(...), disk recovery, serialization, and deserialization.
 - Owns staged sibling writes for System Explorer's systems.json and folder_bindings.json metadata files, including checked StoreString/flush, staging read-back verification, same-directory replacement or first-save move, final-target verification, verified backup restoration after commit failures, and best-effort cleanup of staging and backup artifacts.

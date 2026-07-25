@@ -8,76 +8,94 @@ using System.Text.Json;
 public partial class SystemExplorerPlugin
 {
 	#region Folder Binding State and Persistence
+	private enum FolderBindingsFileReadStatus
+	{
+		Missing,
+		ValidEmpty,
+		ValidNonEmpty,
+		OpenFailed,
+		InvalidJson,
+	}
+
+	private sealed class FolderBindingsFileReadResult
+	{
+		internal FolderBindingsFileReadStatus Status { get; }
+		internal Dictionary<string, Dictionary<string, string>> FolderBindings { get; }
+		internal string FailureDetail { get; }
+
+		internal bool IsValid =>
+			Status == FolderBindingsFileReadStatus.Missing
+			|| Status == FolderBindingsFileReadStatus.ValidEmpty
+			|| Status == FolderBindingsFileReadStatus.ValidNonEmpty;
+
+		internal FolderBindingsFileReadResult(
+			FolderBindingsFileReadStatus status,
+			Dictionary<string, Dictionary<string, string>> folderBindings = null,
+			string failureDetail = ""
+		)
+		{
+			Status = status;
+			FolderBindings = folderBindings
+				?? new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+			FailureDetail = failureDetail ?? "";
+		}
+	}
+
 	private readonly Dictionary<string, Dictionary<string, string>> _folderBindings =
 		new(StringComparer.Ordinal);
 	private string _pendingFolderBindingMetadata = "";
 	private EditorFileSystem _folderBindingResourceFilesystem;
-	private bool _folderBindingFilesystemSignalConnected;
 	private bool _boundFolderSyncQueued;
 	private bool _boundFolderSyncRunning;
 
-	private void LoadFolderBindings()
+	private FolderBindingsFileReadResult ReadFolderBindingsFileFromDisk(
+		Dictionary<string, List<string>> validatedSystems
+	)
 	{
-		DebugLogger.LogOperation("Load Folder Bindings Requested", FolderBindingsPath);
-
-		if (!FileAccess.FileExists(FolderBindingsPath))
-		{
-			DebugLogger.Log("Load Folder Bindings skipped: bindings file does not exist.");
-			return;
-		}
-
-		FileAccess file;
+		validatedSystems ??= new Dictionary<string, List<string>>(StringComparer.Ordinal);
+		bool fileExists;
 
 		try
 		{
-			file = FileAccess.Open(FolderBindingsPath, FileAccess.ModeFlags.Read);
+			fileExists = FileAccess.FileExists(FolderBindingsPath);
 		}
 		catch (Exception exception)
 		{
-			DebugLogger.LogOperation(
-				"Load Folder Bindings skipped: file open threw",
-				$"Path='{FolderBindingsPath}', Exception='{exception}'"
+			return new FolderBindingsFileReadResult(
+				FolderBindingsFileReadStatus.OpenFailed,
+				failureDetail: $"Path='{FolderBindingsPath}', Phase=existence, Exception='{exception}'"
 			);
-			return;
 		}
 
-		if (file == null)
-		{
-			Error openError = FileAccess.GetOpenError();
+		if (!fileExists)
+			return new FolderBindingsFileReadResult(FolderBindingsFileReadStatus.Missing);
 
-			DebugLogger.LogOperation(
-				"Load Folder Bindings skipped: could not open file",
-				$"Path='{FolderBindingsPath}', Error='{openError}'"
+		if (
+			!TryReadMetadataTextFile(
+				FolderBindingsPath,
+				"folder_bindings.json",
+				"folder-bindings-disk-read",
+				out string json,
+				out string readFailureDetail
+			)
+		)
+		{
+			return new FolderBindingsFileReadResult(
+				FolderBindingsFileReadStatus.OpenFailed,
+				failureDetail: readFailureDetail
 			);
-			return;
-		}
-
-		string json;
-
-		try
-		{
-			using (file)
-			{
-				json = file.GetAsText();
-			}
-		}
-		catch (Exception exception)
-		{
-			DebugLogger.LogOperation(
-				"Load Folder Bindings skipped: file read threw",
-				$"Path='{FolderBindingsPath}', Exception='{exception}'"
-			);
-			return;
 		}
 
 		if (string.IsNullOrWhiteSpace(json))
 		{
-			DebugLogger.Log("Load Folder Bindings skipped: bindings file is empty.");
-			return;
+			return new FolderBindingsFileReadResult(
+				FolderBindingsFileReadStatus.InvalidJson,
+				failureDetail: "The file was blank."
+			);
 		}
 
-		Dictionary<string, Dictionary<string, string>> loadedFolderBindings =
-			new(StringComparer.Ordinal);
+		var loadedFolderBindings =
+			new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
 
 		try
 		{
@@ -85,8 +103,10 @@ public partial class SystemExplorerPlugin
 
 			if (document.RootElement.ValueKind != JsonValueKind.Object)
 			{
-				DebugLogger.Log("Load Folder Bindings skipped: root JSON value is not an object.");
-				return;
+				return new FolderBindingsFileReadResult(
+					FolderBindingsFileReadStatus.InvalidJson,
+					failureDetail: "Folder binding data root must be a JSON object."
+				);
 			}
 
 			foreach (JsonProperty systemProperty in document.RootElement.EnumerateObject())
@@ -96,22 +116,27 @@ public partial class SystemExplorerPlugin
 				if (
 					string.IsNullOrWhiteSpace(systemName)
 					|| systemProperty.Value.ValueKind != JsonValueKind.Object
-					|| !_systems.ContainsKey(systemName)
+					|| !validatedSystems.ContainsKey(systemName)
+					|| loadedFolderBindings.ContainsKey(systemName)
 				)
 				{
-					DebugLogger.LogOperation(
-						"Load Folder Bindings ignored system",
-						systemProperty.Name
+					return new FolderBindingsFileReadResult(
+						FolderBindingsFileReadStatus.InvalidJson,
+						failureDetail: $"Invalid or duplicate system binding entry '{systemProperty.Name}'."
 					);
-					continue;
 				}
 
-				Dictionary<string, string> systemBindings = new(StringComparer.Ordinal);
+				var systemBindings = new Dictionary<string, string>(StringComparer.Ordinal);
 
 				foreach (JsonProperty folderProperty in systemProperty.Value.EnumerateObject())
 				{
 					if (folderProperty.Value.ValueKind != JsonValueKind.String)
-						continue;
+					{
+						return new FolderBindingsFileReadResult(
+							FolderBindingsFileReadStatus.InvalidJson,
+							failureDetail: $"Binding '{systemProperty.Name}/{folderProperty.Name}' is not a string path."
+						);
+					}
 
 					string virtualFolderPath = NormalizeVirtualFolderPath(folderProperty.Name);
 					string physicalFolderPath = NormalizeBoundFolderPath(
@@ -121,14 +146,18 @@ public partial class SystemExplorerPlugin
 					if (
 						string.IsNullOrWhiteSpace(virtualFolderPath)
 						|| string.IsNullOrWhiteSpace(physicalFolderPath)
-						|| !DoesVirtualFolderExist(systemName, virtualFolderPath)
+						|| systemBindings.ContainsKey(virtualFolderPath)
+						|| !DoesVirtualFolderExist(
+							validatedSystems,
+							systemName,
+							virtualFolderPath
+						)
 					)
 					{
-						DebugLogger.LogOperation(
-							"Load Folder Bindings ignored folder",
-							$"System='{systemName}', Folder='{folderProperty.Name}'"
+						return new FolderBindingsFileReadResult(
+							FolderBindingsFileReadStatus.InvalidJson,
+							failureDetail: $"Binding '{systemProperty.Name}/{folderProperty.Name}' could not be validated against systems.json."
 						);
-						continue;
 					}
 
 					systemBindings[virtualFolderPath] = physicalFolderPath;
@@ -140,26 +169,16 @@ public partial class SystemExplorerPlugin
 		}
 		catch (Exception exception)
 		{
-			DebugLogger.LogOperation(
-				"Load Folder Bindings failed: JSON parse or enumeration error",
-				exception.Message
+			return new FolderBindingsFileReadResult(
+				FolderBindingsFileReadStatus.InvalidJson,
+				failureDetail: exception.Message
 			);
-			return;
 		}
 
-		_folderBindings.Clear();
-
-		foreach (
-			KeyValuePair<string, Dictionary<string, string>> systemBinding in loadedFolderBindings
-		)
-		{
-			_folderBindings[systemBinding.Key] = systemBinding.Value;
-		}
-
-		DebugLogger.LogOperation(
-			"Load Folder Bindings Completed",
-			$"{_folderBindings.Sum(binding => binding.Value.Count)} bindings"
-		);
+		FolderBindingsFileReadStatus status = loadedFolderBindings.Count == 0
+			? FolderBindingsFileReadStatus.ValidEmpty
+			: FolderBindingsFileReadStatus.ValidNonEmpty;
+		return new FolderBindingsFileReadResult(status, loadedFolderBindings);
 	}
 
 	private bool SaveFolderBindings()
@@ -389,6 +408,31 @@ public partial class SystemExplorerPlugin
 			string.IsNullOrWhiteSpace(systemName)
 			|| string.IsNullOrWhiteSpace(virtualFolderPath)
 			|| !_systems.TryGetValue(systemName, out List<string> entries)
+			|| entries == null
+		)
+			return false;
+
+		return entries.Any(entry =>
+			entry.StartsWith("folder::", StringComparison.Ordinal)
+			&& string.Equals(
+				GetFolderPathFromFolderEntry(entry),
+				virtualFolderPath,
+				StringComparison.Ordinal
+			)
+		);
+	}
+
+	private static bool DoesVirtualFolderExist(
+		Dictionary<string, List<string>> systems,
+		string systemName,
+		string virtualFolderPath
+	)
+	{
+		if (
+			systems == null
+			|| string.IsNullOrWhiteSpace(systemName)
+			|| string.IsNullOrWhiteSpace(virtualFolderPath)
+			|| !systems.TryGetValue(systemName, out List<string> entries)
 			|| entries == null
 		)
 			return false;
@@ -848,22 +892,42 @@ public partial class SystemExplorerPlugin
 	#endregion
 
 	#region EditorFileSystem Lifecycle
-	private void InitializeFolderBindingFilesystemLifecycle()
+	private bool InitializeFolderBindingFilesystemLifecycle()
 	{
-		if (_folderBindingFilesystemSignalConnected)
-			return;
+		EditorFileSystem currentFilesystem =
+			EditorInterface.Singleton?.GetResourceFilesystem();
 
-		_folderBindingResourceFilesystem = EditorInterface.Singleton?.GetResourceFilesystem();
-
-		if (_folderBindingResourceFilesystem == null)
+		if (!IsValidGodotObject(currentFilesystem))
 		{
 			DebugLogger.Log("Folder Binding filesystem lifecycle skipped: filesystem unavailable.");
-			return;
+			return false;
 		}
 
-		_folderBindingResourceFilesystem.FilesystemChanged += OnBoundFolderFilesystemChanged;
-		_folderBindingFilesystemSignalConnected = true;
-		DebugLogger.Log("Folder Binding filesystem signal connected.");
+		if (
+			IsValidGodotObject(_folderBindingResourceFilesystem)
+			&& _folderBindingResourceFilesystem.GetInstanceId() != currentFilesystem.GetInstanceId()
+		)
+		{
+			DisconnectPluginSignal(
+				_folderBindingResourceFilesystem,
+				EditorFileSystem.SignalName.FilesystemChanged,
+				nameof(OnBoundFolderFilesystemChanged),
+				"Previous EditorFileSystem"
+			);
+		}
+
+		_folderBindingResourceFilesystem = currentFilesystem;
+		bool connected = TryConnectPluginSignal(
+			_folderBindingResourceFilesystem,
+			EditorFileSystem.SignalName.FilesystemChanged,
+			nameof(OnBoundFolderFilesystemChanged),
+			"EditorFileSystem"
+		);
+
+		if (connected)
+			DebugLogger.Log("Folder Binding filesystem signal connected or already current.");
+
+		return connected;
 	}
 
 	private void ShutdownFolderBindingFilesystemLifecycle()
@@ -871,20 +935,30 @@ public partial class SystemExplorerPlugin
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 
-		if (
-			_folderBindingFilesystemSignalConnected
-			&& GodotObject.IsInstanceValid(_folderBindingResourceFilesystem)
-		)
-		{
-			_folderBindingResourceFilesystem.FilesystemChanged -= OnBoundFolderFilesystemChanged;
-		}
+		DisconnectPluginSignal(
+			_folderBindingResourceFilesystem,
+			EditorFileSystem.SignalName.FilesystemChanged,
+			nameof(OnBoundFolderFilesystemChanged),
+			"EditorFileSystem"
+		);
 
-		_folderBindingFilesystemSignalConnected = false;
 		_folderBindingResourceFilesystem = null;
+	}
+
+	private bool IsFolderBindingFilesystemSignalConnected()
+	{
+		return IsPluginSignalConnected(
+			_folderBindingResourceFilesystem,
+			EditorFileSystem.SignalName.FilesystemChanged,
+			nameof(OnBoundFolderFilesystemChanged)
+		);
 	}
 
 	private void OnBoundFolderFilesystemChanged()
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Bound Folder Filesystem Changed"))
+			return;
+
 		if (_boundFolderSyncQueued || _boundFolderSyncRunning || _folderBindings.Count == 0)
 			return;
 
@@ -896,9 +970,12 @@ public partial class SystemExplorerPlugin
 	{
 		_boundFolderSyncQueued = false;
 
+		if (!EnsureManagedAssemblyStateCurrent("Run Bound Folder Sync"))
+			return;
+
 		if (
 			_boundFolderSyncRunning
-			|| !_folderBindingFilesystemSignalConnected
+			|| !IsFolderBindingFilesystemSignalConnected()
 			|| _tree == null
 			|| !GodotObject.IsInstanceValid(_tree)
 		)

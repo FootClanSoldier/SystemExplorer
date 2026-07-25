@@ -113,9 +113,44 @@ public partial class SystemExplorerPlugin
 			OkButtonText = "OK",
 			MinSize = new Vector2I(520, 180),
 		};
+	}
 
-		_treeOperationDialog.Confirmed += OnTreeOperationDialogClosed;
-		_treeOperationDialog.Canceled += OnTreeOperationDialogClosed;
+	private bool ConnectTreeOperationDialogSignals()
+	{
+		if (!IsValidGodotObject(_treeOperationDialog))
+			return false;
+
+		bool connected = true;
+		connected &= TryConnectPluginSignal(
+			_treeOperationDialog,
+			AcceptDialog.SignalName.Confirmed,
+			nameof(OnTreeOperationDialogClosed),
+			nameof(_treeOperationDialog)
+		);
+		connected &= TryConnectPluginSignal(
+			_treeOperationDialog,
+			AcceptDialog.SignalName.Canceled,
+			nameof(OnTreeOperationDialogClosed),
+			nameof(_treeOperationDialog)
+		);
+
+		return connected;
+	}
+
+	private void DisconnectTreeOperationDialogSignals()
+	{
+		DisconnectPluginSignal(
+			_treeOperationDialog,
+			AcceptDialog.SignalName.Confirmed,
+			nameof(OnTreeOperationDialogClosed),
+			nameof(_treeOperationDialog)
+		);
+		DisconnectPluginSignal(
+			_treeOperationDialog,
+			AcceptDialog.SignalName.Canceled,
+			nameof(OnTreeOperationDialogClosed),
+			nameof(_treeOperationDialog)
+		);
 	}
 
 	private TreeOperationDialogScope BeginTreeOperationDialogScope(
@@ -495,8 +530,22 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
+	private void ResetTreeOperationDialogQueuedStateAfterManagedAssemblyReload()
+	{
+		_treeOperationDialogLifecycleGeneration++;
+		_treeOperationDialogDeferredShowScheduled = false;
+		_activeTreeOperationDialogContext = null;
+		_pendingTreeOperationPresentations.Clear();
+		_queuedTreeOperationPresentationFingerprints.Clear();
+		_visibleTreeOperationPresentationFingerprint = "";
+
+		if (IsValidGodotObject(_treeOperationDialog))
+			_treeOperationDialog.Hide();
+	}
+
 	private void ShutdownTreeOperationDialogs()
 	{
+		DisconnectTreeOperationDialogSignals();
 		_treeOperationDialogLifecycleGeneration++;
 		_treeOperationDialogDeferredShowScheduled = false;
 		_activeTreeOperationDialogContext = null;

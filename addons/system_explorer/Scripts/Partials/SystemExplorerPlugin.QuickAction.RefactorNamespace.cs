@@ -89,20 +89,117 @@ public partial class SystemExplorerPlugin
 		_namespaceRefactorDialog.AddChild(container);
 	}
 
-	private void ConnectNamespaceRefactorDialogSignals()
+	private bool AreNamespaceRefactorSignalSourcesValid(out string failureDetail)
 	{
-		_namespaceRefactorDialog.Confirmed += OnNamespaceRefactorConfirmed;
-		_namespaceRefactorDialog.WindowInput += OnNamespaceRefactorDialogWindowInput;
-		_namespaceRefactorExistingNamespaceOption.Toggled +=
-			OnNamespaceRefactorExistingNamespaceOptionToggled;
-		_namespaceRefactorExistingNamespaceDropdown.ItemSelected +=
-			OnNamespaceRefactorExistingNamespaceSelected;
-		_namespaceRefactorWithoutNamespaceOption.Toggled +=
-			OnNamespaceRefactorWithoutNamespaceOptionToggled;
-		_namespaceRefactorOldNamespaceInput.TextSubmitted +=
-			OnNamespaceRefactorOldNamespaceSubmitted;
-		_namespaceRefactorNewNamespaceInput.TextSubmitted +=
-			OnNamespaceRefactorNewNamespaceSubmitted;
+		List<string> invalidComponents = GetInvalidNamespaceRefactorUiComponents();
+		failureDetail = invalidComponents.Count == 0
+			? ""
+			: $"Invalid Refactor Namespace signal sources: {string.Join(", ", invalidComponents)}";
+		return invalidComponents.Count == 0;
+	}
+
+	private bool ConnectNamespaceRefactorDialogSignals()
+	{
+		if (!AreNamespaceRefactorSignalSourcesValid(out string failureDetail))
+		{
+			DebugLogger.LogOperation(
+				"Refactor Namespace signal connection failed",
+				failureDetail
+			);
+			return false;
+		}
+
+		bool connected = true;
+		connected &= TryConnectPluginSignal(
+			_namespaceRefactorDialog,
+			AcceptDialog.SignalName.Confirmed,
+			nameof(OnNamespaceRefactorConfirmed),
+			nameof(_namespaceRefactorDialog)
+		);
+		connected &= TryConnectPluginSignal(
+			_namespaceRefactorDialog,
+			Window.SignalName.WindowInput,
+			nameof(OnNamespaceRefactorDialogWindowInput),
+			nameof(_namespaceRefactorDialog)
+		);
+		connected &= TryConnectPluginSignal(
+			_namespaceRefactorExistingNamespaceOption,
+			BaseButton.SignalName.Toggled,
+			nameof(OnNamespaceRefactorExistingNamespaceOptionToggled),
+			nameof(_namespaceRefactorExistingNamespaceOption)
+		);
+		connected &= TryConnectPluginSignal(
+			_namespaceRefactorExistingNamespaceDropdown,
+			OptionButton.SignalName.ItemSelected,
+			nameof(OnNamespaceRefactorExistingNamespaceSelected),
+			nameof(_namespaceRefactorExistingNamespaceDropdown)
+		);
+		connected &= TryConnectPluginSignal(
+			_namespaceRefactorWithoutNamespaceOption,
+			BaseButton.SignalName.Toggled,
+			nameof(OnNamespaceRefactorWithoutNamespaceOptionToggled),
+			nameof(_namespaceRefactorWithoutNamespaceOption)
+		);
+		connected &= TryConnectPluginSignal(
+			_namespaceRefactorOldNamespaceInput,
+			LineEdit.SignalName.TextSubmitted,
+			nameof(OnNamespaceRefactorOldNamespaceSubmitted),
+			nameof(_namespaceRefactorOldNamespaceInput)
+		);
+		connected &= TryConnectPluginSignal(
+			_namespaceRefactorNewNamespaceInput,
+			LineEdit.SignalName.TextSubmitted,
+			nameof(OnNamespaceRefactorNewNamespaceSubmitted),
+			nameof(_namespaceRefactorNewNamespaceInput)
+		);
+
+		return connected;
+	}
+
+	private void DisconnectNamespaceRefactorDialogSignals()
+	{
+		DisconnectPluginSignal(
+			_namespaceRefactorDialog,
+			AcceptDialog.SignalName.Confirmed,
+			nameof(OnNamespaceRefactorConfirmed),
+			nameof(_namespaceRefactorDialog)
+		);
+		DisconnectPluginSignal(
+			_namespaceRefactorDialog,
+			Window.SignalName.WindowInput,
+			nameof(OnNamespaceRefactorDialogWindowInput),
+			nameof(_namespaceRefactorDialog)
+		);
+		DisconnectPluginSignal(
+			_namespaceRefactorExistingNamespaceOption,
+			BaseButton.SignalName.Toggled,
+			nameof(OnNamespaceRefactorExistingNamespaceOptionToggled),
+			nameof(_namespaceRefactorExistingNamespaceOption)
+		);
+		DisconnectPluginSignal(
+			_namespaceRefactorExistingNamespaceDropdown,
+			OptionButton.SignalName.ItemSelected,
+			nameof(OnNamespaceRefactorExistingNamespaceSelected),
+			nameof(_namespaceRefactorExistingNamespaceDropdown)
+		);
+		DisconnectPluginSignal(
+			_namespaceRefactorWithoutNamespaceOption,
+			BaseButton.SignalName.Toggled,
+			nameof(OnNamespaceRefactorWithoutNamespaceOptionToggled),
+			nameof(_namespaceRefactorWithoutNamespaceOption)
+		);
+		DisconnectPluginSignal(
+			_namespaceRefactorOldNamespaceInput,
+			LineEdit.SignalName.TextSubmitted,
+			nameof(OnNamespaceRefactorOldNamespaceSubmitted),
+			nameof(_namespaceRefactorOldNamespaceInput)
+		);
+		DisconnectPluginSignal(
+			_namespaceRefactorNewNamespaceInput,
+			LineEdit.SignalName.TextSubmitted,
+			nameof(OnNamespaceRefactorNewNamespaceSubmitted),
+			nameof(_namespaceRefactorNewNamespaceInput)
+		);
 	}
 
 	private NamespaceRefactorPluginHost CreateNamespaceRefactorHost()
@@ -238,6 +335,9 @@ public partial class SystemExplorerPlugin
 
 	private void OpenNamespaceRefactorDialog(string metadata)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Open Refactor Namespace"))
+			return;
+
 		if (!TryEnsureNamespaceRefactorHost(out NamespaceRefactorPluginHost host))
 			return;
 
@@ -246,12 +346,18 @@ public partial class SystemExplorerPlugin
 
 	private void OnNamespaceRefactorConfirmed()
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Confirm Refactor Namespace"))
+			return;
+
 		if (TryEnsureNamespaceRefactorHost(out NamespaceRefactorPluginHost host))
 			host.ConfirmDialog();
 	}
 
 	private void OnNamespaceRefactorDialogWindowInput(InputEvent inputEvent)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Refactor Namespace Dialog Input"))
+			return;
+
 		if (!IsEnterPressed(inputEvent))
 			return;
 
@@ -260,12 +366,14 @@ public partial class SystemExplorerPlugin
 
 	private void OnNamespaceRefactorOldNamespaceSubmitted(string _)
 	{
-		ConfirmNamespaceRefactorDialogFromEnter();
+		if (EnsureManagedAssemblyStateCurrent("Submit Old Namespace"))
+			ConfirmNamespaceRefactorDialogFromEnter();
 	}
 
 	private void OnNamespaceRefactorNewNamespaceSubmitted(string _)
 	{
-		ConfirmNamespaceRefactorDialogFromEnter();
+		if (EnsureManagedAssemblyStateCurrent("Submit New Namespace"))
+			ConfirmNamespaceRefactorDialogFromEnter();
 	}
 
 	private void ConfirmNamespaceRefactorDialogFromEnter()
@@ -288,6 +396,9 @@ public partial class SystemExplorerPlugin
 
 	private void OnNamespaceRefactorExistingNamespaceOptionToggled(bool pressed)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Select Existing Namespace Mode"))
+			return;
+
 		if (!pressed)
 			return;
 
@@ -297,12 +408,18 @@ public partial class SystemExplorerPlugin
 
 	private void OnNamespaceRefactorExistingNamespaceSelected(long index)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Select Existing Namespace"))
+			return;
+
 		if (TryEnsureNamespaceRefactorHost(out NamespaceRefactorPluginHost host))
 			host.SelectExistingNamespace(index);
 	}
 
 	private void OnNamespaceRefactorWithoutNamespaceOptionToggled(bool pressed)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Select Without Namespace Mode"))
+			return;
+
 		if (!pressed)
 			return;
 

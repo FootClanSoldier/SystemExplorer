@@ -9,6 +9,9 @@ public partial class SystemExplorerPlugin
 	#region Global Input Shortcuts
 	public override void _Input(InputEvent inputEvent)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Global Input"))
+			return;
+
 		HandleGlobalLockShortcut(inputEvent);
 		HandleGlobalBeautifyShortcut(inputEvent);
 

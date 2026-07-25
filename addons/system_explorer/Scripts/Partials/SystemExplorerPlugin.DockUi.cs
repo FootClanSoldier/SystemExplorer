@@ -1,9 +1,13 @@
 #if TOOLS
 using Godot;
+using System.Collections.Generic;
 using SystemExplorer.QuickActions.RefactorNamespace;
 
 public partial class SystemExplorerPlugin
 {
+	private const float FirstRunWelcomeNoteMaximumWidth = 700.0f;
+	private const int FirstRunWelcomeNoteMinimumHorizontalMargin = 16;
+
 	#region Dock UI Setup
 	private void BuildDock()
 	{
@@ -192,44 +196,14 @@ public partial class SystemExplorerPlugin
 			MinSize = new Vector2I(460, 180),
 		};
 
-		_createScriptDialog.FileSelected += OnCreateScriptFileSelected;
-		_relinkScriptDialog.FileSelected += OnRelinkScriptFileSelected;
-		_linkSceneDialog.FileSelected += OnLinkSceneFileSelected;
-		_addSceneDialog.FilesSelected += OnSceneFilesSelected;
-		_relinkSceneDialog.FileSelected += OnRelinkSceneFileSelected;
-		_missingScriptDialog.Confirmed += OnMissingScriptRelinkPressed;
-		_missingScriptDialog.CustomAction += OnMissingScriptCustomAction;
-		_missingSceneDialog.Confirmed += OnMissingSceneRelinkPressed;
-		_missingSceneDialog.CustomAction += OnMissingSceneCustomAction;
-		_systemNameInput.TextChanged += OnSystemNameTextChanged;
-		_systemNameInput.TextSubmitted += _ => OnAddSystemPressed();
-		_systemNameInput.GuiInput += OnSystemNameInputGuiInput;
-		_systemNameInput.MouseExited += OnSystemNameInputMouseExited;
-		_scriptFilterInput.TextChanged += OnScriptFilterTextChanged;
-		_scriptFilterInput.GuiInput += OnScriptFilterInputGuiInput;
-		_scriptFilterInput.MouseExited += OnScriptFilterInputMouseExited;
-		_tree.ItemSelected += OnItemSelected;
-		_tree.GuiInput += OnTreeGuiInput;
-		_tree.MouseExited += OnTreeMouseExited;
-		_fileDialog.FilesSelected += OnScriptFilesSelected;
-		_folderBindingDialog.DirSelected += OnFolderBindingDirectorySelected;
-		_contextMenu.IdPressed += OnContextMenuIdPressed;
-		_contextNewSubmenu.IdPressed += OnContextMenuIdPressed;
-		_contextAddSubmenu.IdPressed += OnContextMenuIdPressed;
-		_contextQuickActionsSubmenu.IdPressed += OnContextMenuIdPressed;
-		_removeDialog.Confirmed += OnRemoveConfirmed;
-		_removeDialog.WindowInput += OnRemoveDialogWindowInput;
-		_removeFromFilesystemCheckBox.GuiInput += OnRemoveDialogWindowInput;
-		_renameDialog.Confirmed += OnRenameConfirmed;
-		_renameNameConflictDialog.Confirmed += OnRenameNameConflictDialogClosed;
-		_renameNameConflictDialog.Canceled += OnRenameNameConflictDialogClosed;
-		_addFolderDialog.Confirmed += OnAddFolderConfirmed;
-		_addFolderConflictDialog.Confirmed += OnAddFolderConflictDialogClosed;
-		_addFolderConflictDialog.Canceled += OnAddFolderConflictDialogClosed;
-		_addSystemConflictDialog.Confirmed += OnAddSystemConflictDialogClosed;
-		_addSystemConflictDialog.Canceled += OnAddSystemConflictDialogClosed;
-		_csharpierNotInstalledDialog.Confirmed += OnCSharpierInstallConfirmed;
-		ConnectNamespaceRefactorDialogSignals();
+		if (!ConnectDockSignals())
+			DebugLogger.Log("One or more dock signals could not be connected.");
+
+		if (!ConnectTreeOperationDialogSignals())
+			DebugLogger.Log("Tree operation dialog signals could not be connected.");
+
+		if (!ConnectNamespaceRefactorDialogSignals())
+			DebugLogger.Log("Refactor Namespace dialog signals could not be connected.");
 
 		_dock.AddChild(_systemNameInput);
 		_dock.AddChild(_scriptFilterInput);
@@ -260,10 +234,8 @@ public partial class SystemExplorerPlugin
 		_namespaceRefactorHost = CreateNamespaceRefactorHost();
 	}
 
-	private static MarginContainer CreateFirstRunWelcomeNote()
+	private MarginContainer CreateFirstRunWelcomeNote()
 	{
-		float noteMaximumWidth = 700.0f;
-		int noteMinimumHorizontalMargin = 16;
 
 		Color noteBackgroundColor = Color.FromHtml("#211F1F");
 		Color noteTitleColor = Color.FromHtml("#AAA6A6");
@@ -279,9 +251,15 @@ public partial class SystemExplorerPlugin
 			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
 		};
 
-		outerMargin.AddThemeConstantOverride("margin_left", noteMinimumHorizontalMargin);
+		outerMargin.AddThemeConstantOverride(
+			"margin_left",
+			FirstRunWelcomeNoteMinimumHorizontalMargin
+		);
 		outerMargin.AddThemeConstantOverride("margin_top", 24);
-		outerMargin.AddThemeConstantOverride("margin_right", noteMinimumHorizontalMargin);
+		outerMargin.AddThemeConstantOverride(
+			"margin_right",
+			FirstRunWelcomeNoteMinimumHorizontalMargin
+		);
 		outerMargin.AddThemeConstantOverride("margin_bottom", 12);
 
 		var noteStyle = new StyleBoxFlat
@@ -308,19 +286,6 @@ public partial class SystemExplorerPlugin
 		};
 		panel.AddThemeStyleboxOverride("panel", noteStyle);
 
-		void UpdateNoteHorizontalMargins()
-		{
-			int resolvedHorizontalMargin = Mathf.Max(
-				noteMinimumHorizontalMargin,
-				Mathf.RoundToInt((outerMargin.Size.X - noteMaximumWidth) / 2.0f)
-			);
-
-			outerMargin.AddThemeConstantOverride("margin_left", resolvedHorizontalMargin);
-			outerMargin.AddThemeConstantOverride("margin_right", resolvedHorizontalMargin);
-		}
-
-		outerMargin.Resized += UpdateNoteHorizontalMargins;
-		outerMargin.VisibilityChanged += UpdateNoteHorizontalMargins;
 
 		var innerMargin = new MarginContainer
 		{
@@ -341,14 +306,14 @@ public partial class SystemExplorerPlugin
 		};
 		content.AddThemeConstantOverride("separation", 4);
 
-var title = new Label
-{
-	Text = "Welcome to System Explorer!",
-	HorizontalAlignment = HorizontalAlignment.Center,
-	FocusMode = Control.FocusModeEnum.None,
-	MouseFilter = Control.MouseFilterEnum.Ignore,
-	SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-};
+		var title = new Label
+		{
+			Text = "Welcome to System Explorer!",
+			HorizontalAlignment = HorizontalAlignment.Center,
+			FocusMode = Control.FocusModeEnum.None,
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+		};
 		title.AddThemeColorOverride("font_color", noteTitleColor);
 		title.AddThemeFontSizeOverride("font_size", 22);
 
@@ -369,6 +334,350 @@ var title = new Label
 		outerMargin.AddChild(panel);
 
 		return outerMargin;
+	}
+
+	private bool AreDockSignalSourcesValid(out string failureDetail)
+	{
+		var invalidSources = new List<string>();
+		AddInvalidDockSignalSource(invalidSources, nameof(_createScriptDialog), _createScriptDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_relinkScriptDialog), _relinkScriptDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_linkSceneDialog), _linkSceneDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_addSceneDialog), _addSceneDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_relinkSceneDialog), _relinkSceneDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_missingScriptDialog), _missingScriptDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_missingSceneDialog), _missingSceneDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_systemNameInput), _systemNameInput);
+		AddInvalidDockSignalSource(invalidSources, nameof(_scriptFilterInput), _scriptFilterInput);
+		AddInvalidDockSignalSource(invalidSources, nameof(_tree), _tree);
+		AddInvalidDockSignalSource(invalidSources, nameof(_fileDialog), _fileDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_folderBindingDialog), _folderBindingDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_contextMenu), _contextMenu);
+		AddInvalidDockSignalSource(invalidSources, nameof(_contextNewSubmenu), _contextNewSubmenu);
+		AddInvalidDockSignalSource(invalidSources, nameof(_contextAddSubmenu), _contextAddSubmenu);
+		AddInvalidDockSignalSource(invalidSources, nameof(_contextQuickActionsSubmenu), _contextQuickActionsSubmenu);
+		AddInvalidDockSignalSource(invalidSources, nameof(_removeDialog), _removeDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_removeFromFilesystemCheckBox), _removeFromFilesystemCheckBox);
+		AddInvalidDockSignalSource(invalidSources, nameof(_renameDialog), _renameDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_renameNameConflictDialog), _renameNameConflictDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_addFolderDialog), _addFolderDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_addFolderConflictDialog), _addFolderConflictDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_addSystemConflictDialog), _addSystemConflictDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_csharpierNotInstalledDialog), _csharpierNotInstalledDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_firstRunWelcomeNote), _firstRunWelcomeNote);
+
+		failureDetail = invalidSources.Count == 0
+			? ""
+			: $"Invalid dock signal sources: {string.Join(", ", invalidSources)}";
+		return invalidSources.Count == 0;
+	}
+
+	private static void AddInvalidDockSignalSource(
+		List<string> invalidSources,
+		string sourceName,
+		GodotObject source
+	)
+	{
+		if (!IsValidGodotObject(source))
+			invalidSources.Add(sourceName);
+	}
+
+	private bool ConnectDockSignals()
+	{
+		if (!AreDockSignalSourcesValid(out string failureDetail))
+		{
+			DebugLogger.LogOperation("Dock signal connection failed", failureDetail);
+			return false;
+		}
+
+		bool connected = true;
+		connected &= TryConnectPluginSignal(_createScriptDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnCreateScriptFileSelectedSignal), nameof(_createScriptDialog));
+		connected &= TryConnectPluginSignal(_relinkScriptDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnRelinkScriptFileSelectedSignal), nameof(_relinkScriptDialog));
+		connected &= TryConnectPluginSignal(_linkSceneDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnLinkSceneFileSelectedSignal), nameof(_linkSceneDialog));
+		connected &= TryConnectPluginSignal(_addSceneDialog, EditorFileDialog.SignalName.FilesSelected, nameof(OnSceneFilesSelectedSignal), nameof(_addSceneDialog));
+		connected &= TryConnectPluginSignal(_relinkSceneDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnRelinkSceneFileSelectedSignal), nameof(_relinkSceneDialog));
+		connected &= TryConnectPluginSignal(_missingScriptDialog, AcceptDialog.SignalName.Confirmed, nameof(OnMissingScriptRelinkPressedSignal), nameof(_missingScriptDialog));
+		connected &= TryConnectPluginSignal(_missingScriptDialog, AcceptDialog.SignalName.CustomAction, nameof(OnMissingScriptCustomActionSignal), nameof(_missingScriptDialog));
+		connected &= TryConnectPluginSignal(_missingSceneDialog, AcceptDialog.SignalName.Confirmed, nameof(OnMissingSceneRelinkPressedSignal), nameof(_missingSceneDialog));
+		connected &= TryConnectPluginSignal(_missingSceneDialog, AcceptDialog.SignalName.CustomAction, nameof(OnMissingSceneCustomActionSignal), nameof(_missingSceneDialog));
+		connected &= TryConnectPluginSignal(_systemNameInput, LineEdit.SignalName.TextChanged, nameof(OnSystemNameTextChanged), nameof(_systemNameInput));
+		connected &= TryConnectPluginSignal(_systemNameInput, LineEdit.SignalName.TextSubmitted, nameof(OnSystemNameSubmitted), nameof(_systemNameInput));
+		connected &= TryConnectPluginSignal(_systemNameInput, Control.SignalName.GuiInput, nameof(OnSystemNameInputGuiInputSignal), nameof(_systemNameInput));
+		connected &= TryConnectPluginSignal(_systemNameInput, Control.SignalName.MouseExited, nameof(OnSystemNameInputMouseExited), nameof(_systemNameInput));
+		connected &= TryConnectPluginSignal(_scriptFilterInput, LineEdit.SignalName.TextChanged, nameof(OnScriptFilterTextChangedSignal), nameof(_scriptFilterInput));
+		connected &= TryConnectPluginSignal(_scriptFilterInput, Control.SignalName.GuiInput, nameof(OnScriptFilterInputGuiInputSignal), nameof(_scriptFilterInput));
+		connected &= TryConnectPluginSignal(_scriptFilterInput, Control.SignalName.MouseExited, nameof(OnScriptFilterInputMouseExited), nameof(_scriptFilterInput));
+		connected &= TryConnectPluginSignal(_tree, Tree.SignalName.ItemSelected, nameof(OnItemSelectedSignal), nameof(_tree));
+		connected &= TryConnectPluginSignal(_tree, Control.SignalName.GuiInput, nameof(OnTreeGuiInputSignal), nameof(_tree));
+		connected &= TryConnectPluginSignal(_tree, Control.SignalName.MouseExited, nameof(OnTreeMouseExited), nameof(_tree));
+		connected &= TryConnectPluginSignal(_fileDialog, EditorFileDialog.SignalName.FilesSelected, nameof(OnScriptFilesSelectedSignal), nameof(_fileDialog));
+		connected &= TryConnectPluginSignal(_folderBindingDialog, EditorFileDialog.SignalName.DirSelected, nameof(OnFolderBindingDirectorySelectedSignal), nameof(_folderBindingDialog));
+		connected &= TryConnectPluginSignal(_contextMenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextMenu));
+		connected &= TryConnectPluginSignal(_contextNewSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextNewSubmenu));
+		connected &= TryConnectPluginSignal(_contextAddSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextAddSubmenu));
+		connected &= TryConnectPluginSignal(_contextQuickActionsSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextQuickActionsSubmenu));
+		connected &= TryConnectPluginSignal(_removeDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRemoveConfirmedSignal), nameof(_removeDialog));
+		connected &= TryConnectPluginSignal(_removeDialog, Window.SignalName.WindowInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeDialog));
+		connected &= TryConnectPluginSignal(_removeFromFilesystemCheckBox, Control.SignalName.GuiInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeFromFilesystemCheckBox));
+		connected &= TryConnectPluginSignal(_renameDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameConfirmedSignal), nameof(_renameDialog));
+		connected &= TryConnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
+		connected &= TryConnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
+		connected &= TryConnectPluginSignal(_addFolderDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConfirmedSignal), nameof(_addFolderDialog));
+		connected &= TryConnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
+		connected &= TryConnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
+		connected &= TryConnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
+		connected &= TryConnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
+		connected &= TryConnectPluginSignal(_csharpierNotInstalledDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCSharpierInstallConfirmedSignal), nameof(_csharpierNotInstalledDialog));
+		connected &= TryConnectPluginSignal(_firstRunWelcomeNote, Control.SignalName.Resized, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
+		connected &= TryConnectPluginSignal(_firstRunWelcomeNote, CanvasItem.SignalName.VisibilityChanged, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
+
+		if (!connected)
+			return false;
+
+		UpdateFirstRunWelcomeNoteHorizontalMargins();
+		return true;
+	}
+
+	private void DisconnectDockSignals()
+	{
+		DisconnectPluginSignal(_createScriptDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnCreateScriptFileSelectedSignal), nameof(_createScriptDialog));
+		DisconnectPluginSignal(_relinkScriptDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnRelinkScriptFileSelectedSignal), nameof(_relinkScriptDialog));
+		DisconnectPluginSignal(_linkSceneDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnLinkSceneFileSelectedSignal), nameof(_linkSceneDialog));
+		DisconnectPluginSignal(_addSceneDialog, EditorFileDialog.SignalName.FilesSelected, nameof(OnSceneFilesSelectedSignal), nameof(_addSceneDialog));
+		DisconnectPluginSignal(_relinkSceneDialog, EditorFileDialog.SignalName.FileSelected, nameof(OnRelinkSceneFileSelectedSignal), nameof(_relinkSceneDialog));
+		DisconnectPluginSignal(_missingScriptDialog, AcceptDialog.SignalName.Confirmed, nameof(OnMissingScriptRelinkPressedSignal), nameof(_missingScriptDialog));
+		DisconnectPluginSignal(_missingScriptDialog, AcceptDialog.SignalName.CustomAction, nameof(OnMissingScriptCustomActionSignal), nameof(_missingScriptDialog));
+		DisconnectPluginSignal(_missingSceneDialog, AcceptDialog.SignalName.Confirmed, nameof(OnMissingSceneRelinkPressedSignal), nameof(_missingSceneDialog));
+		DisconnectPluginSignal(_missingSceneDialog, AcceptDialog.SignalName.CustomAction, nameof(OnMissingSceneCustomActionSignal), nameof(_missingSceneDialog));
+		DisconnectPluginSignal(_systemNameInput, LineEdit.SignalName.TextChanged, nameof(OnSystemNameTextChanged), nameof(_systemNameInput));
+		DisconnectPluginSignal(_systemNameInput, LineEdit.SignalName.TextSubmitted, nameof(OnSystemNameSubmitted), nameof(_systemNameInput));
+		DisconnectPluginSignal(_systemNameInput, Control.SignalName.GuiInput, nameof(OnSystemNameInputGuiInputSignal), nameof(_systemNameInput));
+		DisconnectPluginSignal(_systemNameInput, Control.SignalName.MouseExited, nameof(OnSystemNameInputMouseExited), nameof(_systemNameInput));
+		DisconnectPluginSignal(_scriptFilterInput, LineEdit.SignalName.TextChanged, nameof(OnScriptFilterTextChangedSignal), nameof(_scriptFilterInput));
+		DisconnectPluginSignal(_scriptFilterInput, Control.SignalName.GuiInput, nameof(OnScriptFilterInputGuiInputSignal), nameof(_scriptFilterInput));
+		DisconnectPluginSignal(_scriptFilterInput, Control.SignalName.MouseExited, nameof(OnScriptFilterInputMouseExited), nameof(_scriptFilterInput));
+		DisconnectPluginSignal(_tree, Tree.SignalName.ItemSelected, nameof(OnItemSelectedSignal), nameof(_tree));
+		DisconnectPluginSignal(_tree, Control.SignalName.GuiInput, nameof(OnTreeGuiInputSignal), nameof(_tree));
+		DisconnectPluginSignal(_tree, Control.SignalName.MouseExited, nameof(OnTreeMouseExited), nameof(_tree));
+		DisconnectPluginSignal(_fileDialog, EditorFileDialog.SignalName.FilesSelected, nameof(OnScriptFilesSelectedSignal), nameof(_fileDialog));
+		DisconnectPluginSignal(_folderBindingDialog, EditorFileDialog.SignalName.DirSelected, nameof(OnFolderBindingDirectorySelectedSignal), nameof(_folderBindingDialog));
+		DisconnectPluginSignal(_contextMenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextMenu));
+		DisconnectPluginSignal(_contextNewSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextNewSubmenu));
+		DisconnectPluginSignal(_contextAddSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextAddSubmenu));
+		DisconnectPluginSignal(_contextQuickActionsSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal), nameof(_contextQuickActionsSubmenu));
+		DisconnectPluginSignal(_removeDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRemoveConfirmedSignal), nameof(_removeDialog));
+		DisconnectPluginSignal(_removeDialog, Window.SignalName.WindowInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeDialog));
+		DisconnectPluginSignal(_removeFromFilesystemCheckBox, Control.SignalName.GuiInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeFromFilesystemCheckBox));
+		DisconnectPluginSignal(_renameDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameConfirmedSignal), nameof(_renameDialog));
+		DisconnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
+		DisconnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
+		DisconnectPluginSignal(_addFolderDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConfirmedSignal), nameof(_addFolderDialog));
+		DisconnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
+		DisconnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
+		DisconnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
+		DisconnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
+		DisconnectPluginSignal(_csharpierNotInstalledDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCSharpierInstallConfirmedSignal), nameof(_csharpierNotInstalledDialog));
+		DisconnectPluginSignal(_firstRunWelcomeNote, Control.SignalName.Resized, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
+		DisconnectPluginSignal(_firstRunWelcomeNote, CanvasItem.SignalName.VisibilityChanged, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
+	}
+
+	private void UpdateFirstRunWelcomeNoteHorizontalMargins()
+	{
+		if (!IsValidGodotObject(_firstRunWelcomeNote))
+			return;
+
+		int resolvedHorizontalMargin = Mathf.Max(
+			FirstRunWelcomeNoteMinimumHorizontalMargin,
+			Mathf.RoundToInt(
+				(_firstRunWelcomeNote.Size.X - FirstRunWelcomeNoteMaximumWidth) / 2.0f
+			)
+		);
+
+		_firstRunWelcomeNote.AddThemeConstantOverride("margin_left", resolvedHorizontalMargin);
+		_firstRunWelcomeNote.AddThemeConstantOverride("margin_right", resolvedHorizontalMargin);
+	}
+
+	private void OnCreateScriptFileSelectedSignal(string path)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Create Script File Selected"))
+			OnCreateScriptFileSelected(path);
+	}
+
+	private void OnRelinkScriptFileSelectedSignal(string path)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Relink Script File Selected"))
+			OnRelinkScriptFileSelected(path);
+	}
+
+	private void OnLinkSceneFileSelectedSignal(string path)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Link Scene File Selected"))
+			OnLinkSceneFileSelected(path);
+	}
+
+	private void OnSceneFilesSelectedSignal(string[] paths)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Add Scene Files Selected"))
+			OnSceneFilesSelected(paths);
+	}
+
+	private void OnRelinkSceneFileSelectedSignal(string path)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Relink Scene File Selected"))
+			OnRelinkSceneFileSelected(path);
+	}
+
+	private void OnMissingScriptRelinkPressedSignal()
+	{
+		if (EnsureManagedAssemblyStateCurrent("Missing Script Relink"))
+			OnMissingScriptRelinkPressed();
+	}
+
+	private void OnMissingScriptCustomActionSignal(StringName action)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Missing Script Custom Action"))
+			OnMissingScriptCustomAction(action);
+	}
+
+	private void OnMissingSceneRelinkPressedSignal()
+	{
+		if (EnsureManagedAssemblyStateCurrent("Missing Scene Relink"))
+			OnMissingSceneRelinkPressed();
+	}
+
+	private void OnMissingSceneCustomActionSignal(StringName action)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Missing Scene Custom Action"))
+			OnMissingSceneCustomAction(action);
+	}
+
+	private void OnSystemNameSubmitted(string submittedText)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Submit System Name"))
+			OnAddSystemPressed();
+	}
+
+	private void OnSystemNameInputGuiInputSignal(InputEvent inputEvent)
+	{
+		if (EnsureManagedAssemblyStateCurrent("System Name Input"))
+			OnSystemNameInputGuiInput(inputEvent);
+	}
+
+	private void OnScriptFilterTextChangedSignal(string filterText)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Filter Tree"))
+			OnScriptFilterTextChanged(filterText);
+	}
+
+	private void OnScriptFilterInputGuiInputSignal(InputEvent inputEvent)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Script Filter Input"))
+			OnScriptFilterInputGuiInput(inputEvent);
+	}
+
+	private void OnItemSelectedSignal()
+	{
+		if (EnsureManagedAssemblyStateCurrent("Tree Item Selected"))
+			OnItemSelected();
+	}
+
+	private void OnTreeGuiInputSignal(InputEvent inputEvent)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Tree Input"))
+			OnTreeGuiInput(inputEvent);
+	}
+
+	private void OnScriptFilesSelectedSignal(string[] paths)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Add Script Files Selected"))
+			OnScriptFilesSelected(paths);
+	}
+
+	private void OnFolderBindingDirectorySelectedSignal(string selectedDirectory)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Folder Binding Directory Selected"))
+			OnFolderBindingDirectorySelected(selectedDirectory);
+	}
+
+	private void OnContextMenuIdPressedSignal(long id)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Context Menu Action"))
+			OnContextMenuIdPressed(id);
+	}
+
+	private void OnRemoveDialogWindowInputSignal(InputEvent inputEvent)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Remove Dialog Input"))
+			OnRemoveDialogWindowInput(inputEvent);
+	}
+
+	private void OnRemoveConfirmedSignal()
+	{
+		if (EnsureManagedAssemblyStateCurrent("Remove Confirmed"))
+			OnRemoveConfirmed();
+	}
+
+	private void OnRenameConfirmedSignal()
+	{
+		if (EnsureManagedAssemblyStateCurrent("Rename Confirmed"))
+			OnRenameConfirmed();
+	}
+
+	private void OnAddFolderConfirmedSignal()
+	{
+		if (EnsureManagedAssemblyStateCurrent("Add Folder Confirmed"))
+			OnAddFolderConfirmed();
+	}
+
+	private void OnCSharpierInstallConfirmedSignal()
+	{
+		if (EnsureManagedAssemblyStateCurrent("Install CSharpier"))
+			OnCSharpierInstallConfirmed();
+	}
+
+	private void ClearDockControlReferences()
+	{
+		_systemNameInput = null;
+		_scriptFilterInput = null;
+		_firstRunWelcomeNote = null;
+		_tree = null;
+		_focusReleaseTarget = null;
+		_fileDialog = null;
+		_folderBindingDialog = null;
+		_contextMenu = null;
+		_contextNewSubmenu = null;
+		_contextAddSubmenu = null;
+		_contextQuickActionsSubmenu = null;
+		_removeDialog = null;
+		_physicalRemoveIncompleteDialog = null;
+		_removeFromFilesystemCheckBox = null;
+		_renameDialog = null;
+		_renameInput = null;
+		_renameNameConflictDialog = null;
+		_addFolderDialog = null;
+		_addFolderInput = null;
+		_addFolderConflictDialog = null;
+		_addSystemConflictDialog = null;
+		_namespaceRefactorDialog = null;
+		_namespaceRefactorIncompleteWriteReportDialog = null;
+		_namespaceRefactorDescriptionLabel = null;
+		_namespaceRefactorNewNamespaceLabel = null;
+		_namespaceRefactorNewNamespaceInput = null;
+		_namespaceRefactorOldNamespaceLabel = null;
+		_namespaceRefactorOldNamespaceInput = null;
+		_namespaceRefactorApplyToLabel = null;
+		_namespaceRefactorExistingNamespaceOption = null;
+		_namespaceRefactorExistingNamespaceDropdown = null;
+		_namespaceRefactorWithoutNamespaceOption = null;
+		_csharpierInstallResultDialog = null;
+		_csharpierNotInstalledDialog = null;
+		_createScriptDialog = null;
+		_relinkScriptDialog = null;
+		_linkSceneDialog = null;
+		_addSceneDialog = null;
+		_relinkSceneDialog = null;
+		_missingScriptDialog = null;
+		_missingSceneDialog = null;
+		_treeOperationDialog = null;
 	}
 
 	private void UpdateFirstRunWelcomeNoteVisibility()

@@ -182,10 +182,30 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		LoadEditorIcons();
 		EnsureScriptTemplateExists();
 		BuildDock();
-		LoadSystems();
-		LoadFolderBindings();
-		SynchronizeBoundFoldersAtStartup();
-		InitializeFolderBindingFilesystemLifecycle();
+
+		bool persistentStateReady =
+			InitializePersistentTreeStateForCurrentAssembly("Plugin Startup");
+
+		if (persistentStateReady)
+			SynchronizeBoundFoldersAtStartup();
+
+		bool integrationsReady = false;
+
+		if (persistentStateReady)
+		{
+			integrationsReady = EnsureManagedAssemblySignalIntegrationsCurrent(
+				out string integrationFailureDetail
+			);
+
+			if (!integrationsReady)
+			{
+				_loadedPersistentTreeStateGeneration = "";
+				ReportManagedAssemblyRecoveryFailure(
+					"Plugin Startup",
+					integrationFailureDetail
+				);
+			}
+		}
 
 		_editorDock = new EditorDock
 		{
@@ -196,14 +216,13 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_editorDock.AddChild(_dock);
 		AddDock(_editorDock);
 
-		BuildTree();
-		SchedulePendingTreeOperationDialogPresentation();
-		InitializeScriptEditorSync();
+		if (persistentStateReady && integrationsReady)
+			BuildTree();
 
+		SchedulePendingTreeOperationDialogPresentation();
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));
 
 		DebugLogStateSnapshot("Enter Tree Complete");
-
 		StartCSharpierStartupWarmUp();
 	}
 
@@ -394,19 +413,33 @@ public sealed class {{CLASS_NAME}}
 		DebugLogger.LogOperation("Exit Tree");
 
 		CancelPendingScriptRenameEditorRestore();
+		_boundFolderSyncQueued = false;
+		_boundFolderSyncRunning = false;
+		_isScriptEditorSyncDeferredQueued = false;
 		ShutdownTreeOperationDialogs();
 		ShutdownScriptEditorSync();
 		ShutdownFolderBindingFilesystemLifecycle();
+		DisconnectNamespaceRefactorDialogSignals();
+		DisconnectDockSignals();
 		_namespaceRefactorHost = null;
 
-		if (_editorDock == null)
-			return;
+		if (IsValidGodotObject(_editorDock))
+		{
+			if (_editorDock.IsInsideTree())
+				RemoveDock(_editorDock);
 
-		RemoveDock(_editorDock);
-		_editorDock.QueueFree();
+			_editorDock.QueueFree();
+		}
+		else if (IsValidGodotObject(_dock))
+		{
+			_dock.QueueFree();
+		}
 
 		_editorDock = null;
 		_dock = null;
+		ClearDockControlReferences();
+		_loadedPersistentTreeStateGeneration = "";
+		_isRecoveringManagedAssemblyState = false;
 	}
 
 	#endregion

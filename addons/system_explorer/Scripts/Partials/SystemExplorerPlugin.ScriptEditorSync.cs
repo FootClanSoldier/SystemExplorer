@@ -27,7 +27,6 @@ public partial class SystemExplorerPlugin
 	private bool _followActiveScript = true;
 	private bool _followActiveScriptHasObservedInitialPath;
 	private bool _isSyncingTreeSelectionToActiveScript;
-	private bool _isScriptEditorSyncSignalConnected;
 	private bool _isScriptEditorSyncDeferredQueued;
 	private bool _suppressNextTreeNavigationFromScriptEditorSync;
 	private int _scriptEditorSyncSuppressionDepth;
@@ -39,23 +38,41 @@ public partial class SystemExplorerPlugin
 	private ScriptEditor _scriptEditorSyncScriptEditor;
 	private Timer _scriptEditorSyncPollTimer;
 
-	private void InitializeScriptEditorSync()
+	private bool EnsureScriptEditorSyncLifecycleCurrent()
 	{
-		ShutdownScriptEditorSync();
+		ScriptEditor currentScriptEditor = EditorInterface.Singleton?.GetScriptEditor();
 
-		ScriptEditor scriptEditor = EditorInterface.Singleton?.GetScriptEditor();
-
-		if (scriptEditor == null)
+		if (IsValidGodotObject(currentScriptEditor))
 		{
-			StartScriptEditorSyncPollingFallback();
-			return;
+			if (
+				IsValidGodotObject(_scriptEditorSyncScriptEditor)
+				&& _scriptEditorSyncScriptEditor.GetInstanceId()
+					!= currentScriptEditor.GetInstanceId()
+			)
+			{
+				DisconnectPluginSignal(
+					_scriptEditorSyncScriptEditor,
+					ScriptEditorChangedSignalName,
+					nameof(OnScriptEditorScriptChanged),
+					"Previous ScriptEditor"
+				);
+			}
+
+			_scriptEditorSyncScriptEditor = currentScriptEditor;
+			PrimeScriptEditorSyncActiveScriptPath();
+
+			if (TryConnectScriptEditorSyncSignal(currentScriptEditor))
+			{
+				StopScriptEditorSyncPollingFallback();
+				return true;
+			}
+		}
+		else
+		{
+			_scriptEditorSyncScriptEditor = null;
 		}
 
-		_scriptEditorSyncScriptEditor = scriptEditor;
-		PrimeScriptEditorSyncActiveScriptPath();
-
-		if (!TryConnectScriptEditorSyncSignal(scriptEditor))
-			StartScriptEditorSyncPollingFallback();
+		return StartScriptEditorSyncPollingFallback();
 	}
 
 	private void ShutdownScriptEditorSync()
@@ -64,6 +81,11 @@ public partial class SystemExplorerPlugin
 		StopScriptEditorSyncPollingFallback();
 
 		_scriptEditorSyncScriptEditor = null;
+		ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload();
+	}
+
+	private void ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload()
+	{
 		_lastObservedActiveScriptPath = "";
 		_lastSyncedActiveScriptPath = "";
 		_followActiveScriptHasObservedInitialPath = false;
@@ -78,79 +100,95 @@ public partial class SystemExplorerPlugin
 
 	private bool TryConnectScriptEditorSyncSignal(ScriptEditor scriptEditor)
 	{
-		if (scriptEditor == null || !scriptEditor.HasSignal(ScriptEditorChangedSignalName))
-			return false;
-
-		Callable callable = new(this, nameof(OnScriptEditorScriptChanged));
-
-		if (scriptEditor.IsConnected(ScriptEditorChangedSignalName, callable))
+		if (
+			!IsValidGodotObject(scriptEditor)
+			|| !scriptEditor.HasSignal(ScriptEditorChangedSignalName)
+		)
 		{
-			_isScriptEditorSyncSignalConnected = true;
-			return true;
-		}
-
-		Error error = scriptEditor.Connect(ScriptEditorChangedSignalName, callable);
-
-		if (error != Error.Ok)
-		{
-			DebugLogger.Log($"Script Editor Sync signal connect skipped: {error}.");
 			return false;
 		}
 
-		_isScriptEditorSyncSignalConnected = true;
-		DebugLogger.Log("Script Editor Sync connected to editor_script_changed.");
-		return true;
+		bool connected = TryConnectPluginSignal(
+			scriptEditor,
+			ScriptEditorChangedSignalName,
+			nameof(OnScriptEditorScriptChanged),
+			"ScriptEditor"
+		);
+
+		if (connected)
+			DebugLogger.Log("Script Editor Sync connected or already current.");
+
+		return connected;
 	}
 
 	private void DisconnectScriptEditorSyncSignal()
 	{
-		ScriptEditor scriptEditor = _scriptEditorSyncScriptEditor;
-
-		if (!_isScriptEditorSyncSignalConnected || !GodotObject.IsInstanceValid(scriptEditor))
-		{
-			_isScriptEditorSyncSignalConnected = false;
-			return;
-		}
-
-		Callable callable = new(this, nameof(OnScriptEditorScriptChanged));
-
-		if (scriptEditor.IsConnected(ScriptEditorChangedSignalName, callable))
-			scriptEditor.Disconnect(ScriptEditorChangedSignalName, callable);
-
-		_isScriptEditorSyncSignalConnected = false;
+		DisconnectPluginSignal(
+			_scriptEditorSyncScriptEditor,
+			ScriptEditorChangedSignalName,
+			nameof(OnScriptEditorScriptChanged),
+			"ScriptEditor"
+		);
 	}
 
-	private void StartScriptEditorSyncPollingFallback()
+	private bool StartScriptEditorSyncPollingFallback()
 	{
-		if (_scriptEditorSyncPollTimer != null)
-			return;
-
-		_scriptEditorSyncPollTimer = new Timer
+		if (!IsValidGodotObject(_scriptEditorSyncPollTimer))
 		{
-			WaitTime = ScriptEditorSyncPollIntervalSeconds,
-			OneShot = false,
-			Autostart = false,
-		};
-		_scriptEditorSyncPollTimer.Timeout += OnScriptEditorSyncPollTimerTimeout;
-		AddChild(_scriptEditorSyncPollTimer);
-		_scriptEditorSyncPollTimer.Start();
+			_scriptEditorSyncPollTimer = new Timer
+			{
+				WaitTime = ScriptEditorSyncPollIntervalSeconds,
+				OneShot = false,
+				Autostart = false,
+			};
+			AddChild(_scriptEditorSyncPollTimer);
+		}
+
+		if (
+			!TryConnectPluginSignal(
+				_scriptEditorSyncPollTimer,
+				Timer.SignalName.Timeout,
+				nameof(OnScriptEditorSyncPollTimerTimeout),
+				nameof(_scriptEditorSyncPollTimer)
+			)
+		)
+		{
+			return false;
+		}
+
+		if (_scriptEditorSyncPollTimer.IsStopped())
+			_scriptEditorSyncPollTimer.Start();
 
 		DebugLogger.Log("Script Editor Sync using polling fallback.");
+		return true;
 	}
 
 	private void StopScriptEditorSyncPollingFallback()
 	{
-		if (_scriptEditorSyncPollTimer == null)
-			return;
+		Timer pollTimer = _scriptEditorSyncPollTimer;
 
-		_scriptEditorSyncPollTimer.Timeout -= OnScriptEditorSyncPollTimerTimeout;
-		_scriptEditorSyncPollTimer.Stop();
-		_scriptEditorSyncPollTimer.QueueFree();
+		if (!IsValidGodotObject(pollTimer))
+		{
+			_scriptEditorSyncPollTimer = null;
+			return;
+		}
+
+		DisconnectPluginSignal(
+			pollTimer,
+			Timer.SignalName.Timeout,
+			nameof(OnScriptEditorSyncPollTimerTimeout),
+			nameof(_scriptEditorSyncPollTimer)
+		);
+		pollTimer.Stop();
+		pollTimer.QueueFree();
 		_scriptEditorSyncPollTimer = null;
 	}
 
 	private void OnScriptEditorScriptChanged(Script script)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Script Editor Changed"))
+			return;
+
 		if (!_followActiveScript || IsScriptEditorSyncSuppressed())
 			return;
 
@@ -159,6 +197,9 @@ public partial class SystemExplorerPlugin
 
 	private void OnScriptEditorSyncPollTimerTimeout()
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Script Editor Sync Poll"))
+			return;
+
 		if (!_followActiveScript || IsScriptEditorSyncSuppressed())
 			return;
 
@@ -177,6 +218,9 @@ public partial class SystemExplorerPlugin
 	private void TrySyncTreeSelectionToActiveScriptDeferred()
 	{
 		_isScriptEditorSyncDeferredQueued = false;
+
+		if (!EnsureManagedAssemblyStateCurrent("Deferred Script Editor Sync"))
+			return;
 
 		if (IsScriptEditorSyncSuppressed())
 			return;

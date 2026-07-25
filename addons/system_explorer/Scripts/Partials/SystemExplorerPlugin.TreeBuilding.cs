@@ -10,6 +10,9 @@ public partial class SystemExplorerPlugin
 	#region Tree Building and Expansion State
 	private void BuildTree(bool keepCurrentExpansionState = false)
 	{
+		if (!EnsureManagedAssemblyStateCurrent("Build Tree"))
+			return;
+
 		UpdateFirstRunWelcomeNoteVisibility();
 
 		if (IsScriptFilterActive())

@@ -2005,38 +2005,6 @@ public partial class SystemExplorerPlugin
 		return value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
 	}
 
-	private void LoadSystems()
-	{
-		DebugLogger.LogOperation("Load Systems Requested", SavePath);
-
-		SystemsFileReadResult diskReadResult = ReadSystemsFileFromDisk();
-
-		if (diskReadResult.Status == SystemsFileReadStatus.Missing)
-		{
-			DebugLogger.Log("Load Systems skipped: save file does not exist.");
-			return;
-		}
-
-		if (!diskReadResult.IsValid)
-		{
-			DebugLogger.LogOperation(
-				"Load Systems skipped: systems file was unusable",
-				$"Status={diskReadResult.Status}, Detail='{diskReadResult.FailureDetail}'"
-			);
-			return;
-		}
-
-		_systems.Clear();
-
-		foreach (KeyValuePair<string, List<string>> system in diskReadResult.Systems)
-			_systems[system.Key] = system.Value ?? new List<string>();
-
-		NormalizeAllSystemEntries();
-
-		DebugLogger.LogOperation("Load Systems Completed", $"{_systems.Count} systems");
-		DebugLogStateSnapshot("Loaded Systems");
-	}
-
 	#endregion
 }
 #endif
