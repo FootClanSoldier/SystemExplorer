@@ -140,6 +140,7 @@ internal sealed class NamespaceRefactorPreparationService
 			targetSnapshots,
 			referenceSnapshots,
 			declarationSnapshots,
+			normalizedTargetPaths,
 			oldNamespace,
 			newNamespace
 		);

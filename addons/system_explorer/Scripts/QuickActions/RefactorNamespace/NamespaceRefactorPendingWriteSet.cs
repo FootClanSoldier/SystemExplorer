@@ -9,11 +9,13 @@ internal sealed class NamespaceRefactorPendingWriteSet
 	internal string SelectedScriptPath { get; }
 	internal Dictionary<string, string> OriginalTextsByPath { get; }
 	internal Dictionary<string, string> PendingWrites { get; }
+	internal NamespaceRefactorReplaceWritePlan ReplaceWritePlan { get; }
 
 	internal NamespaceRefactorPendingWriteSet(
 		string selectedScriptPath,
 		Dictionary<string, string> originalTextsByPath,
-		Dictionary<string, string> pendingWrites
+		Dictionary<string, string> pendingWrites,
+		NamespaceRefactorReplaceWritePlan replaceWritePlan = null
 	)
 	{
 		SelectedScriptPath = selectedScriptPath ?? "";
@@ -22,6 +24,7 @@ internal sealed class NamespaceRefactorPendingWriteSet
 			?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		PendingWrites =
 			pendingWrites ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		ReplaceWritePlan = replaceWritePlan;
 	}
 
 	internal static NamespaceRefactorPendingWriteSet FromPlan(
@@ -41,7 +44,8 @@ internal sealed class NamespaceRefactorPendingWriteSet
 				: new Dictionary<string, string>(
 					plan.PendingWrites,
 					StringComparer.OrdinalIgnoreCase
-				)
+				),
+			plan?.ReplaceWritePlan
 		);
 	}
 }

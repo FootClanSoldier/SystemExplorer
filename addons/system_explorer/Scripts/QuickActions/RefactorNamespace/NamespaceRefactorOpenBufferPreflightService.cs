@@ -9,358 +9,560 @@ namespace SystemExplorer.QuickActions.RefactorNamespace;
 
 internal enum NamespaceRefactorOpenBufferPreflightMode
 {
-    ActivatingOnly,
-    NonActivatingOnly,
-    NonActivatingWithActivationFallback,
+	ActivatingOnly,
+	NonActivatingOnly,
+	NonActivatingWithActivationFallback,
+}
+
+internal enum NamespaceRefactorOpenBufferPreflightFailure
+{
+	None,
+	LookupFailed,
+	AutosaveFailed,
+	ReferenceGuardFailed,
+	ActivationLookupFailed,
 }
 
 internal readonly record struct NamespaceRefactorOpenBufferPreflightResult(
-    bool Success,
-    bool DidAutosave,
-    string FailureMessage
-);
+	bool Success,
+	bool DidAutosave,
+	string FailureMessage,
+	NamespaceRefactorOpenBufferPreflightFailure Failure,
+	string FailurePath,
+	ScriptEditorBufferLookupFailure LookupFailure,
+	ScriptEditorBufferAutosaveFailure AutosaveFailure,
+	ScriptEditorBufferAutosaveDiagnosticReason DiagnosticReason
+)
+{
+	internal static NamespaceRefactorOpenBufferPreflightResult Succeeded(
+		bool didAutosave = false
+	) => new(
+		true,
+		didAutosave,
+		"",
+		NamespaceRefactorOpenBufferPreflightFailure.None,
+		"",
+		ScriptEditorBufferLookupFailure.None,
+		ScriptEditorBufferAutosaveFailure.None,
+		ScriptEditorBufferAutosaveDiagnosticReason.None
+	);
+
+	internal static NamespaceRefactorOpenBufferPreflightResult Failed(
+		NamespaceRefactorOpenBufferPreflightFailure failure,
+		bool didAutosave,
+		string failureMessage,
+		string failurePath = "",
+		ScriptEditorBufferLookupFailure lookupFailure = ScriptEditorBufferLookupFailure.None,
+		ScriptEditorBufferAutosaveFailure autosaveFailure =
+			ScriptEditorBufferAutosaveFailure.None,
+		ScriptEditorBufferAutosaveDiagnosticReason diagnosticReason =
+			ScriptEditorBufferAutosaveDiagnosticReason.None
+	) => new(
+		false,
+		didAutosave,
+		failureMessage ?? "",
+		failure,
+		failurePath ?? "",
+		lookupFailure,
+		autosaveFailure,
+		diagnosticReason
+	);
+}
 
 internal sealed class NamespaceRefactorOpenBufferPreflightService
 {
-    private readonly NamespaceOpenBufferActivationService _activationService;
-    private readonly NamespaceOpenBufferLookupService _lookupService;
-    private readonly NamespaceOpenBufferReferenceGuard _referenceGuard;
-    private readonly ScriptEditorBufferAutosaveCoordinator _autosaveCoordinator;
+	private readonly NamespaceOpenBufferActivationService _activationService;
+	private readonly NamespaceOpenBufferLookupService _lookupService;
+	private readonly NamespaceOpenBufferReferenceGuard _referenceGuard;
+	private readonly ScriptEditorBufferAutosaveCoordinator _autosaveCoordinator;
 
-    internal NamespaceRefactorOpenBufferPreflightService(
-        NamespaceOpenBufferActivationService activationService,
-        NamespaceOpenBufferLookupService lookupService,
-        NamespaceOpenBufferReferenceGuard referenceGuard,
-        ScriptEditorBufferAutosaveCoordinator autosaveCoordinator
-    )
-    {
-        _activationService =
-            activationService ?? throw new ArgumentNullException(nameof(activationService));
-        _lookupService = lookupService ?? throw new ArgumentNullException(nameof(lookupService));
-        _referenceGuard = referenceGuard ?? throw new ArgumentNullException(nameof(referenceGuard));
-        _autosaveCoordinator =
-            autosaveCoordinator ?? throw new ArgumentNullException(nameof(autosaveCoordinator));
-    }
+	internal NamespaceRefactorOpenBufferPreflightService(
+		NamespaceOpenBufferActivationService activationService,
+		NamespaceOpenBufferLookupService lookupService,
+		NamespaceOpenBufferReferenceGuard referenceGuard,
+		ScriptEditorBufferAutosaveCoordinator autosaveCoordinator
+	)
+	{
+		_activationService =
+			activationService ?? throw new ArgumentNullException(nameof(activationService));
+		_lookupService = lookupService ?? throw new ArgumentNullException(nameof(lookupService));
+		_referenceGuard =
+			referenceGuard ?? throw new ArgumentNullException(nameof(referenceGuard));
+		_autosaveCoordinator =
+			autosaveCoordinator ?? throw new ArgumentNullException(nameof(autosaveCoordinator));
+	}
 
-    internal NamespaceRefactorOpenBufferPreflightResult TryAutosaveCandidateScriptsBeforeBuild(
-        EditorInterface editorInterface,
-        ScriptEditor scriptEditor,
-        IEnumerable<string> candidatePaths,
-        HashSet<string> requiredPaths,
-        NamespaceRefactorOpenBufferPreflightMode mode,
-        string namespaceReferenceToProtect,
-        Action<string> debugLog
-    )
-    {
-        if (scriptEditor == null)
-            return new NamespaceRefactorOpenBufferPreflightResult(true, false, "");
+	internal NamespaceRefactorOpenBufferPreflightResult TryAutosaveCandidateScriptsBeforeBuild(
+		EditorInterface editorInterface,
+		ScriptEditor scriptEditor,
+		IEnumerable<string> candidatePaths,
+		HashSet<string> requiredPaths,
+		NamespaceRefactorOpenBufferPreflightMode mode,
+		string namespaceReferenceToProtect,
+		Action<string> debugLog,
+		NamespaceRefactorDiagnosticContext diagnosticContext = null
+	)
+	{
+		diagnosticContext?.Log(
+			"Preflight",
+			() =>
+				$"Open-buffer preflight started; Mode={mode}; NamespaceReferenceToProtect='{namespaceReferenceToProtect ?? ""}'; ScriptEditorNull={scriptEditor == null}"
+		);
 
-        List<string> normalizedCandidatePaths =
-            candidatePaths
-                ?.Where(path => !string.IsNullOrWhiteSpace(path))
-                .Select(ScriptPathUtility.Normalize)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList()
-            ?? new List<string>();
+		if (scriptEditor == null)
+		{
+			diagnosticContext?.Log(
+				"Preflight",
+				"Open-buffer preflight completed; no ScriptEditor was available and no open buffers were inspected."
+			);
+			return NamespaceRefactorOpenBufferPreflightResult.Succeeded();
+		}
 
-        if (normalizedCandidatePaths.Count == 0)
-            return new NamespaceRefactorOpenBufferPreflightResult(true, false, "");
+		List<string> normalizedCandidatePaths =
+			candidatePaths
+				?.Where(path => !string.IsNullOrWhiteSpace(path))
+				.Select(ScriptPathUtility.Normalize)
+				.Distinct(StringComparer.OrdinalIgnoreCase)
+				.ToList()
+			?? new List<string>();
 
-        HashSet<string> effectiveRequiredPaths =
-            requiredPaths ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		if (normalizedCandidatePaths.Count == 0)
+		{
+			diagnosticContext?.Log(
+				"Preflight",
+				"Open-buffer preflight completed; candidate path set was empty."
+			);
+			return NamespaceRefactorOpenBufferPreflightResult.Succeeded();
+		}
 
-        return mode switch
-        {
-            NamespaceRefactorOpenBufferPreflightMode.ActivatingOnly =>
-                TryAutosaveByActivatingCandidatePaths(
-                    editorInterface,
-                    scriptEditor,
-                    normalizedCandidatePaths,
-                    effectiveRequiredPaths,
-                    debugLog
-                ),
-            NamespaceRefactorOpenBufferPreflightMode.NonActivatingOnly =>
-                TryAutosaveWithoutActivation(
-                    scriptEditor,
-                    normalizedCandidatePaths,
-                    effectiveRequiredPaths,
-                    namespaceReferenceToProtect,
-                    debugLog
-                ),
-            NamespaceRefactorOpenBufferPreflightMode.NonActivatingWithActivationFallback =>
-                TryAutosaveWithoutActivationWithActivationFallback(
-                    editorInterface,
-                    scriptEditor,
-                    normalizedCandidatePaths,
-                    effectiveRequiredPaths,
-                    debugLog
-                ),
-            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
-        };
-    }
+		HashSet<string> effectiveRequiredPaths =
+			requiredPaths
+				?.Where(path => !string.IsNullOrWhiteSpace(path))
+				.Select(ScriptPathUtility.Normalize)
+				.ToHashSet(StringComparer.OrdinalIgnoreCase)
+			?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    private NamespaceRefactorOpenBufferPreflightResult TryAutosaveWithoutActivation(
-        ScriptEditor scriptEditor,
-        IReadOnlyList<string> normalizedCandidatePaths,
-        HashSet<string> requiredPaths,
-        string namespaceReferenceToProtect,
-        Action<string> debugLog
-    )
-    {
-        HashSet<string> targetPaths = normalizedCandidatePaths.ToHashSet(
-            StringComparer.OrdinalIgnoreCase
-        );
+		diagnosticContext?.Log(
+			"Preflight",
+			() =>
+				$"Open-buffer preflight policy resolved; Mode={mode}; CandidateCount={normalizedCandidatePaths.Count}; RequiredCount={effectiveRequiredPaths.Count}; Candidates={diagnosticContext.FormatPaths(normalizedCandidatePaths)}; Required={diagnosticContext.FormatPaths(effectiveRequiredPaths)}"
+		);
 
-        if (
-            !_lookupService.TryGetOpenScriptEditorsByIndexedScriptEditorPaths(
-                scriptEditor,
-                targetPaths,
-                out Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-                out string editorFailureMessage,
-                requiredPaths
-            )
-        )
-        {
-            return new NamespaceRefactorOpenBufferPreflightResult(
-                false,
-                false,
-                editorFailureMessage
-            );
-        }
+		NamespaceRefactorOpenBufferPreflightResult result = mode switch
+		{
+			NamespaceRefactorOpenBufferPreflightMode.ActivatingOnly =>
+				TryAutosaveByActivatingCandidatePaths(
+					editorInterface,
+					scriptEditor,
+					normalizedCandidatePaths,
+					effectiveRequiredPaths,
+					debugLog,
+					diagnosticContext
+				),
+			NamespaceRefactorOpenBufferPreflightMode.NonActivatingOnly =>
+				TryAutosaveWithoutActivation(
+					scriptEditor,
+					normalizedCandidatePaths,
+					effectiveRequiredPaths,
+					namespaceReferenceToProtect,
+					debugLog,
+					diagnosticContext
+				),
+			NamespaceRefactorOpenBufferPreflightMode.NonActivatingWithActivationFallback =>
+				TryAutosaveWithoutActivationWithActivationFallback(
+					editorInterface,
+					scriptEditor,
+					normalizedCandidatePaths,
+					effectiveRequiredPaths,
+					debugLog,
+					diagnosticContext
+				),
+			_ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
+		};
 
-        NamespaceRefactorOpenBufferPreflightResult autosaveResult = TryAutosaveMatchedOpenEditors(
-            openEditorsByPath.Values,
-            requiredPaths,
-            debugLog
-        );
+		diagnosticContext?.Log(
+			"Preflight",
+			() =>
+				$"Open-buffer preflight completed; Success={result.Success}; DidAutosave={result.DidAutosave}; Failure={result.Failure}; FailurePath='{result.FailurePath}'; LookupFailure={result.LookupFailure}; AutosaveFailure={result.AutosaveFailure}; DiagnosticReason={result.DiagnosticReason}"
+		);
+		return result;
+	}
 
-        if (!autosaveResult.Success)
-            return autosaveResult;
+	private NamespaceRefactorOpenBufferPreflightResult TryAutosaveWithoutActivation(
+		ScriptEditor scriptEditor,
+		IReadOnlyList<string> normalizedCandidatePaths,
+		HashSet<string> requiredPaths,
+		string namespaceReferenceToProtect,
+		Action<string> debugLog,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		ScriptEditorBufferGroupLookupResult lookupResult =
+			_lookupService.GetOpenScriptEditorGroupsWithoutActivation(
+				scriptEditor,
+				normalizedCandidatePaths,
+				requiredPaths,
+				diagnosticContext
+			);
 
-        if (
-            _referenceGuard.TryFindUnsafeReference(
-                scriptEditor,
-                openEditorsByPath,
-                namespaceReferenceToProtect,
-                out string unmatchedUsingFailureMessage
-            )
-        )
-        {
-            return new NamespaceRefactorOpenBufferPreflightResult(
-                false,
-                autosaveResult.DidAutosave,
-                unmatchedUsingFailureMessage
-            );
-        }
+		if (!lookupResult.Success)
+		{
+			return CreateLookupFailureResult(lookupResult, didAutosave: false);
+		}
 
-        return autosaveResult;
-    }
+		NamespaceRefactorOpenBufferPreflightResult autosaveResult =
+			TryAutosaveMatchedOpenEditorGroups(
+				lookupResult.OpenEditorGroupsByPath,
+				requiredPaths,
+				debugLog,
+				diagnosticContext,
+				out Dictionary<string, OpenScriptEditorBufferGroup> verifiedGroupsByPath,
+				out _
+			);
 
-    private NamespaceRefactorOpenBufferPreflightResult TryAutosaveWithoutActivationWithActivationFallback(
-        EditorInterface editorInterface,
-        ScriptEditor scriptEditor,
-        IReadOnlyList<string> normalizedCandidatePaths,
-        HashSet<string> requiredPaths,
-        Action<string> debugLog
-    )
-    {
-        HashSet<string> targetPaths = normalizedCandidatePaths.ToHashSet(
-            StringComparer.OrdinalIgnoreCase
-        );
-        HashSet<string> openCandidatePathSet = new(StringComparer.OrdinalIgnoreCase);
+		if (!autosaveResult.Success)
+			return autosaveResult;
 
-        foreach (Script openScript in scriptEditor.GetOpenScripts())
-        {
-            if (openScript == null)
-                continue;
+		bool hasUnsafeReference = _referenceGuard.TryFindUnsafeReference(
+			scriptEditor,
+			verifiedGroupsByPath,
+			namespaceReferenceToProtect,
+			out string unmatchedUsingFailureMessage
+		);
+		diagnosticContext?.Log(
+			"ReferenceGuard",
+			() =>
+				$"Reference guard completed; Namespace='{namespaceReferenceToProtect ?? ""}'; HasUnsafeReference={hasUnsafeReference}; MatchedGroupCount={verifiedGroupsByPath.Count}"
+		);
 
-            string openScriptPath = ScriptPathUtility.Normalize(openScript.ResourcePath);
+		if (hasUnsafeReference)
+		{
+			return NamespaceRefactorOpenBufferPreflightResult.Failed(
+				NamespaceRefactorOpenBufferPreflightFailure.ReferenceGuardFailed,
+				autosaveResult.DidAutosave,
+				unmatchedUsingFailureMessage
+			);
+		}
 
-            if (targetPaths.Contains(openScriptPath))
-                openCandidatePathSet.Add(openScriptPath);
-        }
+		return autosaveResult;
+	}
 
-        List<string> openCandidatePaths = normalizedCandidatePaths
-            .Where(openCandidatePathSet.Contains)
-            .ToList();
+	private NamespaceRefactorOpenBufferPreflightResult TryAutosaveWithoutActivationWithActivationFallback(
+		EditorInterface editorInterface,
+		ScriptEditor scriptEditor,
+		IReadOnlyList<string> normalizedCandidatePaths,
+		HashSet<string> requiredPaths,
+		Action<string> debugLog,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		ScriptEditorBufferGroupLookupResult lookupResult =
+			_lookupService.GetOpenScriptEditorGroupsWithoutActivation(
+				scriptEditor,
+				normalizedCandidatePaths,
+				requiredPaths,
+				diagnosticContext
+			);
 
-        if (
-            !_lookupService.TryGetOpenScriptEditorsByIndexedScriptEditorPaths(
-                scriptEditor,
-                targetPaths,
-                out Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
-                out _,
-                requiredPaths
-            )
-        )
-        {
-            debugLog?.Invoke(
-                "Refactor Namespace pre-scan could not safely match open buffers without activation; falling back to activating lookup."
-            );
+		if (
+			lookupResult.Failure
+			== ScriptEditorBufferLookupFailure.AmbiguousRequiredOpenBufferGroup
+		)
+		{
+			return CreateLookupFailureResult(lookupResult, didAutosave: false);
+		}
 
-            return TryAutosaveByActivatingCandidatePaths(
-                editorInterface,
-                scriptEditor,
-                openCandidatePaths,
-                requiredPaths,
-                debugLog
-            );
-        }
+		NamespaceRefactorOpenBufferPreflightResult nonActivatingResult =
+			TryAutosaveMatchedOpenEditorGroups(
+				lookupResult.OpenEditorGroupsByPath,
+				requiredPaths,
+				debugLog,
+				diagnosticContext,
+				out Dictionary<string, OpenScriptEditorBufferGroup> verifiedGroupsByPath,
+				out List<string> optionalSingleGroupAutosaveFailures
+			);
 
-        NamespaceRefactorOpenBufferPreflightResult nonActivatingResult =
-            TryAutosaveMatchedOpenEditors(openEditorsByPath.Values, requiredPaths, debugLog);
+		if (!nonActivatingResult.Success)
+			return nonActivatingResult;
 
-        if (!nonActivatingResult.Success)
-            return nonActivatingResult;
+		HashSet<string> unsafePathSet = new(
+			lookupResult.UnsafeOpenScriptPaths,
+			StringComparer.OrdinalIgnoreCase
+		);
 
-        List<string> unmatchedOpenCandidatePaths = openCandidatePaths
-            .Where(path => !openEditorsByPath.ContainsKey(path))
-            .ToList();
+		foreach (string failedOptionalPath in optionalSingleGroupAutosaveFailures)
+			unsafePathSet.Add(failedOptionalPath);
 
-        if (unmatchedOpenCandidatePaths.Count == 0)
-            return nonActivatingResult;
+		HashSet<string> ambiguousDuplicatePathSet = new(
+			lookupResult.AmbiguousOpenScriptPaths,
+			StringComparer.OrdinalIgnoreCase
+		);
+		List<string> activationFallbackPaths = normalizedCandidatePaths
+			.Where(path =>
+				unsafePathSet.Contains(path)
+				&& !ambiguousDuplicatePathSet.Contains(path)
+				&& !verifiedGroupsByPath.ContainsKey(path)
+				&& _activationService.IsScriptOpen(scriptEditor, path)
+			)
+			.ToList();
 
-        NamespaceRefactorOpenBufferPreflightResult activationFallbackResult =
-            TryAutosaveByActivatingCandidatePaths(
-                editorInterface,
-                scriptEditor,
-                unmatchedOpenCandidatePaths,
-                requiredPaths,
-                debugLog
-            );
-        bool didAutosave = nonActivatingResult.DidAutosave || activationFallbackResult.DidAutosave;
+		diagnosticContext?.Log(
+			"Preflight",
+			() =>
+				$"Activation fallback evaluated; Unsafe={diagnosticContext.FormatPaths(unsafePathSet)}; OptionalAutosaveFailures={diagnosticContext.FormatPaths(optionalSingleGroupAutosaveFailures)}; Ambiguous={diagnosticContext.FormatPaths(ambiguousDuplicatePathSet)}; FallbackPaths={diagnosticContext.FormatPaths(activationFallbackPaths)}"
+		);
 
-        return new NamespaceRefactorOpenBufferPreflightResult(
-            activationFallbackResult.Success,
-            didAutosave,
-            activationFallbackResult.FailureMessage
-        );
-    }
+		if (activationFallbackPaths.Count == 0)
+		{
+			if (lookupResult.Failure == ScriptEditorBufferLookupFailure.UnmatchedRequiredOpenScripts)
+			{
+				return CreateLookupFailureResult(
+					lookupResult,
+					nonActivatingResult.DidAutosave
+				);
+			}
 
-    private NamespaceRefactorOpenBufferPreflightResult TryAutosaveMatchedOpenEditors(
-        IEnumerable<OpenScriptEditorBuffer> openEditors,
-        HashSet<string> requiredPaths,
-        Action<string> debugLog
-    )
-    {
-        bool didAutosaveCandidateScripts = false;
+			return nonActivatingResult;
+		}
 
-        foreach (OpenScriptEditorBuffer openEditor in openEditors)
-        {
-            bool isRequiredScript = requiredPaths.Contains(openEditor.Path);
-            ScriptEditorBufferAutosaveOperationResult autosaveResult =
-                _autosaveCoordinator.TryAutosaveIfNeeded(openEditor, isRequiredScript);
+		debugLog?.Invoke(
+			"Refactor Namespace pre-scan could not safely match some open single-buffer paths without activation; falling back to activating lookup for those paths."
+		);
 
-            if (!autosaveResult.Success)
-            {
-                string autosaveFailureMessage =
-                    NamespaceScriptEditorBufferAutosaveFailureMessageBuilder.Build(
-                        autosaveResult.FailedAutosave
-                    );
+		NamespaceRefactorOpenBufferPreflightResult activationFallbackResult =
+			TryAutosaveByActivatingCandidatePaths(
+				editorInterface,
+				scriptEditor,
+				activationFallbackPaths,
+				requiredPaths,
+				debugLog,
+				diagnosticContext
+			);
+		bool didAutosave =
+			nonActivatingResult.DidAutosave || activationFallbackResult.DidAutosave;
 
-                if (isRequiredScript)
-                {
-                    return new NamespaceRefactorOpenBufferPreflightResult(
-                        false,
-                        didAutosaveCandidateScripts,
-                        autosaveFailureMessage
-                    );
-                }
+		return activationFallbackResult.Success
+			? NamespaceRefactorOpenBufferPreflightResult.Succeeded(didAutosave)
+			: activationFallbackResult with { DidAutosave = didAutosave };
+	}
 
-                debugLog?.Invoke(
-                    $"Refactor Namespace pre-scan skipped autosave for open candidate '{openEditor.Path}': {autosaveFailureMessage}"
-                );
-                continue;
-            }
+	private NamespaceRefactorOpenBufferPreflightResult TryAutosaveMatchedOpenEditorGroups(
+		IReadOnlyDictionary<string, OpenScriptEditorBufferGroup> openEditorGroupsByPath,
+		HashSet<string> requiredPaths,
+		Action<string> debugLog,
+		NamespaceRefactorDiagnosticContext diagnosticContext,
+		out Dictionary<string, OpenScriptEditorBufferGroup> verifiedGroupsByPath,
+		out List<string> optionalSingleGroupAutosaveFailures
+	)
+	{
+		verifiedGroupsByPath = new Dictionary<string, OpenScriptEditorBufferGroup>(
+			StringComparer.OrdinalIgnoreCase
+		);
+		optionalSingleGroupAutosaveFailures = new List<string>();
+		bool didAutosaveCandidateScripts = false;
 
-            if (autosaveResult.DidAutosave)
-                didAutosaveCandidateScripts = true;
-        }
+		if (openEditorGroupsByPath == null)
+			return NamespaceRefactorOpenBufferPreflightResult.Succeeded();
 
-        return new NamespaceRefactorOpenBufferPreflightResult(
-            true,
-            didAutosaveCandidateScripts,
-            ""
-        );
-    }
+		foreach (
+			KeyValuePair<string, OpenScriptEditorBufferGroup> groupPair
+			in openEditorGroupsByPath
+		)
+		{
+			OpenScriptEditorBufferGroup group = groupPair.Value;
+			bool isRequiredScript = requiredPaths.Contains(group.Path);
+			diagnosticContext?.Log(
+				"Autosave",
+				() =>
+					$"Preflight group autosave started; Path='{group.Path}'; Required={isRequiredScript}; MemberCount={group.Buffers.Count}; HasCurrentEditorBuffer={group.HasCurrentEditorBuffer}"
+			);
+			ScriptEditorBufferAutosaveOperationResult autosaveResult =
+				_autosaveCoordinator.TryAutosaveGroupIfNeeded(
+					group,
+					diagnosticContext?.BufferDiagnostics
+				);
 
-    private NamespaceRefactorOpenBufferPreflightResult TryAutosaveByActivatingCandidatePaths(
-        EditorInterface editorInterface,
-        ScriptEditor scriptEditor,
-        IReadOnlyList<string> normalizedCandidatePaths,
-        HashSet<string> requiredPaths,
-        Action<string> debugLog
-    )
-    {
-        bool didAutosaveCandidateScripts = false;
+			diagnosticContext?.Log(
+				"Autosave",
+				() =>
+					$"Preflight group autosave completed; Path='{group.Path}'; Success={autosaveResult.Success}; DidAutosave={autosaveResult.DidAutosave}; Failure={autosaveResult.FailedAutosave.Failure}; DiagnosticReason={autosaveResult.FailedAutosave.DiagnosticReason}"
+			);
 
-        foreach (string candidatePath in normalizedCandidatePaths)
-        {
-            bool isRequiredScript = requiredPaths.Contains(candidatePath);
+			if (!autosaveResult.Success)
+			{
+				string autosaveFailureMessage =
+					NamespaceScriptEditorBufferAutosaveFailureMessageBuilder.Build(
+						autosaveResult.FailedAutosave
+					);
 
-            if (!_activationService.IsScriptOpen(scriptEditor, candidatePath))
-                continue;
+				if (isRequiredScript)
+				{
+					return NamespaceRefactorOpenBufferPreflightResult.Failed(
+						NamespaceRefactorOpenBufferPreflightFailure.AutosaveFailed,
+						didAutosaveCandidateScripts,
+						autosaveFailureMessage,
+						autosaveResult.FailedAutosave.ScriptPath,
+						autosaveFailure: autosaveResult.FailedAutosave.Failure,
+						diagnosticReason: autosaveResult.FailedAutosave.DiagnosticReason
+					);
+				}
 
-            if (
-                !_activationService.TryGetOpenScriptEditorByActivatingPath(
-                    editorInterface,
-                    editorInterface?.GetScriptEditor(),
-                    candidatePath,
-                    debugLog,
-                    out OpenScriptEditorBuffer openEditor,
-                    out string editorFailureMessage
-                )
-            )
-            {
-                if (isRequiredScript)
-                {
-                    return new NamespaceRefactorOpenBufferPreflightResult(
-                        false,
-                        didAutosaveCandidateScripts,
-                        editorFailureMessage
-                    );
-                }
+				debugLog?.Invoke(
+					$"Refactor Namespace pre-scan excluded open candidate group '{group.Path}': {autosaveFailureMessage}"
+				);
 
-                debugLog?.Invoke(
-                    $"Refactor Namespace pre-scan skipped autosave for open candidate '{candidatePath}': {editorFailureMessage}"
-                );
-                continue;
-            }
+				if (group.Buffers.Count == 1)
+					optionalSingleGroupAutosaveFailures.Add(group.Path);
 
-            ScriptEditorBufferAutosaveOperationResult autosaveResult =
-                _autosaveCoordinator.TryAutosaveIfNeeded(openEditor, isRequiredScript);
+				continue;
+			}
 
-            if (!autosaveResult.Success)
-            {
-                string autosaveFailureMessage =
-                    NamespaceScriptEditorBufferAutosaveFailureMessageBuilder.Build(
-                        autosaveResult.FailedAutosave
-                    );
+			verifiedGroupsByPath.Add(groupPair.Key, group);
 
-                if (isRequiredScript)
-                {
-                    return new NamespaceRefactorOpenBufferPreflightResult(
-                        false,
-                        didAutosaveCandidateScripts,
-                        autosaveFailureMessage
-                    );
-                }
+			if (autosaveResult.DidAutosave)
+				didAutosaveCandidateScripts = true;
+		}
 
-                debugLog?.Invoke(
-                    $"Refactor Namespace pre-scan skipped autosave for open candidate '{candidatePath}': {autosaveFailureMessage}"
-                );
-                continue;
-            }
+		Dictionary<string, OpenScriptEditorBufferGroup> verifiedGroupsForDiagnostics =
+			verifiedGroupsByPath;
+		List<string> optionalAutosaveFailuresForDiagnostics =
+			optionalSingleGroupAutosaveFailures;
 
-            if (autosaveResult.DidAutosave)
-                didAutosaveCandidateScripts = true;
-        }
+		diagnosticContext?.Log(
+			"Preflight",
+			() =>
+				$"Matched group verification completed; VerifiedGroupCount={verifiedGroupsForDiagnostics.Count}; OptionalSingleGroupAutosaveFailures={diagnosticContext.FormatPaths(optionalAutosaveFailuresForDiagnostics)}; DidAutosave={didAutosaveCandidateScripts}"
+		);
+		return NamespaceRefactorOpenBufferPreflightResult.Succeeded(
+			didAutosaveCandidateScripts
+		);
+	}
 
-        return new NamespaceRefactorOpenBufferPreflightResult(
-            true,
-            didAutosaveCandidateScripts,
-            ""
-        );
-    }
+	private NamespaceRefactorOpenBufferPreflightResult TryAutosaveByActivatingCandidatePaths(
+		EditorInterface editorInterface,
+		ScriptEditor scriptEditor,
+		IReadOnlyList<string> normalizedCandidatePaths,
+		HashSet<string> requiredPaths,
+		Action<string> debugLog,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		bool didAutosaveCandidateScripts = false;
+
+		foreach (string candidatePath in normalizedCandidatePaths)
+		{
+			bool isRequiredScript = requiredPaths.Contains(candidatePath);
+
+			if (!_activationService.IsScriptOpen(scriptEditor, candidatePath))
+			{
+				diagnosticContext?.Log(
+					"BufferLookup",
+					() => $"Activating lookup skipped closed script; Path='{candidatePath}'; Required={isRequiredScript}"
+				);
+				continue;
+			}
+
+			if (
+				!_activationService.TryGetOpenScriptEditorByActivatingPath(
+					editorInterface,
+					editorInterface?.GetScriptEditor(),
+					candidatePath,
+					debugLog,
+					out OpenScriptEditorBuffer openEditor,
+					out string editorFailureMessage
+				)
+			)
+			{
+				diagnosticContext?.Log(
+					"BufferLookup",
+					() => $"Activating lookup failed; Path='{candidatePath}'; Required={isRequiredScript}; FailureMessage='{editorFailureMessage}'"
+				);
+
+				if (isRequiredScript)
+				{
+					return NamespaceRefactorOpenBufferPreflightResult.Failed(
+						NamespaceRefactorOpenBufferPreflightFailure.ActivationLookupFailed,
+						didAutosaveCandidateScripts,
+						editorFailureMessage,
+						candidatePath
+					);
+				}
+
+				debugLog?.Invoke(
+					$"Refactor Namespace pre-scan skipped autosave for open candidate '{candidatePath}': {editorFailureMessage}"
+				);
+				continue;
+			}
+
+			diagnosticContext?.Log(
+				"BufferLookup",
+				() =>
+					$"Activating lookup matched editor; Path='{candidatePath}'; Required={isRequiredScript}; EditorPath='{openEditor.Path}'; TextEditNull={openEditor.TextEditor == null}; ActivationVerified=true"
+			);
+			diagnosticContext?.Log(
+				"Autosave",
+				() => $"Activating autosave started; Path='{candidatePath}'; Required={isRequiredScript}"
+			);
+			ScriptEditorBufferAutosaveOperationResult autosaveResult =
+				_autosaveCoordinator.TryAutosaveIfNeeded(
+					openEditor,
+					isRequiredScript,
+					diagnosticContext?.BufferDiagnostics
+				);
+			diagnosticContext?.Log(
+				"Autosave",
+				() =>
+					$"Activating autosave completed; Path='{candidatePath}'; Success={autosaveResult.Success}; DidAutosave={autosaveResult.DidAutosave}; Failure={autosaveResult.FailedAutosave.Failure}; DiagnosticReason={autosaveResult.FailedAutosave.DiagnosticReason}; FailurePath='{autosaveResult.FailedAutosave.ScriptPath}'"
+			);
+
+			if (!autosaveResult.Success)
+			{
+				string autosaveFailureMessage =
+					NamespaceScriptEditorBufferAutosaveFailureMessageBuilder.Build(
+						autosaveResult.FailedAutosave
+					);
+
+				if (isRequiredScript)
+				{
+					return NamespaceRefactorOpenBufferPreflightResult.Failed(
+						NamespaceRefactorOpenBufferPreflightFailure.AutosaveFailed,
+						didAutosaveCandidateScripts,
+						autosaveFailureMessage,
+						autosaveResult.FailedAutosave.ScriptPath,
+						autosaveFailure: autosaveResult.FailedAutosave.Failure,
+						diagnosticReason: autosaveResult.FailedAutosave.DiagnosticReason
+					);
+				}
+
+				debugLog?.Invoke(
+					$"Refactor Namespace pre-scan skipped autosave for open candidate '{candidatePath}': {autosaveFailureMessage}"
+				);
+				continue;
+			}
+
+			if (autosaveResult.DidAutosave)
+				didAutosaveCandidateScripts = true;
+		}
+
+		return NamespaceRefactorOpenBufferPreflightResult.Succeeded(
+			didAutosaveCandidateScripts
+		);
+	}
+
+	private static NamespaceRefactorOpenBufferPreflightResult CreateLookupFailureResult(
+		ScriptEditorBufferGroupLookupResult lookupResult,
+		bool didAutosave
+	)
+	{
+		return NamespaceRefactorOpenBufferPreflightResult.Failed(
+			NamespaceRefactorOpenBufferPreflightFailure.LookupFailed,
+			didAutosave,
+			NamespaceOpenBufferLookupService.BuildScriptEditorBufferLookupFailureMessage(
+				lookupResult
+			),
+			lookupResult?.FailurePath ?? "",
+			lookupResult?.Failure ?? ScriptEditorBufferLookupFailure.None
+		);
+	}
 }
 #endif

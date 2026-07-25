@@ -1,5 +1,6 @@
 #if TOOLS
 using Godot;
+using System;
 using System.Collections.Generic;
 using SystemExplorer.Diagnostics;
 using SystemExplorer.EditorIntegration.ScriptEditing;
@@ -75,6 +76,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private VBoxContainer _dock;
 	private LineEdit _systemNameInput;
 	private LineEdit _scriptFilterInput;
+	private MarginContainer _firstRunWelcomeNote;
 	private Tree _tree;
 	private Control _focusReleaseTarget;
 	private EditorFileDialog _fileDialog;
@@ -84,13 +86,26 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private PopupMenu _contextAddSubmenu;
 	private PopupMenu _contextQuickActionsSubmenu;
 	private ConfirmationDialog _removeDialog;
+	private AcceptDialog _physicalRemoveIncompleteDialog;
 	private CheckBox _removeFromFilesystemCheckBox;
 	private AcceptDialog _renameDialog;
 	private LineEdit _renameInput;
-	private AcceptDialog _renameFolderConflictDialog;
+	private AcceptDialog _renameNameConflictDialog;
 	private AcceptDialog _addFolderDialog;
 	private LineEdit _addFolderInput;
 	private AcceptDialog _addFolderConflictDialog;
+	private AcceptDialog _addSystemConflictDialog;
+	private AcceptDialog _namespaceRefactorDialog;
+	private AcceptDialog _namespaceRefactorIncompleteWriteReportDialog;
+	private Label _namespaceRefactorDescriptionLabel;
+	private Label _namespaceRefactorNewNamespaceLabel;
+	private LineEdit _namespaceRefactorNewNamespaceInput;
+	private Label _namespaceRefactorOldNamespaceLabel;
+	private LineEdit _namespaceRefactorOldNamespaceInput;
+	private Label _namespaceRefactorApplyToLabel;
+	private CheckBox _namespaceRefactorExistingNamespaceOption;
+	private OptionButton _namespaceRefactorExistingNamespaceDropdown;
+	private CheckBox _namespaceRefactorWithoutNamespaceOption;
 	private NamespaceRefactorPluginHost _namespaceRefactorHost;
 	private AcceptDialog _csharpierInstallResultDialog;
 	private ConfirmationDialog _csharpierNotInstalledDialog;
@@ -123,8 +138,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _hoveredTreeItemMetadata = "";
 	private bool _isFilteringScripts;
 	private bool _ignoreNextScriptFilterReleaseOpen;
-	private bool _isRenameFolderConflictPopupPending;
+	private bool _isRenameNameConflictPopupPending;
 	private bool _isAddFolderConflictPopupPending;
+	private bool _isAddSystemConflictPopupPending;
 
 	private Texture2D _scriptIcon;
 	private Texture2D _sceneIcon;
@@ -164,7 +180,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		EnsureProjectSettings();
 		LoadEditorIcons();
-		EnsureResourcesFolderExists();
 		EnsureScriptTemplateExists();
 		BuildDock();
 		LoadSystems();
@@ -259,13 +274,13 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		return true;
 	}
 
-	private void EnsureScriptTemplateExists()
+	private bool EnsureScriptTemplateExists()
 	{
 		if (!EnsureResourcesFolderExists())
-			return;
+			return false;
 
 		if (FileAccess.FileExists(ScriptTemplatePath))
-			return;
+			return true;
 
 		string defaultTemplate =
 			@"using Godot;
@@ -275,10 +290,88 @@ public sealed class {{CLASS_NAME}}
 }
 ";
 
-		using FileAccess file = FileAccess.Open(ScriptTemplatePath, FileAccess.ModeFlags.Write);
-		file.StoreString(defaultTemplate);
+		FileAccess file;
+
+		try
+		{
+			file = FileAccess.Open(ScriptTemplatePath, FileAccess.ModeFlags.Write);
+		}
+		catch (Exception exception)
+		{
+			GD.PushWarning(
+				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			);
+			DebugLogger.LogOperation(
+				"Create Script Template failed: open threw",
+				$"Path='{ScriptTemplatePath}', Exception='{exception}'"
+			);
+			return false;
+		}
+
+		if (file == null)
+		{
+			Error openError = FileAccess.GetOpenError();
+
+			GD.PushWarning(
+				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			);
+			DebugLogger.LogOperation(
+				"Create Script Template failed: open returned null",
+				$"Path='{ScriptTemplatePath}', Error='{openError}'"
+			);
+			return false;
+		}
+
+		string writeFailureDetail = "";
+
+		try
+		{
+			using (file)
+			{
+				bool stored = file.StoreString(defaultTemplate);
+				file.Flush();
+				Error writeError = file.GetError();
+
+				if (!stored || writeError != Error.Ok)
+				{
+					writeFailureDetail =
+						$"Path='{ScriptTemplatePath}', StoreSucceeded='{stored}', Error='{writeError}'";
+				}
+			}
+		}
+		catch (Exception exception)
+		{
+			writeFailureDetail =
+				$"Path='{ScriptTemplatePath}', Exception='{exception}'";
+		}
+
+		if (!string.IsNullOrWhiteSpace(writeFailureDetail))
+		{
+			GD.PushWarning(
+				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			);
+			DebugLogger.LogOperation(
+				"Create Script Template failed: write",
+				writeFailureDetail
+			);
+			return false;
+		}
+
+		if (!FileAccess.FileExists(ScriptTemplatePath))
+		{
+			GD.PushWarning(
+				$"System Explorer could not create the script template at '{ScriptTemplatePath}'."
+			);
+			DebugLogger.LogOperation(
+				"Create Script Template failed: target missing after write",
+				ScriptTemplatePath
+			);
+			return false;
+		}
 
 		EditorInterface.Singleton.GetResourceFilesystem().Scan();
+		DebugLogger.LogOperation("Script Template Created", ScriptTemplatePath);
+		return true;
 	}
 
 	private static Texture2D GetEditorIcon(Theme theme, string iconName)
@@ -296,6 +389,7 @@ public sealed class {{CLASS_NAME}}
 		CancelPendingScriptRenameEditorRestore();
 		ShutdownScriptEditorSync();
 		ShutdownFolderBindingFilesystemLifecycle();
+		_namespaceRefactorHost = null;
 
 		if (_editorDock == null)
 			return;

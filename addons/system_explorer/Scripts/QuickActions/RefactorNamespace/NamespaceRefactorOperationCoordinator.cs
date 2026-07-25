@@ -7,138 +7,198 @@ namespace SystemExplorer.QuickActions.RefactorNamespace;
 
 internal sealed class NamespaceRefactorOperationCoordinator
 {
-    private readonly NamespaceRefactorPreflightCoordinator _preflightCoordinator;
-    private readonly NamespaceRefactorPlanBuildCoordinator _planBuildCoordinator;
-    private readonly NamespaceRefactorApplyCoordinator _applyCoordinator;
+	private readonly NamespaceRefactorPreflightCoordinator _preflightCoordinator;
+	private readonly NamespaceRefactorPlanBuildCoordinator _planBuildCoordinator;
+	private readonly NamespaceRefactorApplyCoordinator _applyCoordinator;
 
-    internal NamespaceRefactorOperationCoordinator(
-        NamespaceRefactorPreflightCoordinator preflightCoordinator,
-        NamespaceRefactorPlanBuildCoordinator planBuildCoordinator,
-        NamespaceRefactorApplyCoordinator applyCoordinator
-    )
-    {
-        _preflightCoordinator =
-            preflightCoordinator ?? throw new ArgumentNullException(nameof(preflightCoordinator));
-        _planBuildCoordinator =
-            planBuildCoordinator ?? throw new ArgumentNullException(nameof(planBuildCoordinator));
-        _applyCoordinator =
-            applyCoordinator ?? throw new ArgumentNullException(nameof(applyCoordinator));
-    }
+	internal NamespaceRefactorOperationCoordinator(
+		NamespaceRefactorPreflightCoordinator preflightCoordinator,
+		NamespaceRefactorPlanBuildCoordinator planBuildCoordinator,
+		NamespaceRefactorApplyCoordinator applyCoordinator
+	)
+	{
+		_preflightCoordinator =
+			preflightCoordinator ?? throw new ArgumentNullException(nameof(preflightCoordinator));
+		_planBuildCoordinator =
+			planBuildCoordinator
+			?? throw new ArgumentNullException(nameof(planBuildCoordinator));
+		_applyCoordinator =
+			applyCoordinator ?? throw new ArgumentNullException(nameof(applyCoordinator));
+	}
 
-    internal bool ExecuteSingleReplacement(
-        EditorInterface editorInterface,
-        ScriptEditor scriptEditor,
-        IEnumerable<string> candidatePaths,
-        HashSet<string> requiredPaths,
-        Func<NamespaceRefactorPendingWriteBuildResult> buildPendingWriteSet
-    )
-    {
-        if (
-            !_preflightCoordinator.PreflightSingleReplacement(
-                editorInterface,
-                scriptEditor,
-                candidatePaths,
-                requiredPaths
-            )
-        )
-        {
-            return false;
-        }
+	internal bool ExecuteSingleReplacement(
+		EditorInterface editorInterface,
+		ScriptEditor scriptEditor,
+		IEnumerable<string> candidatePaths,
+		HashSet<string> requiredPaths,
+		Func<NamespaceRefactorPendingWriteBuildResult> buildPendingWriteSet,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		diagnosticContext?.Log("Request", "Execution entered; Operation=SingleReplacement");
 
-        NamespaceRefactorPendingWriteBuildResult buildResult = buildPendingWriteSet();
+		if (
+			!_preflightCoordinator.PreflightSingleReplacement(
+				editorInterface,
+				scriptEditor,
+				candidatePaths,
+				requiredPaths,
+				diagnosticContext
+			)
+		)
+		{
+			return false;
+		}
 
-        if (!buildResult.Success)
-            return false;
+		diagnosticContext?.Log("Plan", "Build started");
+		NamespaceRefactorPendingWriteBuildResult buildResult = buildPendingWriteSet();
 
-        return _applyCoordinator.ApplySingleReplacement(
-            editorInterface,
-            scriptEditor,
-            buildResult.WriteSet,
-            buildPendingWriteSet
-        );
-    }
+		if (!buildResult.Success)
+		{
+			diagnosticContext?.Log(
+				"Cancellation",
+				"Cancelled during Plan; PlanBuilt=false; WritesStarted=false"
+			);
+			return false;
+		}
 
-    internal bool ExecuteAddNamespace(
-        IEnumerable<string> targetScriptPaths,
-        HashSet<string> requiredPaths,
-        string newNamespace,
-        string operationName,
-        bool activateAndSyncSelection
-    )
-    {
-        if (
-            !_preflightCoordinator.PreflightAddNamespace(
-                targetScriptPaths,
-                requiredPaths,
-                operationName,
-                activateAndSyncSelection
-            )
-        )
-        {
-            return false;
-        }
+		diagnosticContext?.Log(
+			"Plan",
+			() =>
+				$"Build succeeded; PendingWriteCount={buildResult.WriteSet?.PendingWrites.Count ?? 0}; SelectedScriptPath='{buildResult.WriteSet?.SelectedScriptPath ?? ""}'"
+		);
+		return _applyCoordinator.ApplySingleReplacement(
+			editorInterface,
+			scriptEditor,
+			buildResult.WriteSet,
+			buildPendingWriteSet,
+			diagnosticContext
+		);
+	}
 
-        NamespaceRefactorPendingWriteBuildResult buildResult =
-            _planBuildCoordinator.BuildAddNamespace(targetScriptPaths, newNamespace);
+	internal bool ExecuteAddNamespace(
+		IEnumerable<string> targetScriptPaths,
+		HashSet<string> requiredPaths,
+		string newNamespace,
+		string operationName,
+		bool activateAndSyncSelection,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		diagnosticContext?.Log(
+			"Request",
+			() => $"Execution entered; Operation={operationName}; ActivateAndSyncSelection={activateAndSyncSelection}"
+		);
 
-        if (!buildResult.Success)
-            return false;
+		if (
+			!_preflightCoordinator.PreflightAddNamespace(
+				targetScriptPaths,
+				requiredPaths,
+				operationName,
+				activateAndSyncSelection,
+				diagnosticContext
+			)
+		)
+		{
+			return false;
+		}
 
-        return _applyCoordinator.ApplyPendingWriteOperation(
-            buildResult.WriteSet,
-            operationName,
-            "",
-            activateAndSyncSelection,
-            rebuildAfterAutosave: null
-        );
-    }
+		diagnosticContext?.Log("Plan", "Build started");
+		NamespaceRefactorPendingWriteBuildResult buildResult =
+			_planBuildCoordinator.BuildAddNamespace(
+				targetScriptPaths,
+				newNamespace,
+				diagnosticContext
+			);
 
-    internal bool ExecuteBatchReplacement(
-        IEnumerable<string> targetScriptPaths,
-        IEnumerable<string> candidatePaths,
-        HashSet<string> requiredPaths,
-        string oldNamespace,
-        string newNamespace,
-        Func<IReadOnlyList<string>> buildReferenceCandidatePaths,
-        Func<IReadOnlyList<string>> buildDeclarationCandidatePaths
-    )
-    {
-        if (
-            !_preflightCoordinator.PreflightBatchReplacement(
-                candidatePaths,
-                requiredPaths,
-                oldNamespace
-            )
-        )
-        {
-            return false;
-        }
+		if (!buildResult.Success)
+		{
+			diagnosticContext?.Log(
+				"Cancellation",
+				"Cancelled during Plan; PlanBuilt=false; WritesStarted=false"
+			);
+			return false;
+		}
 
-        Func<NamespaceRefactorPendingWriteBuildResult> buildPendingWriteSet = () =>
-        {
-            IReadOnlyList<string> referenceCandidatePaths = buildReferenceCandidatePaths();
-            IReadOnlyList<string> declarationCandidatePaths = buildDeclarationCandidatePaths();
+		diagnosticContext?.Log(
+			"Plan",
+			() => $"Build succeeded; PendingWriteCount={buildResult.WriteSet?.PendingWrites.Count ?? 0}"
+		);
+		return _applyCoordinator.ApplyPendingWriteOperation(
+			buildResult.WriteSet,
+			operationName,
+			"",
+			activateAndSyncSelection,
+			rebuildAfterAutosave: null,
+			diagnosticContext: diagnosticContext
+		);
+	}
 
-            return _planBuildCoordinator.BuildBatchReplacement(
-                targetScriptPaths,
-                referenceCandidatePaths,
-                declarationCandidatePaths,
-                oldNamespace,
-                newNamespace
-            );
-        };
-        NamespaceRefactorPendingWriteBuildResult buildResult = buildPendingWriteSet();
+	internal bool ExecuteBatchReplacement(
+		IEnumerable<string> targetScriptPaths,
+		IEnumerable<string> candidatePaths,
+		HashSet<string> requiredPaths,
+		string oldNamespace,
+		string newNamespace,
+		Func<IReadOnlyList<string>> buildReferenceCandidatePaths,
+		Func<IReadOnlyList<string>> buildDeclarationCandidatePaths,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		diagnosticContext?.Log("Request", "Execution entered; Operation=BatchReplacement");
 
-        if (!buildResult.Success)
-            return false;
+		if (
+			!_preflightCoordinator.PreflightBatchReplacement(
+				candidatePaths,
+				requiredPaths,
+				oldNamespace,
+				diagnosticContext
+			)
+		)
+		{
+			return false;
+		}
 
-        return _applyCoordinator.ApplyPendingWriteOperation(
-            buildResult.WriteSet,
-            "Refactor Namespace Batch",
-            "",
-            false,
-            buildPendingWriteSet
-        );
-    }
+		Func<NamespaceRefactorPendingWriteBuildResult> buildPendingWriteSet = () =>
+		{
+			IReadOnlyList<string> referenceCandidatePaths =
+				buildReferenceCandidatePaths();
+			IReadOnlyList<string> declarationCandidatePaths =
+				buildDeclarationCandidatePaths();
+
+			return _planBuildCoordinator.BuildBatchReplacement(
+				targetScriptPaths,
+				referenceCandidatePaths,
+				declarationCandidatePaths,
+				oldNamespace,
+				newNamespace,
+				diagnosticContext
+			);
+		};
+		diagnosticContext?.Log("Plan", "Build started");
+		NamespaceRefactorPendingWriteBuildResult buildResult = buildPendingWriteSet();
+
+		if (!buildResult.Success)
+		{
+			diagnosticContext?.Log(
+				"Cancellation",
+				"Cancelled during Plan; PlanBuilt=false; WritesStarted=false"
+			);
+			return false;
+		}
+
+		diagnosticContext?.Log(
+			"Plan",
+			() => $"Build succeeded; PendingWriteCount={buildResult.WriteSet?.PendingWrites.Count ?? 0}"
+		);
+		return _applyCoordinator.ApplyPendingWriteOperation(
+			buildResult.WriteSet,
+			"Refactor Namespace Batch",
+			"",
+			false,
+			buildPendingWriteSet,
+			diagnosticContext
+		);
+	}
 }
 #endif

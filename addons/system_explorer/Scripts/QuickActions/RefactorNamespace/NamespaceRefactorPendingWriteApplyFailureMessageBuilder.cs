@@ -17,7 +17,9 @@ internal static class NamespaceRefactorPendingWriteApplyFailureMessageBuilder
 			NamespaceRefactorPendingWriteApplyFailure.AffectedOpenBufferMatchFailed =>
 				BuildAffectedOpenBufferMatchFailureMessage(applyResult, operationName),
 			NamespaceRefactorPendingWriteApplyFailure.UnsafeNonActivatingBufferMatch =>
-				$"{operationName} cancelled: System Explorer could not safely match open script editor buffer(s) without changing the active editor tab. Save/reopen before refactoring:\n{string.Join("\n", applyResult.UnsafeOpenScriptPaths)}",
+				string.IsNullOrWhiteSpace(applyResult.AffectedOpenBufferFailureMessage)
+					? $"{operationName} cancelled: System Explorer could not safely match open script editor buffer(s) without changing the active editor tab. Save/reopen before refactoring:\n{string.Join("\n", applyResult.UnsafeOpenScriptPaths)}"
+					: applyResult.AffectedOpenBufferFailureMessage,
 			NamespaceRefactorPendingWriteApplyFailure.AutosaveFailed =>
 				BuildAutosaveFailureMessage(applyResult, operationName),
 			NamespaceRefactorPendingWriteApplyFailure.RebuildAfterAutosaveFailed => "",
@@ -29,8 +31,6 @@ internal static class NamespaceRefactorPendingWriteApplyFailureMessageBuilder
 				),
 			NamespaceRefactorPendingWriteApplyFailure.StillUnsaved =>
 				$"{operationName} cancelled: affected script(s) are still unsaved after the save-first check. Try again after saving/retrying:\n{string.Join("\n", applyResult.UnsavedScriptPaths)}",
-			NamespaceRefactorPendingWriteApplyFailure.WriteFailed =>
-				$"{operationName} failed while writing '{applyResult.FailedWritePath}'. Some files may have already been updated.",
 			_ => "",
 		};
 	}

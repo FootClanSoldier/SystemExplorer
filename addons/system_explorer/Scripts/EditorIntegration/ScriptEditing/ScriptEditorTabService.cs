@@ -37,6 +37,39 @@ internal sealed class ScriptEditorTabService
 		TextEdit textEditor
 	)
 	{
+		return TryCloseScriptTabCore(
+			scriptEditor,
+			script,
+			scriptEditorBase,
+			textEditor,
+			requirePathExclusiveAfterClose: true
+		);
+	}
+
+	internal ScriptEditorTabCloseResult TryCloseExactScriptTab(
+		ScriptEditor scriptEditor,
+		Script script,
+		ScriptEditorBase scriptEditorBase,
+		TextEdit textEditor
+	)
+	{
+		return TryCloseScriptTabCore(
+			scriptEditor,
+			script,
+			scriptEditorBase,
+			textEditor,
+			requirePathExclusiveAfterClose: false
+		);
+	}
+
+	private static ScriptEditorTabCloseResult TryCloseScriptTabCore(
+		ScriptEditor scriptEditor,
+		Script script,
+		ScriptEditorBase scriptEditorBase,
+		TextEdit textEditor,
+		bool requirePathExclusiveAfterClose
+	)
+	{
 		if (
 			scriptEditor == null
 			|| script == null
@@ -49,7 +82,7 @@ internal sealed class ScriptEditorTabService
 		)
 		{
 			return ScriptEditorTabCloseResult.Failed(
-                "The target script tab or editor control was no longer valid."
+				"The target script tab or editor control was no longer valid."
 			);
 		}
 
@@ -67,7 +100,7 @@ internal sealed class ScriptEditorTabService
 		)
 		{
 			return ScriptEditorTabCloseResult.Failed(
-                "Godot's active Script Editor tab did not match the exact script and text buffer selected for the file operation."
+				"Godot's active Script Editor tab did not match the exact script and text buffer selected for the file operation."
 			);
 		}
 
@@ -87,7 +120,7 @@ internal sealed class ScriptEditorTabService
 		if (closeItemIndex < 0 || fileMenu.IsItemDisabled(closeItemIndex))
 		{
 			return ScriptEditorTabCloseResult.Failed(
-                "Godot 4.6's Script Editor Close command was unavailable or disabled."
+				"Godot 4.6's Script Editor Close command was unavailable or disabled."
 			);
 		}
 
@@ -97,84 +130,87 @@ internal sealed class ScriptEditorTabService
 		try
 		{
 			// This follows Godot's own Script Editor File-menu route to
-            // ScriptEditor::_menu_option(FILE_MENU_CLOSE), which invokes
-            // the full internal _close_current_tab/_close_tab lifecycle.
-            Error emitError = fileMenu.EmitSignal(
-                PopupMenu.SignalName.IdPressed,
-                (long)FileMenuClose
-            );
+			// ScriptEditor::_menu_option(FILE_MENU_CLOSE), which invokes
+			// the full internal _close_current_tab/_close_tab lifecycle.
+			Error emitError = fileMenu.EmitSignal(
+				PopupMenu.SignalName.IdPressed,
+				(long)FileMenuClose
+			);
 
-            if (emitError != Error.Ok)
-            {
-                return ScriptEditorTabCloseResult.Failed(
+			if (emitError != Error.Ok)
+			{
+				return ScriptEditorTabCloseResult.Failed(
 					$"Godot's Script Editor Close signal could not be emitted ({emitError})."
-                );
-            }
-        }
-        catch (Exception exception)
-        {
-            return ScriptEditorTabCloseResult.Failed(
+				);
+			}
+		}
+		catch (Exception exception)
+		{
+			return ScriptEditorTabCloseResult.Failed(
 				$"Godot's Script Editor Close command threw an exception: {exception.Message}"
-            );
-        }
+			);
+		}
 
-        foreach (Script openScript in scriptEditor.GetOpenScripts())
-        {
-            if (openScript == null)
-                continue;
+		foreach (Script openScript in scriptEditor.GetOpenScripts())
+		{
+			if (openScript == null)
+				continue;
 
-            if (openScript.GetInstanceId() == targetScriptInstanceId)
-            {
-                return ScriptEditorTabCloseResult.Failed(
-                    "Godot reported that the exact old Script resource was still open after the close command."
-                );
-            }
+			if (openScript.GetInstanceId() == targetScriptInstanceId)
+			{
+				return ScriptEditorTabCloseResult.Failed(
+					"Godot reported that the exact old Script resource was still open after the close command."
+				);
+			}
 
-            string openPath = ScriptPathUtility.Normalize(openScript.ResourcePath);
+			if (!requirePathExclusiveAfterClose)
+				continue;
 
-            if (
-                !string.IsNullOrWhiteSpace(normalizedPath)
-                && string.Equals(openPath, normalizedPath, StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return ScriptEditorTabCloseResult.Failed(
-                    $"Godot reported that the old script path was still open after the close command: {openPath}"
-                );
-            }
-        }
+			string openPath = ScriptPathUtility.Normalize(openScript.ResourcePath);
 
-        return ScriptEditorTabCloseResult.Succeeded();
-    }
+			if (
+				!string.IsNullOrWhiteSpace(normalizedPath)
+				&& string.Equals(openPath, normalizedPath, StringComparison.OrdinalIgnoreCase)
+			)
+			{
+				return ScriptEditorTabCloseResult.Failed(
+					$"Godot reported that the old script path was still open after the close command: {openPath}"
+				);
+			}
+		}
 
-    private static void CollectMatchingGodot46FileMenus(Node node, List<PopupMenu> matches)
-    {
-        if (node == null || matches == null)
-            return;
+		return ScriptEditorTabCloseResult.Succeeded();
+	}
 
-        foreach (Node child in node.GetChildren())
-        {
-            if (child is MenuButton menuButton)
-            {
-                PopupMenu popup = menuButton.GetPopup();
+	private static void CollectMatchingGodot46FileMenus(Node node, List<PopupMenu> matches)
+	{
+		if (node == null || matches == null)
+			return;
 
-                if (IsGodot46ScriptEditorFileMenu(popup))
-                    matches.Add(popup);
-            }
+		foreach (Node child in node.GetChildren())
+		{
+			if (child is MenuButton menuButton)
+			{
+				PopupMenu popup = menuButton.GetPopup();
 
-            CollectMatchingGodot46FileMenus(child, matches);
-        }
-    }
+				if (IsGodot46ScriptEditorFileMenu(popup))
+					matches.Add(popup);
+			}
 
-    private static bool IsGodot46ScriptEditorFileMenu(PopupMenu popup)
-    {
-        return popup != null
-            && GodotObject.IsInstanceValid(popup)
-            && popup.GetItemIndex(FileMenuSave) >= 0
-            && popup.GetItemIndex(FileMenuClose) >= 0
-            && popup.GetItemIndex(FileMenuCloseAll) >= 0
-            && popup.GetItemIndex(FileMenuCloseOtherTabs) >= 0
-            && popup.GetItemIndex(FileMenuCloseTabsBelow) >= 0
-            && popup.GetItemIndex(FileMenuRun) >= 0;
-    }
+			CollectMatchingGodot46FileMenus(child, matches);
+		}
+	}
+
+	private static bool IsGodot46ScriptEditorFileMenu(PopupMenu popup)
+	{
+		return popup != null
+			&& GodotObject.IsInstanceValid(popup)
+			&& popup.GetItemIndex(FileMenuSave) >= 0
+			&& popup.GetItemIndex(FileMenuClose) >= 0
+			&& popup.GetItemIndex(FileMenuCloseAll) >= 0
+			&& popup.GetItemIndex(FileMenuCloseOtherTabs) >= 0
+			&& popup.GetItemIndex(FileMenuCloseTabsBelow) >= 0
+			&& popup.GetItemIndex(FileMenuRun) >= 0;
+	}
 }
 #endif

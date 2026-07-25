@@ -17,6 +17,8 @@ internal static class NamespaceScriptEditorBufferAutosaveFailureMessageBuilder
 				$"Refactor Namespace cancelled: could not autosave affected script before refactoring '{scriptPath}'. Some script buffers may already have been saved.",
 			ScriptEditorBufferAutosaveFailure.AutosaveVerificationMismatch =>
 				$"Refactor Namespace cancelled: autosaved text for '{scriptPath}' did not match the open editor buffer. The namespace refactor was not applied.",
+			ScriptEditorBufferAutosaveFailure.UnsafeOpenBufferGroupState =>
+				$"Refactor Namespace cancelled: the open editor buffer group for '{scriptPath}' changed or could not be verified safely. Save or close duplicate entries before refactoring.",
 			_ => "",
 		};
 	}

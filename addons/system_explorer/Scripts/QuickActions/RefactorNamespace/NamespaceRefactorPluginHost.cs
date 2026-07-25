@@ -8,15 +8,32 @@ namespace SystemExplorer.QuickActions.RefactorNamespace;
 
 internal sealed class NamespaceRefactorPluginHost
 {
-	private readonly NamespaceRefactorDialogView _namespaceRefactorDialogView;
-	private readonly NamespaceRefactorFeature _namespaceRefactorFeature;
+	private readonly AcceptDialog _dialog;
+	private readonly AcceptDialog _incompleteWriteReportDialog;
+	private readonly Label _descriptionLabel;
+	private readonly Label _oldNamespaceLabel;
+	private readonly LineEdit _oldNamespaceInput;
+	private readonly Label _newNamespaceLabel;
+	private readonly LineEdit _newNamespaceInput;
+	private readonly Label _applyToLabel;
 	private readonly CheckBox _existingNamespaceOption;
 	private readonly OptionButton _existingNamespaceDropdown;
 	private readonly CheckBox _withoutNamespaceOption;
-	private readonly LineEdit _oldNamespaceInput;
-	private readonly LineEdit _newNamespaceInput;
+	private readonly NamespaceRefactorDialogView _namespaceRefactorDialogView;
+	private readonly NamespaceRefactorFeature _namespaceRefactorFeature;
 
 	internal NamespaceRefactorPluginHost(
+		AcceptDialog dialog,
+		AcceptDialog incompleteWriteReportDialog,
+		Label descriptionLabel,
+		Label oldNamespaceLabel,
+		LineEdit oldNamespaceInput,
+		Label newNamespaceLabel,
+		LineEdit newNamespaceInput,
+		Label applyToLabel,
+		CheckBox existingNamespaceOption,
+		OptionButton existingNamespaceDropdown,
+		CheckBox withoutNamespaceOption,
 		ScriptEditorBufferLocator bufferLocator,
 		ScriptEditorBufferAutosaveCoordinator bufferAutosaveCoordinator,
 		ScriptEditorBufferBatchService bufferBatchService,
@@ -31,6 +48,7 @@ internal sealed class NamespaceRefactorPluginHost
 		Func<EditorInterface> editorInterfaceProvider,
 		Action<string, string> showMissingScriptDialog,
 		Action<string> debugLog,
+		Func<bool> isDebugEnabled,
 		Action<string> showWarning,
 		Action<string, string> logOperation,
 		Action beginBatchScriptEditorContextPreservation,
@@ -39,123 +57,52 @@ internal sealed class NamespaceRefactorPluginHost
 		Action releaseTreeFocusAfterNavigation
 	)
 	{
-		if (bufferLocator == null)
-			throw new ArgumentNullException(nameof(bufferLocator));
-		if (bufferAutosaveCoordinator == null)
-			throw new ArgumentNullException(nameof(bufferAutosaveCoordinator));
-		if (bufferBatchService == null)
-			throw new ArgumentNullException(nameof(bufferBatchService));
-		if (systemsProvider == null)
-			throw new ArgumentNullException(nameof(systemsProvider));
-		if (getSystemNameFromMetadata == null)
-			throw new ArgumentNullException(nameof(getSystemNameFromMetadata));
-		if (getFolderPathFromMetadata == null)
-			throw new ArgumentNullException(nameof(getFolderPathFromMetadata));
-		if (getEntryFromMetadata == null)
-			throw new ArgumentNullException(nameof(getEntryFromMetadata));
-		if (getScriptPathFromEntry == null)
-			throw new ArgumentNullException(nameof(getScriptPathFromEntry));
-		if (getFolderPathFromEntry == null)
-			throw new ArgumentNullException(nameof(getFolderPathFromEntry));
-		if (sceneEntryMarker == null)
-			throw new ArgumentNullException(nameof(sceneEntryMarker));
-		if (ensureSystemsLoadedForTreeOperation == null)
-			throw new ArgumentNullException(nameof(ensureSystemsLoadedForTreeOperation));
-		if (editorInterfaceProvider == null)
-			throw new ArgumentNullException(nameof(editorInterfaceProvider));
-		if (showMissingScriptDialog == null)
-			throw new ArgumentNullException(nameof(showMissingScriptDialog));
-		if (debugLog == null)
-			throw new ArgumentNullException(nameof(debugLog));
-		if (showWarning == null)
-			throw new ArgumentNullException(nameof(showWarning));
-		if (logOperation == null)
-			throw new ArgumentNullException(nameof(logOperation));
-		if (beginBatchScriptEditorContextPreservation == null)
-			throw new ArgumentNullException(nameof(beginBatchScriptEditorContextPreservation));
-		if (endBatchScriptEditorContextPreservation == null)
-			throw new ArgumentNullException(nameof(endBatchScriptEditorContextPreservation));
-		if (syncSelectionAfterOperation == null)
-			throw new ArgumentNullException(nameof(syncSelectionAfterOperation));
-		if (releaseTreeFocusAfterNavigation == null)
-			throw new ArgumentNullException(nameof(releaseTreeFocusAfterNavigation));
-
-		Dialog = new AcceptDialog
-		{
-			Title = "Refactor Namespace",
-			Unresizable = true,
-		};
-
-		var container = new VBoxContainer
-		{
-			CustomMinimumSize = new Vector2(480, 0),
-			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
-		};
-
-		var descriptionLabel = new Label
-		{
-			Text =
-				"Update the selected script namespace and\nmatching using statements in linked C# files.",
-			AutowrapMode = TextServer.AutowrapMode.Off,
-			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-		};
-		container.AddChild(descriptionLabel);
-		container.AddChild(new Control { CustomMinimumSize = new Vector2(0, 8) });
-
-		var newNamespaceLabel = new Label { Text = "New namespace" };
-		container.AddChild(newNamespaceLabel);
-		_newNamespaceInput = new LineEdit { PlaceholderText = "New namespace" };
-		container.AddChild(_newNamespaceInput);
-
-		var oldNamespaceLabel = new Label { Text = "Old namespace" };
-		container.AddChild(oldNamespaceLabel);
-		_oldNamespaceInput = new LineEdit
-		{
-			PlaceholderText = "Old namespace",
-			Editable = false,
-		};
-		container.AddChild(_oldNamespaceInput);
-
-		var applyToLabel = new Label { Text = "Apply to:" };
-		container.AddChild(applyToLabel);
-
-		var applyModeGroup = new ButtonGroup();
-
-		_existingNamespaceOption = new CheckBox
-		{
-			Text = "All scripts with namespace:",
-			ButtonPressed = true,
-			ButtonGroup = applyModeGroup,
-		};
-		container.AddChild(_existingNamespaceOption);
-
-		_existingNamespaceDropdown = new OptionButton
-		{
-			SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-		};
-		container.AddChild(_existingNamespaceDropdown);
-
-		_withoutNamespaceOption = new CheckBox
-		{
-			Text = "Scripts without namespace",
-			ButtonGroup = applyModeGroup,
-		};
-		container.AddChild(_withoutNamespaceOption);
-
-		Dialog.AddChild(container);
+		_dialog = dialog ?? throw new ArgumentNullException(nameof(dialog));
+		_incompleteWriteReportDialog =
+			incompleteWriteReportDialog
+			?? throw new ArgumentNullException(nameof(incompleteWriteReportDialog));
+		_descriptionLabel = descriptionLabel ?? throw new ArgumentNullException(nameof(descriptionLabel));
+		_oldNamespaceLabel = oldNamespaceLabel ?? throw new ArgumentNullException(nameof(oldNamespaceLabel));
+		_oldNamespaceInput = oldNamespaceInput ?? throw new ArgumentNullException(nameof(oldNamespaceInput));
+		_newNamespaceLabel = newNamespaceLabel ?? throw new ArgumentNullException(nameof(newNamespaceLabel));
+		_newNamespaceInput = newNamespaceInput ?? throw new ArgumentNullException(nameof(newNamespaceInput));
+		_applyToLabel = applyToLabel ?? throw new ArgumentNullException(nameof(applyToLabel));
+		_existingNamespaceOption = existingNamespaceOption ?? throw new ArgumentNullException(nameof(existingNamespaceOption));
+		_existingNamespaceDropdown = existingNamespaceDropdown ?? throw new ArgumentNullException(nameof(existingNamespaceDropdown));
+		_withoutNamespaceOption = withoutNamespaceOption ?? throw new ArgumentNullException(nameof(withoutNamespaceOption));
+		if (bufferLocator == null) throw new ArgumentNullException(nameof(bufferLocator));
+		if (bufferAutosaveCoordinator == null) throw new ArgumentNullException(nameof(bufferAutosaveCoordinator));
+		if (bufferBatchService == null) throw new ArgumentNullException(nameof(bufferBatchService));
+		if (systemsProvider == null) throw new ArgumentNullException(nameof(systemsProvider));
+		if (getSystemNameFromMetadata == null) throw new ArgumentNullException(nameof(getSystemNameFromMetadata));
+		if (getFolderPathFromMetadata == null) throw new ArgumentNullException(nameof(getFolderPathFromMetadata));
+		if (getEntryFromMetadata == null) throw new ArgumentNullException(nameof(getEntryFromMetadata));
+		if (getScriptPathFromEntry == null) throw new ArgumentNullException(nameof(getScriptPathFromEntry));
+		if (getFolderPathFromEntry == null) throw new ArgumentNullException(nameof(getFolderPathFromEntry));
+		if (sceneEntryMarker == null) throw new ArgumentNullException(nameof(sceneEntryMarker));
+		if (ensureSystemsLoadedForTreeOperation == null) throw new ArgumentNullException(nameof(ensureSystemsLoadedForTreeOperation));
+		if (editorInterfaceProvider == null) throw new ArgumentNullException(nameof(editorInterfaceProvider));
+		if (showMissingScriptDialog == null) throw new ArgumentNullException(nameof(showMissingScriptDialog));
+		if (debugLog == null) throw new ArgumentNullException(nameof(debugLog));
+		if (isDebugEnabled == null) throw new ArgumentNullException(nameof(isDebugEnabled));
+		if (showWarning == null) throw new ArgumentNullException(nameof(showWarning));
+		if (logOperation == null) throw new ArgumentNullException(nameof(logOperation));
+		if (beginBatchScriptEditorContextPreservation == null) throw new ArgumentNullException(nameof(beginBatchScriptEditorContextPreservation));
+		if (endBatchScriptEditorContextPreservation == null) throw new ArgumentNullException(nameof(endBatchScriptEditorContextPreservation));
+		if (syncSelectionAfterOperation == null) throw new ArgumentNullException(nameof(syncSelectionAfterOperation));
+		if (releaseTreeFocusAfterNavigation == null) throw new ArgumentNullException(nameof(releaseTreeFocusAfterNavigation));
 
 		_namespaceRefactorDialogView = new NamespaceRefactorDialogView(
-			Dialog,
+			_dialog,
 			descriptionLabel,
 			oldNamespaceLabel,
-			_oldNamespaceInput,
+			oldNamespaceInput,
 			newNamespaceLabel,
-			_newNamespaceInput,
+			newNamespaceInput,
 			applyToLabel,
-			_existingNamespaceOption,
-			_existingNamespaceDropdown,
-			_withoutNamespaceOption
+			existingNamespaceOption,
+			existingNamespaceDropdown,
+			withoutNamespaceOption
 		);
 
 		_namespaceRefactorFeature = new NamespaceRefactorFeature(
@@ -174,8 +121,10 @@ internal sealed class NamespaceRefactorPluginHost
 			editorInterfaceProvider,
 			showMissingScriptDialog,
 			debugLog,
+			isDebugEnabled,
 			showWarning,
 			logOperation,
+			ShowIncompleteWriteReport,
 			beginBatchScriptEditorContextPreservation,
 			endBatchScriptEditorContextPreservation,
 			ReadNamespaceFromScript,
@@ -186,21 +135,54 @@ internal sealed class NamespaceRefactorPluginHost
 			() => Callable.From(syncSelectionAfterOperation).CallDeferred(),
 			() => Callable.From(releaseTreeFocusAfterNavigation).CallDeferred()
 		);
-
-		Dialog.Confirmed += OnConfirmed;
-		_existingNamespaceOption.Toggled += OnExistingNamespaceOptionToggled;
-		_existingNamespaceDropdown.ItemSelected += OnExistingNamespaceSelected;
-		_withoutNamespaceOption.Toggled += OnWithoutNamespaceOptionToggled;
-		Dialog.WindowInput += OnDialogWindowInput;
-		_oldNamespaceInput.TextSubmitted += _ => ConfirmDialogFromEnter();
-		_newNamespaceInput.TextSubmitted += _ => ConfirmDialogFromEnter();
 	}
 
-	internal AcceptDialog Dialog { get; }
-
-	internal void Open(string metadata)
+	internal bool IsBoundTo(
+		AcceptDialog dialog,
+		AcceptDialog incompleteWriteReportDialog,
+		Label descriptionLabel,
+		Label oldNamespaceLabel,
+		LineEdit oldNamespaceInput,
+		Label newNamespaceLabel,
+		LineEdit newNamespaceInput,
+		Label applyToLabel,
+		CheckBox existingNamespaceOption,
+		OptionButton existingNamespaceDropdown,
+		CheckBox withoutNamespaceOption
+	)
 	{
-		_namespaceRefactorFeature.OpenDialog(metadata);
+		return ReferenceEquals(_dialog, dialog)
+			&& ReferenceEquals(_incompleteWriteReportDialog, incompleteWriteReportDialog)
+			&& ReferenceEquals(_descriptionLabel, descriptionLabel)
+			&& ReferenceEquals(_oldNamespaceLabel, oldNamespaceLabel)
+			&& ReferenceEquals(_oldNamespaceInput, oldNamespaceInput)
+			&& ReferenceEquals(_newNamespaceLabel, newNamespaceLabel)
+			&& ReferenceEquals(_newNamespaceInput, newNamespaceInput)
+			&& ReferenceEquals(_applyToLabel, applyToLabel)
+			&& ReferenceEquals(_existingNamespaceOption, existingNamespaceOption)
+			&& ReferenceEquals(_existingNamespaceDropdown, existingNamespaceDropdown)
+			&& ReferenceEquals(_withoutNamespaceOption, withoutNamespaceOption);
+	}
+
+	internal void Open(string metadata) => _namespaceRefactorFeature.OpenDialog(metadata);
+	internal void ConfirmDialog() => _namespaceRefactorFeature.ConfirmDialog();
+	internal void SetBatchApplyMode(bool useExistingNamespaceMode) =>
+		_namespaceRefactorFeature.SetBatchApplyMode(useExistingNamespaceMode);
+	internal void SelectExistingNamespace(long index) =>
+		_namespaceRefactorFeature.SelectExistingNamespace(index);
+
+	private void ShowIncompleteWriteReport(IReadOnlyList<string> failedWritePaths)
+	{
+		if (failedWritePaths == null || failedWritePaths.Count == 0)
+			return;
+
+		string heading = failedWritePaths.Count == 1
+			? "The following script could not be updated:"
+			: "The following scripts could not be updated:";
+
+		_incompleteWriteReportDialog.DialogText =
+			$"{heading}\n\n{string.Join("\n", failedWritePaths)}";
+		Callable.From(() => _incompleteWriteReportDialog.PopupCentered()).CallDeferred();
 	}
 
 	private static string ReadNamespaceFromScript(string scriptPath)
@@ -215,88 +197,45 @@ internal sealed class NamespaceRefactorPluginHost
 
 	private void ShowConfiguredDialog(bool selectAllNewNamespace)
 	{
-		ApplyDialogSize();
+		_namespaceRefactorDialogView.ApplySize();
 		_namespaceRefactorDialogView.PopupCentered();
 		Callable.From(_namespaceRefactorDialogView.ApplySize).CallDeferred();
 		_namespaceRefactorDialogView.FocusNewNamespace(selectAllNewNamespace);
 	}
 
-	private void ApplyDialogSize()
+	private void ScheduleDeferredBufferRefresh(
+		string scriptPathPayload,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
 	{
-		if (Dialog == null)
-			return;
-
-		_namespaceRefactorDialogView.ApplySize();
-	}
-
-	private void ScheduleDeferredBufferRefresh(string scriptPathPayload)
-	{
-		Callable
-			.From(
-				() =>
+		diagnosticContext?.Log(
+			"DeferredSync",
+			() => $"Deferred buffer refresh callback scheduled; Payload='{scriptPathPayload ?? ""}'."
+		);
+		Callable.From(
+			() =>
+			{
+				diagnosticContext?.Log("DeferredSync", "Deferred buffer refresh callback started.");
+				try
+				{
 					_namespaceRefactorFeature.RefreshOpenBuffersAfterDeferredResourceRefresh(
-						scriptPathPayload
-					)
-			)
-			.CallDeferred();
+						scriptPathPayload,
+						diagnosticContext
+					);
+				}
+				finally
+				{
+					diagnosticContext?.Log("DeferredSync", "Deferred buffer refresh callback completed.");
+				}
+			}
+		).CallDeferred();
 	}
 
 	private void ScheduleDeferredTargetScriptRestoration(string scriptPath)
 	{
-		Callable
-			.From(() => _namespaceRefactorFeature.RestoreTargetScriptEditor(scriptPath))
-			.CallDeferred();
-	}
-
-	private void OnConfirmed()
-	{
-		_namespaceRefactorFeature.ConfirmDialog();
-	}
-
-	private void OnExistingNamespaceOptionToggled(bool pressed)
-	{
-		if (!pressed)
-			return;
-
-		_namespaceRefactorFeature.SetBatchApplyMode(true);
-	}
-
-	private void OnExistingNamespaceSelected(long index)
-	{
-		_namespaceRefactorFeature.SelectExistingNamespace(index);
-	}
-
-	private void OnWithoutNamespaceOptionToggled(bool pressed)
-	{
-		if (!pressed)
-			return;
-
-		_namespaceRefactorFeature.SetBatchApplyMode(false);
-	}
-
-	private void OnDialogWindowInput(InputEvent inputEvent)
-	{
-		if (!IsEnterPressed(inputEvent))
-			return;
-
-		ConfirmDialogFromEnter();
-	}
-
-	private void ConfirmDialogFromEnter()
-	{
-		if (Dialog == null || !Dialog.Visible)
-			return;
-
-		Dialog.Hide();
-		_namespaceRefactorFeature.ConfirmDialog();
-	}
-
-	private static bool IsEnterPressed(InputEvent inputEvent)
-	{
-		return inputEvent is InputEventKey keyEvent
-			&& keyEvent.Pressed
-			&& !keyEvent.Echo
-			&& (keyEvent.Keycode == Key.Enter || keyEvent.Keycode == Key.KpEnter);
+		Callable.From(
+			() => _namespaceRefactorFeature.RestoreTargetScriptEditor(scriptPath)
+		).CallDeferred();
 	}
 }
 #endif

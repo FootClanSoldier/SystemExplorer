@@ -33,22 +33,28 @@ internal sealed class NamespaceRefactorPreflightCoordinator
 		EditorInterface editorInterface,
 		ScriptEditor scriptEditor,
 		IEnumerable<string> candidatePaths,
-		HashSet<string> requiredPaths
+		HashSet<string> requiredPaths,
+		NamespaceRefactorDiagnosticContext diagnosticContext
 	)
 	{
+		const NamespaceRefactorOpenBufferPreflightMode mode =
+			NamespaceRefactorOpenBufferPreflightMode.NonActivatingWithActivationFallback;
+		diagnosticContext?.Log("Preflight", () => $"Started; Mode={mode}");
 		NamespaceRefactorOpenBufferPreflightResult preflightResult =
 			_openBufferPreflightService.TryAutosaveCandidateScriptsBeforeBuild(
 				editorInterface,
 				scriptEditor,
 				candidatePaths,
 				requiredPaths,
-				mode: NamespaceRefactorOpenBufferPreflightMode.NonActivatingWithActivationFallback,
+				mode,
 				namespaceReferenceToProtect: "",
-				debugLog: _debugLog
+				debugLog: _debugLog,
+				diagnosticContext: diagnosticContext
 			);
 
 		if (!preflightResult.Success)
 		{
+			LogCancellation(diagnosticContext, preflightResult);
 			_showWarning(
 				string.IsNullOrWhiteSpace(preflightResult.FailureMessage)
 					? "Refactor Namespace cancelled: open script buffer(s) could not be autosaved safely before scanning namespace usages."
@@ -60,6 +66,10 @@ internal sealed class NamespaceRefactorPreflightCoordinator
 		if (preflightResult.DidAutosave)
 			_debugLog("Refactor Namespace save-first pre-scan saved open script buffer(s).");
 
+		diagnosticContext?.Log(
+			"Preflight",
+			() => $"Succeeded; Mode={mode}; DidAutosave={preflightResult.DidAutosave}"
+		);
 		return true;
 	}
 
@@ -67,24 +77,29 @@ internal sealed class NamespaceRefactorPreflightCoordinator
 		IEnumerable<string> candidatePaths,
 		HashSet<string> requiredPaths,
 		string operationName,
-		bool allowScriptEditorActivation
+		bool allowScriptEditorActivation,
+		NamespaceRefactorDiagnosticContext diagnosticContext
 	)
 	{
+		NamespaceRefactorOpenBufferPreflightMode mode = allowScriptEditorActivation
+			? NamespaceRefactorOpenBufferPreflightMode.ActivatingOnly
+			: NamespaceRefactorOpenBufferPreflightMode.NonActivatingOnly;
+		diagnosticContext?.Log("Preflight", () => $"Started; Mode={mode}");
 		NamespaceRefactorOpenBufferPreflightResult preflightResult =
 			_openBufferPreflightService.TryAutosaveCandidateScriptsBeforeBuild(
 				_editorInterfaceProvider(),
 				_editorInterfaceProvider()?.GetScriptEditor(),
 				candidatePaths,
 				requiredPaths,
-				mode: allowScriptEditorActivation
-					? NamespaceRefactorOpenBufferPreflightMode.ActivatingOnly
-					: NamespaceRefactorOpenBufferPreflightMode.NonActivatingOnly,
+				mode,
 				namespaceReferenceToProtect: "",
-				debugLog: _debugLog
+				debugLog: _debugLog,
+				diagnosticContext: diagnosticContext
 			);
 
 		if (!preflightResult.Success)
 		{
+			LogCancellation(diagnosticContext, preflightResult);
 			_debugLog(
 				string.IsNullOrWhiteSpace(preflightResult.FailureMessage)
 					? $"{operationName} cancelled: open script buffer(s) could not be autosaved safely before adding namespace."
@@ -96,28 +111,38 @@ internal sealed class NamespaceRefactorPreflightCoordinator
 		if (preflightResult.DidAutosave)
 			_debugLog($"{operationName} save-first pre-scan saved open script buffer(s).");
 
+		diagnosticContext?.Log(
+			"Preflight",
+			() => $"Succeeded; Mode={mode}; DidAutosave={preflightResult.DidAutosave}"
+		);
 		return true;
 	}
 
 	internal bool PreflightBatchReplacement(
 		IEnumerable<string> candidatePaths,
 		HashSet<string> requiredPaths,
-		string oldNamespace
+		string oldNamespace,
+		NamespaceRefactorDiagnosticContext diagnosticContext
 	)
 	{
+		const NamespaceRefactorOpenBufferPreflightMode mode =
+			NamespaceRefactorOpenBufferPreflightMode.NonActivatingOnly;
+		diagnosticContext?.Log("Preflight", () => $"Started; Mode={mode}");
 		NamespaceRefactorOpenBufferPreflightResult preflightResult =
 			_openBufferPreflightService.TryAutosaveCandidateScriptsBeforeBuild(
 				_editorInterfaceProvider(),
 				_editorInterfaceProvider()?.GetScriptEditor(),
 				candidatePaths,
 				requiredPaths,
-				mode: NamespaceRefactorOpenBufferPreflightMode.NonActivatingOnly,
+				mode,
 				namespaceReferenceToProtect: oldNamespace,
-				debugLog: _debugLog
+				debugLog: _debugLog,
+				diagnosticContext: diagnosticContext
 			);
 
 		if (!preflightResult.Success)
 		{
+			LogCancellation(diagnosticContext, preflightResult);
 			_showWarning(
 				string.IsNullOrWhiteSpace(preflightResult.FailureMessage)
 					? "Refactor Namespace cancelled: open script buffer(s) could not be autosaved safely before scanning namespace usages."
@@ -133,7 +158,23 @@ internal sealed class NamespaceRefactorPreflightCoordinator
 			);
 		}
 
+		diagnosticContext?.Log(
+			"Preflight",
+			() => $"Succeeded; Mode={mode}; DidAutosave={preflightResult.DidAutosave}"
+		);
 		return true;
+	}
+
+	private static void LogCancellation(
+		NamespaceRefactorDiagnosticContext diagnosticContext,
+		NamespaceRefactorOpenBufferPreflightResult result
+	)
+	{
+		diagnosticContext?.Log(
+			"Cancellation",
+			() =>
+				$"Phase=Preflight; Result=Cancelled; FailurePath='{result.FailurePath}'; Failure={result.Failure}; LookupFailure={result.LookupFailure}; AutosaveFailure={result.AutosaveFailure}; DiagnosticReason={result.DiagnosticReason}"
+		);
 	}
 }
 #endif
