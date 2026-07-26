@@ -51,6 +51,7 @@ internal sealed class NamespaceRefactorPluginHost
 		Func<bool> isDebugEnabled,
 		Action<string> showWarning,
 		Action<string, string> logOperation,
+		Action<string, Action> startForegroundEditorOperation,
 		Action beginBatchScriptEditorContextPreservation,
 		Action endBatchScriptEditorContextPreservation,
 		Action syncSelectionAfterOperation,
@@ -87,6 +88,7 @@ internal sealed class NamespaceRefactorPluginHost
 		if (isDebugEnabled == null) throw new ArgumentNullException(nameof(isDebugEnabled));
 		if (showWarning == null) throw new ArgumentNullException(nameof(showWarning));
 		if (logOperation == null) throw new ArgumentNullException(nameof(logOperation));
+		if (startForegroundEditorOperation == null) throw new ArgumentNullException(nameof(startForegroundEditorOperation));
 		if (beginBatchScriptEditorContextPreservation == null) throw new ArgumentNullException(nameof(beginBatchScriptEditorContextPreservation));
 		if (endBatchScriptEditorContextPreservation == null) throw new ArgumentNullException(nameof(endBatchScriptEditorContextPreservation));
 		if (syncSelectionAfterOperation == null) throw new ArgumentNullException(nameof(syncSelectionAfterOperation));
@@ -125,6 +127,7 @@ internal sealed class NamespaceRefactorPluginHost
 			showWarning,
 			logOperation,
 			ShowIncompleteWriteReport,
+			startForegroundEditorOperation,
 			beginBatchScriptEditorContextPreservation,
 			endBatchScriptEditorContextPreservation,
 			ReadNamespaceFromScript,

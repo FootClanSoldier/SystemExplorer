@@ -42,6 +42,7 @@ internal sealed class NamespaceRefactorFeature
 	private readonly Action<string> _showWarning;
 	private readonly Action<string, string> _logOperation;
 	private readonly Action<IReadOnlyList<string>> _showIncompleteWriteReport;
+	private readonly Action<string, Action> _startForegroundEditorOperation;
 	private readonly Action _beginBatchScriptEditorContextPreservation;
 	private readonly Action _endBatchScriptEditorContextPreservation;
 	private readonly Func<string, string> _readNamespaceFromScript;
@@ -89,6 +90,7 @@ internal sealed class NamespaceRefactorFeature
 		Action<string> showWarning,
 		Action<string, string> logOperation,
 		Action<IReadOnlyList<string>> showIncompleteWriteReport,
+		Action<string, Action> startForegroundEditorOperation,
 		Action beginBatchScriptEditorContextPreservation,
 		Action endBatchScriptEditorContextPreservation,
 		Func<string, string> readNamespaceFromScript,
@@ -141,6 +143,9 @@ internal sealed class NamespaceRefactorFeature
 		_showIncompleteWriteReport =
 			showIncompleteWriteReport
 			?? throw new ArgumentNullException(nameof(showIncompleteWriteReport));
+		_startForegroundEditorOperation =
+			startForegroundEditorOperation
+			?? throw new ArgumentNullException(nameof(startForegroundEditorOperation));
 		_beginBatchScriptEditorContextPreservation =
 			beginBatchScriptEditorContextPreservation
 			?? throw new ArgumentNullException(nameof(beginBatchScriptEditorContextPreservation));
@@ -318,29 +323,47 @@ internal sealed class NamespaceRefactorFeature
 				_readNamespaceFromScript,
 				(diagnosticContext, metadata, oldNamespace, newNamespace) =>
 				{
-					OperationRequestCoordinator.ExecuteSingleReplacement(
-						diagnosticContext,
-						metadata,
-						oldNamespace,
-						newNamespace
+					_startForegroundEditorOperation(
+						"Refactor Namespace",
+						() =>
+						{
+							OperationRequestCoordinator.ExecuteSingleReplacement(
+								diagnosticContext,
+								metadata,
+								oldNamespace,
+								newNamespace
+							);
+						}
 					);
 				},
 				(diagnosticContext, scriptPaths, newNamespace, operationName) =>
 				{
-					OperationRequestCoordinator.ExecuteAddNamespace(
-						diagnosticContext,
-						scriptPaths,
-						newNamespace,
-						operationName
+					_startForegroundEditorOperation(
+						operationName,
+						() =>
+						{
+							OperationRequestCoordinator.ExecuteAddNamespace(
+								diagnosticContext,
+								scriptPaths,
+								newNamespace,
+								operationName
+							);
+						}
 					);
 				},
 				(diagnosticContext, scriptPaths, oldNamespace, newNamespace) =>
 				{
-					OperationRequestCoordinator.ExecuteBatchReplacement(
-						diagnosticContext,
-						scriptPaths,
-						oldNamespace,
-						newNamespace
+					_startForegroundEditorOperation(
+						"Refactor Namespace Batch",
+						() =>
+						{
+							OperationRequestCoordinator.ExecuteBatchReplacement(
+								diagnosticContext,
+								scriptPaths,
+								oldNamespace,
+								newNamespace
+							);
+						}
 					);
 				},
 				_debugLog,

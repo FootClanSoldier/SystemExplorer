@@ -2,6 +2,8 @@
 using Godot;
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
+using SystemExplorer.EditorIntegration.Operations;
 using SystemExplorer.QuickActions.RefactorNamespace;
 
 public partial class SystemExplorerPlugin
@@ -202,6 +204,49 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
+	private void StartNamespaceRefactorForegroundOperation(
+		string operationName,
+		Action operationBody
+	)
+	{
+		if (operationBody == null)
+			throw new ArgumentNullException(nameof(operationBody));
+
+		StartObservedEditorOperation(
+			operationName,
+			operation =>
+				RunNamespaceRefactorForegroundOperationAsync(
+					operation,
+					operationBody
+				)
+		);
+	}
+
+	private async Task RunNamespaceRefactorForegroundOperationAsync(
+		EditorOperationLease operation,
+		Action operationBody
+	)
+	{
+		operation.CancellationToken.ThrowIfCancellationRequested();
+
+		if (!IsEditorOperationAccessValid(operation))
+			return;
+
+		SceneTree tree = GetTree();
+
+		if (tree == null || !GodotObject.IsInstanceValid(tree))
+			return;
+
+		await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+
+		operation.CancellationToken.ThrowIfCancellationRequested();
+
+		if (!IsEditorOperationAccessValid(operation))
+			return;
+
+		operationBody();
+	}
+
 	private NamespaceRefactorPluginHost CreateNamespaceRefactorHost()
 	{
 		return new NamespaceRefactorPluginHost(
@@ -233,6 +278,7 @@ public partial class SystemExplorerPlugin
 			() => DebugLogger.IsEnabled,
 			message => GD.PushWarning(message),
 			(operation, details) => DebugLogger.LogOperation(operation, details),
+			StartNamespaceRefactorForegroundOperation,
 			BeginBatchScriptEditorContextPreservation,
 			EndBatchScriptEditorContextPreservation,
 			SyncSelectionToActiveScriptAfterOperation,

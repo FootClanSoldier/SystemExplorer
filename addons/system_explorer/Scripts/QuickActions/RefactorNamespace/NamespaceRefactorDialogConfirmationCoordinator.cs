@@ -81,8 +81,9 @@ internal sealed class NamespaceRefactorDialogConfirmationCoordinator
 
 		NamespaceRefactorDiagnosticContext diagnosticContext =
 			_diagnosticTrace.CreateContext("Single Add Namespace");
+		string[] capturedScriptPaths = _sessionState.ScriptPaths.ToArray();
 		diagnosticContext.Log("Request", "Confirmed operation started.");
-		_addNamespace(diagnosticContext, _sessionState.ScriptPaths, newNamespace, "Refactor Namespace Add");
+		_addNamespace(diagnosticContext, capturedScriptPaths, newNamespace, "Refactor Namespace Add");
 		_sessionState.Clear();
 	}
 
@@ -106,8 +107,9 @@ internal sealed class NamespaceRefactorDialogConfirmationCoordinator
 
 		NamespaceRefactorDiagnosticContext diagnosticContext =
 			_diagnosticTrace.CreateContext("Single Replacement");
+		string capturedMetadata = _sessionState.Metadata;
 		diagnosticContext.Log("Request", "Confirmed operation started.");
-		_singleReplacement(diagnosticContext, _sessionState.Metadata, oldNamespace, newNamespace);
+		_singleReplacement(diagnosticContext, capturedMetadata, oldNamespace, newNamespace);
 		_sessionState.Clear();
 	}
 
@@ -163,8 +165,9 @@ internal sealed class NamespaceRefactorDialogConfirmationCoordinator
 		_logOperation("Refactor Namespace Batch Confirmed", $"{oldNamespace} -> {newNamespace}");
 		NamespaceRefactorDiagnosticContext diagnosticContext =
 			_diagnosticTrace.CreateContext(GetBatchOperationKind("Replacement"));
+		string[] capturedScriptPaths = _sessionState.ScriptPaths.ToArray();
 		diagnosticContext.Log("Request", "Confirmed operation started.");
-		_batchReplacement(diagnosticContext, _sessionState.ScriptPaths, oldNamespace, newNamespace);
+		_batchReplacement(diagnosticContext, capturedScriptPaths, oldNamespace, newNamespace);
 		_sessionState.Clear();
 	}
 

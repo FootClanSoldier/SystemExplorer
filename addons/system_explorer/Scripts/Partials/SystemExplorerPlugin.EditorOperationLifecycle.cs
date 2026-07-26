@@ -44,7 +44,7 @@ public partial class SystemExplorerPlugin
 
 		TryLogEditorOperation(
 			"Project Run Deferred",
-			"An active Beautify/CSharpier operation was cancelled. Press Play again after cancellation completes."
+			"An active System Explorer editor operation was cancelled. Press Play again after cancellation completes."
 		);
 		return false;
 	}
