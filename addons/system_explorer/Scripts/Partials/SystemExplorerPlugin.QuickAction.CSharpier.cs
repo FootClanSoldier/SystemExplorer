@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Godot;
+using SystemExplorer.EditorIntegration.Operations;
 using SystemExplorer.QuickActions.Beautify.CSharpier;
 
 public partial class SystemExplorerPlugin
@@ -15,36 +16,19 @@ public partial class SystemExplorerPlugin
 	private const int CSharpierFormatTimeoutMilliseconds = 30000;
 	private const int CSharpierInstallTimeoutMilliseconds = 120000;
 	private const int CSharpierDebugPreviewLength = 500;
+	private const bool DebugUninstallCSharpierOnStartup = false;
 
 	private bool _isInstallingCSharpier;
 	private bool _isDebugUninstallingCSharpier;
 	private bool _isWarmingUpCSharpierCommandCache;
 	private CSharpierCommandService _csharpierCommandService;
-
-	private CSharpierCommandService CSharpierCommands =>
-		_csharpierCommandService ??= new CSharpierCommandService(
-			GetProjectWorkingDirectory,
-			(operation, details) => DebugLogger.LogOperation(operation, details),
-			CSharpierDetectionTimeoutMilliseconds
-		);
-
-	// Dev-only debug switch for testing the CSharpier install flow.
-	// Keep false for normal use and releases.
-	private const bool DebugUninstallCSharpierOnStartup = false;
+	private CSharpierProcessRunner _csharpierProcessRunner;
+	private CSharpierProcessRunner CSharpierProcesses => _csharpierProcessRunner ??= new CSharpierProcessRunner();
+	private CSharpierCommandService CSharpierCommands => _csharpierCommandService ??= new CSharpierCommandService(GetProjectWorkingDirectory, (operation, details) => DebugLogger.LogOperation(operation, details), CSharpierDetectionTimeoutMilliseconds, CSharpierProcesses);
 
 	private readonly struct CSharpierInstallResult
 	{
-		public CSharpierInstallResult(
-			bool success,
-			string message,
-			CSharpierCommand command = default
-		)
-		{
-			Success = success;
-			Message = message;
-			Command = command;
-		}
-
+		public CSharpierInstallResult(bool success, string message, CSharpierCommand command = default) { Success = success; Message = message; Command = command; }
 		public bool Success { get; }
 		public string Message { get; }
 		public CSharpierCommand Command { get; }
@@ -52,583 +36,201 @@ public partial class SystemExplorerPlugin
 
 	private readonly struct CSharpierFormatResult
 	{
-		public CSharpierFormatResult(
-			bool success,
-			string formattedText,
-			string message,
-			bool shouldInvalidateCachedCommand = false
-		)
-		{
-			Success = success;
-			FormattedText = formattedText;
-			Message = message;
-			ShouldInvalidateCachedCommand = shouldInvalidateCachedCommand;
-		}
-
+		public CSharpierFormatResult(bool success, string formattedText, string message, bool shouldInvalidateCachedCommand = false)
+		{ Success = success; FormattedText = formattedText; Message = message; ShouldInvalidateCachedCommand = shouldInvalidateCachedCommand; }
 		public bool Success { get; }
 		public string FormattedText { get; }
 		public string Message { get; }
 		public bool ShouldInvalidateCachedCommand { get; }
 	}
 
-	private void OnCSharpierInstallConfirmed()
-	{
-		if (_isInstallingCSharpier)
-			return;
+	private void OnCSharpierInstallConfirmed() => StartObservedEditorOperation("Install CSharpier", InstallCSharpierAsync);
 
-		_ = InstallCSharpierAsync();
-	}
-
-	private async Task InstallCSharpierAsync()
+	private async Task InstallCSharpierAsync(EditorOperationLease operation)
 	{
 		_isInstallingCSharpier = true;
 		SetCSharpierInstallButtonDisabled(true);
-
-		CSharpierInstallResult installResult = await Task.Run(InstallCSharpierGlobalTool);
-
-		_isInstallingCSharpier = false;
-		SetCSharpierInstallButtonDisabled(false);
-
-		if (!installResult.Success)
+		try
 		{
-			ClearPendingBeautifyAfterCSharpierInstall("CSharpier install failed");
-			ShowCSharpierInstallResultDialog(installResult);
-			return;
+			CSharpierInstallResult result = await InstallCSharpierGlobalToolAsync(operation);
+			operation.CancellationToken.ThrowIfCancellationRequested();
+			if (!IsEditorOperationAccessValid(operation)) return;
+			if (!result.Success)
+			{
+				ClearPendingBeautifyAfterCSharpierInstall("CSharpier install failed");
+				ShowCSharpierInstallResultDialog(result);
+				return;
+			}
+			if (result.Command.IsValid && operation.IsCurrent) CSharpierCommands.CacheCommand(result.Command, "install");
+			if (!IsEditorOperationAccessValid(operation)) return;
+			if (await TryRunPendingBeautifyAfterCSharpierInstall(operation, result.Command)) return;
+			if (IsEditorOperationAccessValid(operation)) ShowCSharpierInstallResultDialog(result);
 		}
-
-		if (installResult.Command.IsValid)
-			CSharpierCommands.CacheCommand(installResult.Command, "install");
-
-		if (await TryRunPendingBeautifyAfterCSharpierInstall(installResult.Command))
-			return;
-
-		ShowCSharpierInstallResultDialog(installResult);
+		finally
+		{
+			_isInstallingCSharpier = false;
+			if (IsEditorOperationAccessValid(operation)) SetCSharpierInstallButtonDisabled(false);
+		}
 	}
 
-	private void ShowCSharpierInstallResultDialog(CSharpierInstallResult installResult)
+	private void ShowCSharpierInstallResultDialog(CSharpierInstallResult result)
 	{
-		if (_csharpierInstallResultDialog == null)
-		{
-			DebugPrintBeautify(
-				$"CSharpier install result: success={installResult.Success}, message='{GetDebugTextPreview(installResult.Message)}'"
-			);
-			return;
-		}
-
-		_csharpierInstallResultDialog.Title = installResult.Success
-			? "CSharpier Installed"
-			: "CSharpier Install Failed";
-		_csharpierInstallResultDialog.DialogText = installResult.Message;
+		if (_csharpierInstallResultDialog == null) { DebugPrintBeautify($"CSharpier install result: success={result.Success}, message='{GetDebugTextPreview(result.Message)}'"); return; }
+		_csharpierInstallResultDialog.Title = result.Success ? "CSharpier Installed" : "CSharpier Install Failed";
+		_csharpierInstallResultDialog.DialogText = result.Message;
 		_csharpierInstallResultDialog.PopupCentered();
 	}
 
 	private void StartCSharpierStartupWarmUp()
 	{
-		if (DebugState && DebugUninstallCSharpierOnStartup)
-		{
-			CallDeferred(nameof(DebugUninstallCSharpierOnStartupThenWarmUp));
-		}
-		else
-		{
-			CallDeferred(nameof(WarmUpCSharpierCommandCache));
-		}
+		if (_editorOperationShutdownStarted) return;
+		if (DebugState && DebugUninstallCSharpierOnStartup) CallDeferred(nameof(DebugUninstallCSharpierOnStartupThenWarmUp));
+		else CallDeferred(nameof(WarmUpCSharpierCommandCache));
 	}
 
-	private void DebugUninstallCSharpierOnStartupThenWarmUp()
-	{
-		_ = DebugUninstallCSharpierOnStartupThenWarmUpAsync();
-	}
+	private void DebugUninstallCSharpierOnStartupThenWarmUp() => StartObservedEditorOperation("CSharpier Startup Debug Uninstall", DebugUninstallCSharpierOnStartupThenWarmUpAsync, backgroundOperation: true);
 
-	private async Task DebugUninstallCSharpierOnStartupThenWarmUpAsync()
+	private async Task DebugUninstallCSharpierOnStartupThenWarmUpAsync(EditorOperationLease operation)
 	{
-		if (_isDebugUninstallingCSharpier)
-			return;
-
 		_isDebugUninstallingCSharpier = true;
 		CSharpierCommands.ClearCachedCommand("startup debug uninstall started");
-		DebugPrintBeautify("Startup debug uninstall of CSharpier started.");
-
 		try
 		{
-			CSharpierInstallResult uninstallResult = await Task.Run(
-				ExecuteCSharpierUninstallCommandForDebug
-			);
-
-			DebugPrintBeautify(
-				$"Startup debug uninstall of CSharpier finished: success={uninstallResult.Success}, message='{GetDebugTextPreview(uninstallResult.Message)}'"
-			);
+			CSharpierInstallResult result = await ExecuteCSharpierUninstallCommandForDebugAsync(operation);
+			operation.CancellationToken.ThrowIfCancellationRequested();
+			if (IsEditorOperationAccessValid(operation)) DebugPrintBeautify($"Startup debug uninstall of CSharpier finished: success={result.Success}, message='{GetDebugTextPreview(result.Message)}'");
+			if (operation.IsCurrent) CSharpierCommands.ClearCachedCommand("startup debug uninstall finished");
+			await WarmUpCSharpierCommandCacheAsync(operation);
 		}
-		finally
-		{
-			CSharpierCommands.ClearCachedCommand("startup debug uninstall finished");
-			_isDebugUninstallingCSharpier = false;
-		}
-
-		WarmUpCSharpierCommandCache();
+		finally { _isDebugUninstallingCSharpier = false; }
 	}
 
-	private async void WarmUpCSharpierCommandCache()
-	{
-		if (_isWarmingUpCSharpierCommandCache || CSharpierCommands.HasCachedCommand)
-			return;
+	private void WarmUpCSharpierCommandCache() => StartObservedEditorOperation("CSharpier Warm-up", WarmUpCSharpierCommandCacheAsync, backgroundOperation: true);
 
+	private async Task WarmUpCSharpierCommandCacheAsync(EditorOperationLease operation)
+	{
+		if (CSharpierCommands.HasCachedCommand) return;
 		_isWarmingUpCSharpierCommandCache = true;
-		DebugLogger.LogOperation("CSharpier Warm-up Started");
-
 		try
 		{
-			string workingDirectory = GetProjectWorkingDirectory();
-			CSharpierCommandProbeResult probeResult = await Task.Run(() =>
-				CSharpierCommands.ProbeCommand(
-					CSharpierWarmUpTimeoutMilliseconds,
-					workingDirectory
-				)
-			);
-
-			if (probeResult.Success)
+			CSharpierCommandProbeResult probe = await CSharpierCommands.ProbeCommandAsync(operation, CSharpierWarmUpTimeoutMilliseconds);
+			operation.CancellationToken.ThrowIfCancellationRequested();
+			if (!operation.IsCurrent) return;
+			if (probe.Success)
 			{
-				CSharpierCommands.CacheCommand(probeResult.Command, "warm-up");
-				DebugLogger.LogOperation(
-					"CSharpier Warm-up Completed",
-					CSharpierCommandService.GetCommandDisplayName(probeResult.Command)
-				);
-				return;
+				CSharpierCommands.CacheCommand(probe.Command, "warm-up");
+				if (IsEditorOperationAccessValid(operation)) DebugLogger.LogOperation("CSharpier Warm-up Completed", CSharpierCommandService.GetCommandDisplayName(probe.Command));
 			}
-
-			DebugLogger.LogOperation(
-				"CSharpier Warm-up Failed",
-				probeResult.TimedOut ? "probe timed out" : "command not found"
-			);
+			else if (IsEditorOperationAccessValid(operation)) DebugLogger.LogOperation("CSharpier Warm-up Failed", probe.TimedOut ? "probe timed out" : "command not found");
 		}
-		finally
-		{
-			_isWarmingUpCSharpierCommandCache = false;
-		}
+		finally { _isWarmingUpCSharpierCommandCache = false; }
 	}
 
-	private async Task<CSharpierFormatResult> FormatScriptWithCSharpierUsingCachedCommandFallback(
-		CSharpierCommand command,
-		string scriptPath,
-		string operationName
-	)
+	private async Task<CSharpierCommand> GetCSharpierCommandAsync(EditorOperationLease operation)
 	{
-		bool usedCachedCommand = CSharpierCommands.IsCachedCommand(command);
-		bool debugState = DebugState;
-		CSharpierFormatResult formatResult = await Task.Run(() =>
-			FormatScriptWithCSharpier(command, scriptPath, operationName, debugState)
-		);
+		if (CSharpierCommands.TryGetCachedCommand(out CSharpierCommand cached)) return cached;
+		CSharpierCommandProbeResult probe = await CSharpierCommands.ProbeCommandAsync(operation);
+		operation.CancellationToken.ThrowIfCancellationRequested();
+		if (probe.Success && operation.IsCurrent) { CSharpierCommands.CacheCommand(probe.Command, "operation probe"); return probe.Command; }
+		return default;
+	}
 
-		if (
-			formatResult.Success
-			|| !formatResult.ShouldInvalidateCachedCommand
-			|| !usedCachedCommand
-		)
-			return formatResult;
-
+	private async Task<CSharpierFormatResult> FormatScriptWithCSharpierUsingCachedCommandFallback(EditorOperationLease operation, CSharpierCommand command, string scriptPath, string operationName)
+	{
+		bool usedCached = CSharpierCommands.IsCachedCommand(command);
+		CSharpierFormatResult result = await FormatScriptWithCSharpierAsync(operation, command, scriptPath, operationName, DebugState);
+		operation.CancellationToken.ThrowIfCancellationRequested();
+		if (result.Success || !result.ShouldInvalidateCachedCommand || !usedCached || !operation.IsCurrent) return result;
 		CSharpierCommands.ClearCachedCommand("cached command failed during format");
-
-		if (
-			!CSharpierCommands.TryGetCommand(
-				out CSharpierCommand fallbackCommand,
-				allowCachedCommand: false
-			)
-		)
-			return formatResult;
-
-		DebugLogger.LogOperation(
-			"CSharpier Command Retry",
-			$"{CSharpierCommandService.GetCommandDisplayName(command)} -> {CSharpierCommandService.GetCommandDisplayName(fallbackCommand)}"
-		);
-
-		return await Task.Run(() =>
-			FormatScriptWithCSharpier(fallbackCommand, scriptPath, operationName, debugState)
-		);
+		CSharpierCommandProbeResult probe = await CSharpierCommands.ProbeCommandAsync(operation);
+		operation.CancellationToken.ThrowIfCancellationRequested();
+		if (!probe.Success || !operation.IsCurrent) return result;
+		CSharpierCommands.CacheCommand(probe.Command, "format fallback probe");
+		if (IsEditorOperationAccessValid(operation)) DebugLogger.LogOperation("CSharpier Command Retry", $"{CSharpierCommandService.GetCommandDisplayName(command)} -> {CSharpierCommandService.GetCommandDisplayName(probe.Command)}");
+		return await FormatScriptWithCSharpierAsync(operation, probe.Command, scriptPath, operationName, DebugState);
 	}
 
-	private static CSharpierFormatResult FormatScriptWithCSharpier(
-		CSharpierCommand command,
-		string scriptPath,
-		string operationName,
-		bool debugState
-	)
+	private async Task<CSharpierFormatResult> FormatScriptWithCSharpierAsync(EditorOperationLease operation, CSharpierCommand command, string scriptPath, string operationName, bool debugState)
 	{
-		if (!command.IsValid)
-			return new CSharpierFormatResult(
-				false,
-				"",
-				"Beautify Script failed: CSharpier command is invalid.",
-				shouldInvalidateCachedCommand: true
-			);
-
-		string globalScriptPath = ProjectSettings.GlobalizePath(scriptPath);
-
-		if (string.IsNullOrWhiteSpace(globalScriptPath))
-			return new CSharpierFormatResult(
-				false,
-				"",
-				$"Beautify Script failed: could not resolve '{scriptPath}'."
-			);
-
-		string workingDirectory = GetProjectWorkingDirectory();
-		DebugPrintBeautify(
-			debugState,
-			$"{operationName} CSharpier start: command='{CSharpierCommandService.GetCommandDisplayName(command)}', scriptPath='{scriptPath}', globalPath='{globalScriptPath}', globalExists={System.IO.File.Exists(globalScriptPath)}, workingDirectory='{workingDirectory}'"
-		);
-
+		if (!command.IsValid) return new CSharpierFormatResult(false, "", "Beautify Script failed: CSharpier command is invalid.", true);
+		string globalPath = ProjectSettings.GlobalizePath(scriptPath);
+		if (string.IsNullOrWhiteSpace(globalPath)) return new CSharpierFormatResult(false, "", $"Beautify Script failed: could not resolve '{scriptPath}'.");
+		ProcessStartInfo info = CreateProcessStartInfo(command.Executable, GetProjectWorkingDirectory());
+		foreach (string arg in command.BaseArguments) info.ArgumentList.Add(arg);
+		info.ArgumentList.Add("format"); info.ArgumentList.Add(globalPath); info.ArgumentList.Add("--write-stdout"); info.ArgumentList.Add("--log-level"); info.ArgumentList.Add("None");
 		try
 		{
-			using Process process = new()
-			{
-				StartInfo = new ProcessStartInfo
-				{
-					FileName = command.Executable,
-					WorkingDirectory = workingDirectory,
-					UseShellExecute = false,
-					CreateNoWindow = true,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true,
-					StandardOutputEncoding = Encoding.UTF8,
-					StandardErrorEncoding = Encoding.UTF8,
-				},
-			};
-
-			foreach (string argument in command.BaseArguments)
-				process.StartInfo.ArgumentList.Add(argument);
-
-			process.StartInfo.ArgumentList.Add("format");
-			process.StartInfo.ArgumentList.Add(globalScriptPath);
-			process.StartInfo.ArgumentList.Add("--write-stdout");
-			process.StartInfo.ArgumentList.Add("--log-level");
-			process.StartInfo.ArgumentList.Add("None");
-
-			DebugPrintBeautify(
-				debugState,
-				$"{operationName} CSharpier args: {GetDebugProcessArguments(process.StartInfo.ArgumentList)}"
-			);
-
-			if (!process.Start())
-				return new CSharpierFormatResult(
-					false,
-					"",
-					"Beautify Script failed: could not start CSharpier.",
-					shouldInvalidateCachedCommand: true
-				);
-
-			Task<string> standardOutputTask = process.StandardOutput.ReadToEndAsync();
-			Task<string> errorOutputTask = process.StandardError.ReadToEndAsync();
-
-			if (!process.WaitForExit(CSharpierFormatTimeoutMilliseconds))
-			{
-				DebugPrintBeautify(
-					debugState,
-					$"{operationName} CSharpier timed out after {CSharpierFormatTimeoutMilliseconds} ms."
-				);
-				CSharpierProcessUtility.TryKillProcess(process);
-				return new CSharpierFormatResult(
-					false,
-					"",
-                    "Beautify Script failed: CSharpier timed out."
-				);
-			}
-
-			string standardOutput = standardOutputTask.Result;
-			string errorOutput = errorOutputTask.Result.Trim();
-
-			DebugPrintBeautify(
-				debugState,
-				$"{operationName} CSharpier exit: exitCode={process.ExitCode}, stdoutLength={GetDebugLength(standardOutput)}, stderrLength={GetDebugLength(errorOutput)}, stdoutPreview='{GetDebugTextPreview(standardOutput)}', stderrPreview='{GetDebugTextPreview(errorOutput)}'"
-			);
-
-			if (process.ExitCode == 0)
-				return new CSharpierFormatResult(true, standardOutput, "");
-
-			string details = !string.IsNullOrWhiteSpace(errorOutput)
-				? errorOutput
-				: standardOutput.Trim();
-
-			return new CSharpierFormatResult(
-				false,
-				"",
-				$"Beautify Script failed: CSharpier could not format '{scriptPath}'.",
-				shouldInvalidateCachedCommand: LooksLikeUnavailableCSharpierCommandDetails(details)
-			);
+			CSharpierProcessResult process = await CSharpierProcesses.RunAsync(info, CSharpierFormatTimeoutMilliseconds, operation);
+			if (process.TimedOut) return new CSharpierFormatResult(false, "", "Beautify Script failed: CSharpier timed out.");
+			if (!process.Started) return new CSharpierFormatResult(false, "", "Beautify Script failed: could not start CSharpier.", true);
+			if (process.ExitCode == 0) return new CSharpierFormatResult(true, process.StandardOutput, "");
+			string details = !string.IsNullOrWhiteSpace(process.ErrorOutput) ? process.ErrorOutput.Trim() : process.StandardOutput.Trim();
+			return new CSharpierFormatResult(false, "", $"Beautify Script failed: CSharpier could not format '{scriptPath}'.", LooksLikeUnavailableCSharpierCommandDetails(details));
 		}
-		catch (Exception exception)
-		{
-			DebugPrintBeautify(debugState, $"{operationName} CSharpier exception: {exception}");
-
-			return new CSharpierFormatResult(
-				false,
-				"",
-				"Beautify Script failed: CSharpier could not be started.",
-				shouldInvalidateCachedCommand: true
-			);
-		}
+		catch (OperationCanceledException) { throw; }
+		catch (Exception exception) { DebugPrintBeautify(debugState, $"{operationName} CSharpier exception: {exception}"); return new CSharpierFormatResult(false, "", "Beautify Script failed: CSharpier could not be started.", true); }
 	}
 
-	private CSharpierInstallResult InstallCSharpierGlobalTool()
+	private async Task<CSharpierInstallResult> InstallCSharpierGlobalToolAsync(EditorOperationLease operation)
 	{
-		CSharpierInstallResult installResult = ExecuteCSharpierInstallCommand();
-
-		if (!installResult.Success)
-			return installResult;
-
-		CSharpierCommand installedCommand = GetCSharpierCommandAfterSuccessfulGlobalInstall();
-
-		return new CSharpierInstallResult(true, "CSharpier is now installed.", installedCommand);
+		CSharpierInstallResult result = await ExecuteToolCommandAsync(operation, "install");
+		return result.Success ? new CSharpierInstallResult(true, "CSharpier is now installed.", new CSharpierCommand("dotnet", "csharpier")) : result;
 	}
 
-	private static CSharpierCommand GetCSharpierCommandAfterSuccessfulGlobalInstall()
-	{
-		return new CSharpierCommand("dotnet", "csharpier");
-	}
+	private Task<CSharpierInstallResult> ExecuteCSharpierUninstallCommandForDebugAsync(EditorOperationLease operation) => ExecuteToolCommandAsync(operation, "uninstall");
 
-	private static CSharpierInstallResult ExecuteCSharpierInstallCommand()
+	private async Task<CSharpierInstallResult> ExecuteToolCommandAsync(EditorOperationLease operation, string verb)
 	{
+		ProcessStartInfo info = CreateProcessStartInfo("dotnet", GetProjectWorkingDirectory());
+		info.ArgumentList.Add("tool"); info.ArgumentList.Add(verb); info.ArgumentList.Add("csharpier"); info.ArgumentList.Add("-g");
 		try
 		{
-			using Process process = new()
-			{
-				StartInfo = new ProcessStartInfo
-				{
-					FileName = "dotnet",
-					UseShellExecute = false,
-					CreateNoWindow = true,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true,
-					StandardOutputEncoding = Encoding.UTF8,
-					StandardErrorEncoding = Encoding.UTF8,
-				},
-			};
-
-			process.StartInfo.ArgumentList.Add("tool");
-			process.StartInfo.ArgumentList.Add("install");
-			process.StartInfo.ArgumentList.Add("csharpier");
-			process.StartInfo.ArgumentList.Add("-g");
-
-			if (!process.Start())
-				return new CSharpierInstallResult(
-					false,
-                    "Could not start dotnet to install CSharpier."
-				);
-
-			Task<string> standardOutputTask = process.StandardOutput.ReadToEndAsync();
-			Task<string> errorOutputTask = process.StandardError.ReadToEndAsync();
-
-			if (!process.WaitForExit(CSharpierInstallTimeoutMilliseconds))
-			{
-				CSharpierProcessUtility.TryKillProcess(process);
-				return new CSharpierInstallResult(false, "CSharpier installation timed out.");
-			}
-
-			string errorOutput = errorOutputTask.Result.Trim();
-			string standardOutput = standardOutputTask.Result.Trim();
-
-			if (process.ExitCode == 0)
-				return new CSharpierInstallResult(true, "CSharpier is now installed.");
-
-			string details = !string.IsNullOrWhiteSpace(errorOutput) ? errorOutput : standardOutput;
-
-			return new CSharpierInstallResult(
-				false,
-				string.IsNullOrWhiteSpace(details)
-					? "CSharpier could not be installed. Make sure the .NET SDK is installed and try again."
-					: $"CSharpier could not be installed:\n{TruncateDialogText(details)}"
-			);
+			CSharpierProcessResult process = await CSharpierProcesses.RunAsync(info, CSharpierInstallTimeoutMilliseconds, operation);
+			if (process.TimedOut) return new CSharpierInstallResult(false, $"CSharpier {verb} timed out.");
+			if (!process.Started) return new CSharpierInstallResult(false, $"Could not start dotnet to {verb} CSharpier.");
+			string details = !string.IsNullOrWhiteSpace(process.ErrorOutput) ? process.ErrorOutput.Trim() : process.StandardOutput.Trim();
+			if (process.ExitCode == 0) return new CSharpierInstallResult(true, verb == "install" ? "CSharpier is now installed." : "CSharpier was uninstalled.");
+			if (verb == "uninstall" && LooksLikeCSharpierAlreadyUninstalledDetails(details)) return new CSharpierInstallResult(true, "CSharpier was already not installed.");
+			string action = verb == "install" ? "installed" : "uninstalled";
+			return new CSharpierInstallResult(false, string.IsNullOrWhiteSpace(details) ? $"CSharpier could not be {action}." : $"CSharpier could not be {action}:\n{TruncateDialogText(details)}");
 		}
-		catch
-		{
-			return new CSharpierInstallResult(
-				false,
-                "CSharpier could not be installed. Make sure the .NET SDK is installed and try again."
-			);
-		}
+		catch (OperationCanceledException) { throw; }
+		catch { return new CSharpierInstallResult(false, $"CSharpier could not be {verb}ed. Make sure the .NET SDK is installed and try again."); }
 	}
 
-	private static CSharpierInstallResult ExecuteCSharpierUninstallCommandForDebug()
+	private static ProcessStartInfo CreateProcessStartInfo(string executable, string workingDirectory) => new()
 	{
-		try
-		{
-			using Process process = new()
-			{
-				StartInfo = new ProcessStartInfo
-				{
-					FileName = "dotnet",
-					UseShellExecute = false,
-					CreateNoWindow = true,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true,
-					StandardOutputEncoding = Encoding.UTF8,
-					StandardErrorEncoding = Encoding.UTF8,
-				},
-			};
-
-			process.StartInfo.ArgumentList.Add("tool");
-			process.StartInfo.ArgumentList.Add("uninstall");
-			process.StartInfo.ArgumentList.Add("csharpier");
-			process.StartInfo.ArgumentList.Add("-g");
-
-			if (!process.Start())
-				return new CSharpierInstallResult(
-					false,
-                    "Could not start dotnet to uninstall CSharpier."
-				);
-
-			Task<string> standardOutputTask = process.StandardOutput.ReadToEndAsync();
-			Task<string> errorOutputTask = process.StandardError.ReadToEndAsync();
-
-			if (!process.WaitForExit(CSharpierInstallTimeoutMilliseconds))
-			{
-				CSharpierProcessUtility.TryKillProcess(process);
-				return new CSharpierInstallResult(false, "CSharpier uninstall timed out.");
-			}
-
-			string errorOutput = errorOutputTask.Result.Trim();
-			string standardOutput = standardOutputTask.Result.Trim();
-			string details = !string.IsNullOrWhiteSpace(errorOutput) ? errorOutput : standardOutput;
-
-			if (process.ExitCode == 0)
-				return new CSharpierInstallResult(true, "CSharpier was uninstalled.");
-
-			if (LooksLikeCSharpierAlreadyUninstalledDetails(details))
-				return new CSharpierInstallResult(true, "CSharpier was already not installed.");
-
-			return new CSharpierInstallResult(
-				false,
-				string.IsNullOrWhiteSpace(details)
-					? "CSharpier could not be uninstalled."
-					: $"CSharpier could not be uninstalled:\n{TruncateDialogText(details)}"
-			);
-		}
-		catch
-		{
-			return new CSharpierInstallResult(
-				false,
-                "CSharpier could not be uninstalled. Make sure the .NET SDK is installed and try again."
-			);
-		}
-	}
+		FileName = executable, WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? System.Environment.CurrentDirectory : workingDirectory,
+		UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+		StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+	};
 
 	private static bool LooksLikeCSharpierAlreadyUninstalledDetails(string details)
 	{
-		if (string.IsNullOrWhiteSpace(details))
-			return false;
-
-		string normalizedDetails = details.ToLowerInvariant();
-
-		return normalizedDetails.Contains("not currently installed", StringComparison.Ordinal)
-			|| normalizedDetails.Contains("is not installed", StringComparison.Ordinal)
-			|| normalizedDetails.Contains(
-				"package 'csharpier' is not found",
-				StringComparison.Ordinal
-			)
-			|| normalizedDetails.Contains("tool 'csharpier'", StringComparison.Ordinal)
-				&& normalizedDetails.Contains("not found", StringComparison.Ordinal);
+		if (string.IsNullOrWhiteSpace(details)) return false;
+		string d = details.ToLowerInvariant();
+		return d.Contains("not currently installed", StringComparison.Ordinal) || d.Contains("is not installed", StringComparison.Ordinal) || d.Contains("package 'csharpier' is not found", StringComparison.Ordinal) || (d.Contains("tool 'csharpier'", StringComparison.Ordinal) && d.Contains("not found", StringComparison.Ordinal));
 	}
 
 	private static bool LooksLikeUnavailableCSharpierCommandDetails(string details)
 	{
-		if (string.IsNullOrWhiteSpace(details))
-			return false;
-
-		string normalizedDetails = details.ToLowerInvariant();
-
-		return normalizedDetails.Contains(
-				"could not execute because the specified command or file was not found",
-				StringComparison.Ordinal
-			)
-			|| normalizedDetails.Contains(
-				"no executable found matching command",
-				StringComparison.Ordinal
-			)
-			|| normalizedDetails.Contains("not recognized", StringComparison.Ordinal)
-			|| (
-				normalizedDetails.Contains("csharpier", StringComparison.Ordinal)
-				&& (
-					normalizedDetails.Contains("not found", StringComparison.Ordinal)
-					|| normalizedDetails.Contains("not installed", StringComparison.Ordinal)
-					|| normalizedDetails.Contains("does not exist", StringComparison.Ordinal)
-				)
-			);
+		if (string.IsNullOrWhiteSpace(details)) return false;
+		string d = details.ToLowerInvariant();
+		return d.Contains("could not execute because the specified command or file was not found", StringComparison.Ordinal) || d.Contains("no executable found matching command", StringComparison.Ordinal) || d.Contains("not recognized", StringComparison.Ordinal) || (d.Contains("csharpier", StringComparison.Ordinal) && (d.Contains("not found", StringComparison.Ordinal) || d.Contains("not installed", StringComparison.Ordinal) || d.Contains("does not exist", StringComparison.Ordinal)));
 	}
 
-	private void SetCSharpierInstallButtonDisabled(bool disabled)
-	{
-		Button installButton = _csharpierNotInstalledDialog?.GetOkButton();
-
-		if (installButton != null)
-			installButton.Disabled = disabled;
-	}
-
-	private void DebugPrintBeautify(string message)
-	{
-		DebugPrintBeautify(DebugState, message);
-	}
-
-	private static void DebugPrintBeautify(bool debugState, string message)
-	{
-		if (!debugState)
-			return;
-
-		GD.Print($"System Explorer Beautify: {message}");
-	}
-
-	private static int GetDebugLength(string text)
-	{
-		return text?.Length ?? -1;
-	}
-
+	private void SetCSharpierInstallButtonDisabled(bool disabled) { Button button = _csharpierNotInstalledDialog?.GetOkButton(); if (button != null) button.Disabled = disabled; }
+	private void DebugPrintBeautify(string message) => DebugPrintBeautify(DebugState, message);
+	private static void DebugPrintBeautify(bool debugState, string message) { if (debugState) GD.Print($"System Explorer Beautify: {message}"); }
+	private static int GetDebugLength(string text) => text?.Length ?? -1;
 	private static string GetDebugTextPreview(string text)
 	{
-		if (string.IsNullOrEmpty(text))
-			return "";
-
-		string normalizedText = text.Replace("\r", "\\r", StringComparison.Ordinal)
-			.Replace("\n", "\\n", StringComparison.Ordinal)
-			.Replace("\t", "\\t", StringComparison.Ordinal);
-
-		return normalizedText.Length <= CSharpierDebugPreviewLength
-			? normalizedText
-			: normalizedText[..CSharpierDebugPreviewLength] + "...";
+		if (string.IsNullOrEmpty(text)) return "";
+		string normalized = text.Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal).Replace("\t", "\\t", StringComparison.Ordinal);
+		return normalized.Length <= CSharpierDebugPreviewLength ? normalized : normalized[..CSharpierDebugPreviewLength] + "...";
 	}
-
-	private static string GetDebugProcessArguments(
-		System.Collections.ObjectModel.Collection<string> arguments
-	)
-	{
-		if (arguments == null || arguments.Count == 0)
-			return "<none>";
-
-		return string.Join(" ", arguments.Select(GetDebugQuotedArgument));
-	}
-
-	private static string GetDebugQuotedArgument(string argument)
-	{
-		if (argument == null)
-			return "<null>";
-
-		return argument.Contains(' ', StringComparison.Ordinal) ? $"\"{argument}\"" : argument;
-	}
-
-	private static string TruncateDialogText(string text)
-	{
-		const int maximumLength = 1200;
-
-		if (string.IsNullOrWhiteSpace(text) || text.Length <= maximumLength)
-			return text;
-
-		return text[..maximumLength] + "...";
-	}
-
-	private static string GetProjectWorkingDirectory()
-	{
-		string projectPath = ProjectSettings.GlobalizePath("res://");
-
-		return string.IsNullOrWhiteSpace(projectPath)
-			? System.Environment.CurrentDirectory
-			: projectPath;
-	}
-
+	private static string TruncateDialogText(string text) { const int max = 1200; return string.IsNullOrWhiteSpace(text) || text.Length <= max ? text : text[..max] + "..."; }
+	private static string GetProjectWorkingDirectory() { string path = ProjectSettings.GlobalizePath("res://"); return string.IsNullOrWhiteSpace(path) ? System.Environment.CurrentDirectory : path; }
 	#endregion
 }
 #endif

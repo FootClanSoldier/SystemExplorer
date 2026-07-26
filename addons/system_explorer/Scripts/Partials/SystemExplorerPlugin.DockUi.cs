@@ -761,6 +761,12 @@ public partial class SystemExplorerPlugin
 		if (_systemNameInput == null)
 			return;
 
+		if (IsEditorOperationBusyCursorActive)
+		{
+			_systemNameInput.MouseDefaultCursorShape = Control.CursorShape.Busy;
+			return;
+		}
+
 		bool isHoveringAddIcon =
 			!string.IsNullOrWhiteSpace(_systemNameInput.Text)
 			&& _systemNameInput.RightIcon == _systemNameEnterIcon
@@ -776,7 +782,9 @@ public partial class SystemExplorerPlugin
 		if (_systemNameInput == null)
 			return;
 
-		_systemNameInput.MouseDefaultCursorShape = Control.CursorShape.Ibeam;
+		_systemNameInput.MouseDefaultCursorShape = IsEditorOperationBusyCursorActive
+			? Control.CursorShape.Busy
+			: Control.CursorShape.Ibeam;
 	}
 
 	#endregion

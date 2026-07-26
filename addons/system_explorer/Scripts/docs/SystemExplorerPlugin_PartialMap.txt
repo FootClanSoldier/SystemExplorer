@@ -28,9 +28,10 @@ Partials/SystemExplorerPlugin.DockUi.cs
 - Creates exactly one reusable Resources-access EditorFileDialog for folder binding, configured for OpenDir and connected through DirSelected.
 - Invokes the dedicated Refactor Namespace partial to create its plugin-owned dialogs and controls, delegates their idempotent named-callable wiring to that partial, mounts both dialogs directly under _dock as siblings after _createScriptDialog and before the CSharpier dialogs, and creates the initial managed host through the same centralized composition method used by recovery.
 - Owns validation, idempotent Connect/IsConnected/Disconnect coordination, named signal adapters, teardown reference clearing, and the named first-run-note margin callback for dock-owned controls.
-- Handles System Name input behavior, including the inline Enter hint icon and cursor updates.
+- Handles System Name input behavior, including the inline Enter hint icon and cursor updates, while deferring to the shared editor-operation busy-cursor ownership when a protected foreground operation is active.
 
 Partials/SystemExplorerPlugin.EditorReloadLifecycle.cs
+- Owns bounded managed-generation recovery that first reconnects valid existing UI and otherwise tears down and rebuilds the plugin-owned dock integration, reloads persistent state, recreates managed integrations/lifetime state, restores any native busy-cursor marker left by a protected foreground operation, and verifies critical tree/context-menu signals against the current plugin instance before accepting recovery.
 - Owns the per-assembly generation token, initialized-generation marker, reentrancy guard, and deduplicated user-facing failure path used to detect and recover a managed C# assembly reload without interpreting legitimately empty metadata as lost state.
 - Reads systems.json first and folder_bindings.json second into local validated models, then replaces _systems and _folderBindings together only after both read paths succeed; the recovery path is read-only and never invokes save, rollback, or startup folder synchronization.
 - Resets reload-unsafe queued and pending managed operation state, validates the surviving dock/dialog objects, and restores dock, TreeOperationDialog, Refactor Namespace, EditorFileSystem, ScriptEditor, and polling-timer integrations idempotently.
@@ -57,7 +58,7 @@ Partials/SystemExplorerPlugin.TreeBuilding.cs
 - Applies the bound-folder color and exact physical res:// tooltip only to folders with their own loaded binding; normal folders retain the standard folder color and empty tooltip.
 
 Partials/SystemExplorerPlugin.ScriptFilter.cs
-- Handles script filtering, ordered filter result generation, filter UI icons, clear/search icon behavior, and restoring the normal tree after filtering.
+- Handles script filtering, ordered filter result generation, filter UI icons, clear/search icon behavior, restoring the normal tree after filtering, and preserving the shared editor-operation busy cursor against filter hover/exit cursor updates.
 - Provides the ordered ScriptFilterResult projection reused by rename restoration and ScriptEditorSync to map flat filter-tree children back to exact system/folder/entry occurrences.
 - Handles revealing/selecting a script again after exiting filter mode.
 
@@ -210,19 +211,19 @@ Partials/SystemExplorerPlugin.QuickAction.Beautify.cs
 - Handles the Quick Action flow for Beautify Script / Beautify Scripts and retains the full single- and batch-formatting orchestration.
 - Uses ScriptPathUtility.Normalize(...) for general script and folder path string normalization while retaining .cs filtering, folder Trim('/'), case-insensitive collection policies, and operation ordering at their existing call sites.
 - Owns a Beautify-local C# script-entry classifier with the same lock, linked-scene, scene-entry, and .cs semantics previously supplied by the removed Refactor Namespace plugin helper.
-- Collects and validates single-script, active-editor script, and batch targets; stores pending beautify actions when CSharpier needs installation; and routes formatting through the shared CSharpier helpers.
+- Collects and validates single-script, active-editor script, and batch targets; stores pending beautify actions when CSharpier needs installation; and enters all long-running Beautify work through the shared EditorOperationLease execution boundary.
 - Handles beautify result summaries, unchanged/skipped/failed handling, safe write checks, and main operation orchestration.
 - Uses ScriptResourceRefreshService at the existing unchanged-after-autosave, failed-write rollback, and successful-write refresh points.
 - Preserves refresh ordering relative to rollback, committed open-buffer application, and editor view-state restoration.
-- Uses ScriptEditorSync batch context preservation for Beautify Scripts so batch formatting does not trigger post-operation active-script selection sync.
+- Uses ScriptEditorSync batch context preservation for Beautify Scripts so normal completion retains the existing deferred post-operation suppression release, while shutdown performs managed-only suppression cleanup without CallDeferred.
 - Composes exactly one BeautifyEditorStateService per plugin instance and delegates Beautify-specific open-buffer safeguards plus editor view-state capture/restore to it.
-- Injects the existing Beautify debug logger callback and strongly typed Callable.From(...).CallDeferred() scheduling into the service; no Beautify EditorState helper methods remain on the plugin partial.
+- Injects the existing Beautify debug logger callback and a shutdown-aware strongly typed deferred scheduler into the service; shutdown clears pending view restores and prevents new callbacks from targeting the old plugin instance.
 
 Partials/SystemExplorerPlugin.QuickAction.CSharpier.cs
-- Retains CSharpier startup warm-up scheduling and lifecycle, install confirmation/result handling, developer-only uninstall/warm-up orchestration, formatter fallback orchestration, process-based formatting, install/uninstall process execution, dialogs, and Beautify integration.
-- Composes exactly one lazy CSharpierCommandService per plugin instance by injecting the project working-directory provider, the existing DebugLogger.LogOperation(...) sink, and the unchanged standard detection timeout.
+- Retains CSharpier startup warm-up scheduling, install confirmation/result handling, developer-only uninstall/warm-up orchestration, formatter fallback policy, process arguments/result interpretation, dialogs, and Beautify integration while delegating all process lifetime to CSharpierProcessRunner.
+- Composes exactly one lazy CSharpierCommandService and CSharpierProcessRunner per plugin instance, injecting the project working-directory provider, existing operation logger, unchanged detection timeout, and shared operation lease cancellation.
 - Runs formatting with the supplied command and preserves the cached-command invalidation/re-probe/retry flow while delegating cache identity, clearing, discovery, and command display names to CSharpierCommandService.
-- Retains CSharpierFormatResult, CSharpierInstallResult, formatting process arguments/output handling, install/uninstall arguments/result parsing, startup warm-up flags, pending Beautify behavior, and Godot deferred scheduling.
+- Retains CSharpierFormatResult, CSharpierInstallResult, formatting/install/uninstall arguments and result parsing, startup warm-up flags, pending Beautify behavior, and post-await editor validity checks; cancellation is treated as expected lifetime termination rather than a formatter error.
 - No longer owns the CSharpier command model, command candidates, command probing, global tool path resolution, probe timeout execution, cache state, cache comparison/logging, or command display-name construction.
 
 ----------------------------------------------------
@@ -238,7 +239,7 @@ QuickActions/Beautify/BeautifyEditorViewState.cs
 
 QuickActions/Beautify/BeautifyEditorStateService.cs
 - Defines the ordinary internal sealed BeautifyEditorStateService under SystemExplorer.QuickActions.Beautify; it does not inherit a Godot lifecycle type and does not reference SystemExplorerPlugin.
-- Receives Beautify debug logging and strongly typed deferred scheduling through defensive constructor injection.
+- Receives Beautify debug logging and strongly typed deferred scheduling through defensive constructor injection, and exposes managed-only cancellation of pending restore passes for plugin shutdown.
 - Owns the pending editor view-state list and two-pass deferred restore counter for immediate/deferred caret, first-visible-line, scroll, and focus restoration.
 - Preserves Beautify-specific autosave, exact saved-buffer/disk validation, preliminary editor-first text application, and failed-write rollback rules while reusing the shared ScriptEditing primitives.
 - Does not run or probe CSharpier, choose Beautify targets, own formatter orchestration, write operation summaries, manage dialogs, or preserve batch context.
@@ -255,16 +256,16 @@ QuickActions/Beautify/CSharpier/CSharpierCommandProbeResult.cs
 
 QuickActions/Beautify/CSharpier/CSharpierCommandService.cs
 - Defines the ordinary internal sealed stateful CSharpierCommandService under SystemExplorer.QuickActions.Beautify.CSharpier; it does not inherit Node, GodotObject, EditorPlugin, or another Godot lifecycle type and does not reference SystemExplorerPlugin.
-- Receives a working-directory provider, operation-log callback, and positive standard detection timeout through defensive constructor injection.
-- Owns exactly one CSharpier command cache per service instance, including cache hits, writes, identity comparison, clearing, unchanged operation/detail logging, and command display names.
-- Owns the unchanged command candidate order (`dotnet csharpier`, `csharpier`, then the user-profile `.dotnet/tools/csharpier[.exe]` path when available), user-profile global-tool path resolution, synchronous --version probing, timeout aggregation, and process probe behavior.
-- Performs synchronous standard detection through the injected working-directory provider and can probe with an explicit timeout and materialized working directory for startup warm-up.
+- Receives a working-directory provider, operation-log callback, positive standard detection timeout, and the shared Godot-independent async process runner through defensive constructor injection.
+- Owns exactly one CSharpier command cache per service instance, including writes, identity comparison, clearing, operation/detail logging, and command display names; cache writes remain controlled by the caller after lease validation.
+- Owns the unchanged command candidate order (`dotnet csharpier`, `csharpier`, then the user-profile `.dotnet/tools/csharpier[.exe]` path when available), user-profile global-tool path resolution, asynchronous cancellable --version probing, and timeout aggregation.
+- Uses the shared operation lease for both standard detection and startup warm-up, and performs no blocking WaitForExit or Task.Run work.
 - Does not format scripts, install or uninstall CSharpier, show dialogs, schedule deferred work, own warm-up/install flags, run Beautify, or know pending Beautify state.
 
 QuickActions/Beautify/CSharpier/CSharpierProcessUtility.cs
 - Defines the internal static best-effort CSharpier process-cleanup primitive under SystemExplorer.QuickActions.Beautify.CSharpier.
 - Owns only TryKillProcess(Process), using the existing entire-process-tree kill attempt and swallowed cleanup exceptions, with a defensive null return.
-- Is shared by command probing plus the existing formatter, installation, and debug-uninstallation timeout paths; it does not start processes or own command, cache, formatting, install, UI, or lifecycle behavior.
+- Is shared by EditorOperationLease and CSharpierProcessRunner for best-effort cancellation/timeout cleanup; it does not start processes or own command, cache, formatting, install, UI, or lifecycle behavior.
 
 ## Editor integration classes
 
@@ -680,3 +681,29 @@ QuickActions/RefactorNamespace/NamespaceRefactorPlanBuilder.cs
 - Before plan building, the responsibility chain is NamespaceRefactorPluginHost -> NamespaceRefactorFeature facade -> NamespaceRefactorOperationRequestCoordinator request/path policy -> NamespaceRefactorOperationCoordinator -> NamespaceRefactorPreflightCoordinator -> NamespaceRefactorOpenBufferPreflightService. NamespaceRefactorOperationRequestCoordinator selects candidate paths, required paths, the Add Namespace activation bool, and the protected old namespace where applicable; NamespaceRefactorPreflightCoordinator translates operation policy to the explicit technical preflight mode, while NamespaceRefactorOperationCoordinator selects the operation-specific preflight method as part of the fixed phase sequence.
 - After a successful preflight, the plan-build responsibility chain is NamespaceRefactorFeature-composed request metadata and path-role policy -> NamespaceRefactorPlanBuildCoordinator -> NamespaceRefactorPreparationService -> NamespaceRefactorPlanBuilder -> NamespaceRefactorApplyCoordinator.
 - Application then continues through NamespaceRefactorPendingWriteApplyService -> NamespaceRefactorPostApplyCoordinator -> NamespaceRefactorPostApplyEditorService plus NamespaceRefactorPluginHost-supplied current-editor, logging, warning, deferred-target, selection, and focus delegates backed by injected plugin integrations. NamespaceRefactorApplyCoordinator invokes the apply service first, treats blocking pre-write failures through the warning path, proceeds to NamespaceRefactorPostApplyCoordinator only for the successful applied subset, and then invokes the host-owned incomplete-write report callback when failed paths remain.
+Partials/SystemExplorerPlugin.EditorOperationLifecycle.cs
+- Owns the plugin-facing execution boundary for protected long-running editor operations, including single-operation admission, observed Task execution, expected cancellation handling, exception observation, post-await plugin/Godot validity checks, foreground busy-cursor entry/exit around the complete protected body, and idempotent shutdown coordination before the normal editor teardown.
+- Implements the EditorPlugin _Build pre-run barrier: active Beautify/CSharpier work is cancelled and its managed completion is checked without synchronously blocking Godot's main thread; the current Play attempt is denied when quiescence has not yet been reached and cursor cleanup remains tied to actual execution completion.
+- Recreates the pure managed operation lifetime idempotently for the current managed assembly generation and connects it to Beautify/CSharpier without moving formatter, write, dialog, editor-state, process, or Godot cursor semantics into the shared lifetime layer.
+
+Partials/SystemExplorerPlugin.EditorOperationCursor.cs
+- Owns the Godot-facing busy-cursor snapshot for exactly one admitted foreground EditorOperationLease, including the previous DisplayServer global default cursor shape and the prior MouseDefaultCursorShape values for the dock, tree, System Name input, and Script Filter input.
+- Enables the plugin's Godot _Process callback only after a current managed foreground cursor snapshot has fully applied Busy, reapplies the global DisplayServer Busy cursor each editor frame while that managed owner remains current, and self-disables processing when no valid managed owner remains; a native reload marker alone never drives frame reapplication.
+- Writes a small owner-tokened native metadata marker before applying Busy so managed assembly recovery can restore only System Explorer-owned cursor state; normal completion disables processing before cursor restoration, while forced shutdown reset, emergency reset, and reload recovery also neutralize leftover native processing state before restoring and clearing managed/native cursor state idempotently.
+- Exposes the broader shared active-state check used by hover cursor logic and never changes cursor state for background operations, rejected leases, or feature-specific Beautify loop steps.
+
+EditorIntegration/Operations/EditorOperationLifetime.cs
+- Defines the Godot-independent plugin-instance operation lifetime and one-operation gate, owns the shared shutdown CancellationTokenSource, rejects new leases after shutdown, tracks the current lease through actual execution completion, and registers a non-static AssemblyLoadContext unload callback that performs managed-only cancellation and process termination.
+- Exposes active-operation quiescence through the current lease completion Task, keeps cancellation-requested separate from execution-completed, and does not clear the active lease until the protected operation's outer finally signals completion.
+- Its shutdown and disposal paths are idempotent and do not reference SystemExplorerPlugin, Godot objects, controls, editor APIs, dialogs, or Godot-backed logging.
+
+EditorIntegration/Operations/EditorOperationLease.cs
+- Defines the Godot-independent disposable handle for one protected editor operation, exposes its name, cancellation token, completion Task, cancellation/execution/disposal state, current state, and thread-safe active-process registration.
+- Its RunContinuationsAsynchronously completion source is signalled exactly once by the plugin-facing outer execution boundary; cancellation and shutdown kill registered process trees best-effort, while execution completion and disposal remain distinct idempotent transitions.
+
+QuickActions/Beautify/CSharpier/CSharpierProcessRunner.cs
+- Defines the Godot-independent asynchronous CSharpier process runner used by formatting, installation, uninstall, warm-up, fallback probing, and normal command probing.
+- Reads stdout/stderr asynchronously, uses WaitForExitAsync with operation cancellation and per-call timeout, kills the whole process tree on cancellation/timeout, observes process exit, unregisters the process in finally, and always disposes it.
+
+QuickActions/Beautify/CSharpier/CSharpierProcessResult.cs
+- Defines the immutable structured managed result returned by CSharpierProcessRunner, containing start, timeout, exit code, stdout, stderr, and derived success state without editor or plugin dependencies.

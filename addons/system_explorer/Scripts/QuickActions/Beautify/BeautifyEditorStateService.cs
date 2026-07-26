@@ -232,6 +232,12 @@ internal sealed class BeautifyEditorStateService
 		ScriptEditorBufferStateService.ApplyCommittedText(openEditor.TextEditor, originalText);
 	}
 
+	internal void CancelPendingRestores()
+	{
+		_pendingEditorViewStates.Clear();
+		_pendingEditorViewStateRestorePasses = 0;
+	}
+
 	private void RestorePendingEditorViewStates()
 	{
 		if (_pendingEditorViewStates.Count == 0)

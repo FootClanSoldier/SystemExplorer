@@ -480,6 +480,21 @@ public partial class SystemExplorerPlugin
 		CallDeferred(nameof(EndBatchPostOperationActiveScriptSyncSuppressionDeferred));
 	}
 
+	private void CompleteBatchScriptEditorContextPreservation(SystemExplorer.EditorIntegration.Operations.EditorOperationLease operation)
+	{
+		EndScriptEditorSyncSuppression();
+		if (IsEditorOperationAccessValid(operation))
+			CallDeferred(nameof(EndBatchPostOperationActiveScriptSyncSuppressionDeferred));
+		else
+			EndPostOperationActiveScriptSyncSuppression();
+	}
+
+	private void CancelBatchScriptEditorContextPreservationForShutdown()
+	{
+		_scriptEditorSyncSuppressionDepth = 0;
+		_postOperationActiveScriptSyncSuppressionDepth = 0;
+	}
+
 	private void EndBatchPostOperationActiveScriptSyncSuppressionDeferred()
 	{
 		EndPostOperationActiveScriptSyncSuppression();

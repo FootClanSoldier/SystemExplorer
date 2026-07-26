@@ -88,6 +88,12 @@ public partial class SystemExplorerPlugin
 		if (_scriptFilterInput == null)
 			return;
 
+		if (IsEditorOperationBusyCursorActive)
+		{
+			_scriptFilterInput.MouseDefaultCursorShape = Control.CursorShape.Busy;
+			return;
+		}
+
 		bool isHoveringCloseIcon =
 			!string.IsNullOrEmpty(_scriptFilterInput.Text)
 			&& _scriptFilterInput.RightIcon == _scriptFilterCloseIcon
@@ -103,7 +109,9 @@ public partial class SystemExplorerPlugin
 		if (_scriptFilterInput == null)
 			return;
 
-		_scriptFilterInput.MouseDefaultCursorShape = Control.CursorShape.Ibeam;
+		_scriptFilterInput.MouseDefaultCursorShape = IsEditorOperationBusyCursorActive
+			? Control.CursorShape.Busy
+			: Control.CursorShape.Ibeam;
 	}
 
 	private static bool IsLineEditRightIconClick(LineEdit lineEdit, Vector2 localMousePosition)

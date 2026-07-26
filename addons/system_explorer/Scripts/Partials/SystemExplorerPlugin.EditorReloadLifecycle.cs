@@ -11,14 +11,28 @@ public partial class SystemExplorerPlugin
 	private const string ManagedAssemblyRecoveryFailureTitle =
 		"System Explorer Reload Failed";
 	private const string ManagedAssemblyRecoveryFailureMessage =
-		"System Explorer could not safely restore its editor state after the C# assembly reload. The existing tree was left unchanged. Fix the reported problem, then build again or restart Godot.";
+		"System Explorer could not restore its editor integration after the C# assembly reload. Fix the reported persistent-state or editor-integration problem, then build again or restart Godot.";
 
 	private static readonly string ManagedAssemblyGeneration =
 		Guid.NewGuid().ToString("N");
 
+	private const int ManagedAssemblyRecoveryMaximumDeferredAttempts = 3;
+
+	private enum ManagedAssemblyRecoveryState
+	{
+		NotQueued,
+		Queued,
+		Recovering,
+		Completed,
+		PermanentlyFailed,
+	}
+
 	private string _loadedPersistentTreeStateGeneration = "";
 	private string _reportedManagedAssemblyRecoveryFailureGeneration = "";
 	private bool _isRecoveringManagedAssemblyState;
+	private ManagedAssemblyRecoveryState _managedAssemblyRecoveryState;
+	private int _managedAssemblyRecoveryDeferredAttempts;
+	private string _managedAssemblyRecoveryReason = "";
 
 	private bool InitializePersistentTreeStateForCurrentAssembly(string reason)
 	{
@@ -52,75 +66,180 @@ public partial class SystemExplorerPlugin
 				ManagedAssemblyGeneration,
 				StringComparison.Ordinal
 			)
+			&& VerifyCriticalManagedAssemblySignals()
 		)
 		{
+			EnsureEditorOperationLifecycleCurrentForManagedAssembly();
+			_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Completed;
 			return true;
 		}
 
-		if (_isRecoveringManagedAssemblyState)
-		{
-			DebugLogger.LogOperation(
-				"Managed assembly recovery skipped: reentrant call",
-				$"Reason='{reason}'"
-			);
+		if (_managedAssemblyRecoveryState == ManagedAssemblyRecoveryState.PermanentlyFailed)
 			return false;
-		}
 
+		if (_isRecoveringManagedAssemblyState)
+			return false;
+
+		if (TryRecoverManagedAssemblyEditorIntegration(reason, out string failureDetail))
+			return true;
+
+		if (_managedAssemblyRecoveryState == ManagedAssemblyRecoveryState.PermanentlyFailed)
+			return false;
+
+		QueueManagedAssemblyRecovery(reason, failureDetail);
+		return false;
+	}
+
+	private bool TryRecoverManagedAssemblyEditorIntegration(string reason, out string failureDetail)
+	{
+		failureDetail = "";
 		_isRecoveringManagedAssemblyState = true;
+		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Recovering;
 
 		try
 		{
-			DebugLogger.LogOperation(
-				"Managed assembly recovery requested",
-				$"Reason='{reason}', LoadedGeneration='{_loadedPersistentTreeStateGeneration}', CurrentGeneration='{ManagedAssemblyGeneration}'"
-			);
-
-			if (!ValidateManagedAssemblyUiReferences(out string uiFailureDetail))
-			{
-				ReportManagedAssemblyRecoveryFailure(reason, uiFailureDetail);
-				return false;
-			}
-
 			if (!TryReadAndCommitPersistentTreeStateFromDisk(reason, out string stateFailureDetail))
 			{
-				ReportManagedAssemblyRecoveryFailure(reason, stateFailureDetail);
+				failureDetail = stateFailureDetail;
+				_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.PermanentlyFailed;
+				ReportManagedAssemblyRecoveryFailure(reason, failureDetail);
 				return false;
 			}
 
 			ResetManagedAssemblyTransientStateAfterReload();
+			EnsureEditorOperationLifecycleCurrentForManagedAssembly();
 
-			if (
-				!EnsureManagedAssemblySignalIntegrationsCurrent(
-					out string signalFailureDetail
-				)
-			)
-			{
-				ReportManagedAssemblyRecoveryFailure(reason, signalFailureDetail);
-				return false;
-			}
+			if (TryRecoverExistingManagedAssemblyEditorIntegration(out string reconnectFailure))
+				return CompleteManagedAssemblyRecovery(reason, "reconnected existing editor integration");
 
-			_loadedPersistentTreeStateGeneration = ManagedAssemblyGeneration;
-			ClearManagedAssemblyRecoveryFailure();
+			if (TryRebuildManagedAssemblyEditorIntegration(out string rebuildFailure))
+				return CompleteManagedAssemblyRecovery(reason, "rebuilt editor integration");
 
-			DebugLogger.LogOperation(
-				"Managed assembly recovery completed",
-				$"Reason='{reason}', Generation='{ManagedAssemblyGeneration}', Systems={_systems.Count}, FolderBindings={CountFolderBindings(_folderBindings)}"
-			);
-			DebugLogStateSnapshot("Managed Assembly Recovery Completed");
-			return true;
+			failureDetail = $"Reconnect='{reconnectFailure}', Rebuild='{rebuildFailure}'";
+			return false;
 		}
 		catch (Exception exception)
 		{
-			ReportManagedAssemblyRecoveryFailure(
-				reason,
-				$"Unexpected recovery exception: {exception}"
-			);
+			failureDetail = $"Unexpected recovery exception: {exception}";
 			return false;
 		}
 		finally
 		{
 			_isRecoveringManagedAssemblyState = false;
 		}
+	}
+
+	private bool CompleteManagedAssemblyRecovery(string reason, string strategy)
+	{
+		_loadedPersistentTreeStateGeneration = ManagedAssemblyGeneration;
+		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Completed;
+		_managedAssemblyRecoveryDeferredAttempts = 0;
+		_managedAssemblyRecoveryReason = "";
+		ClearManagedAssemblyRecoveryFailure();
+		BuildTree(keepCurrentExpansionState: true);
+		CallDeferred(nameof(MakeSystemExplorerDockVisible));
+		DebugLogger.LogOperation("Managed assembly recovery completed", $"Reason='{reason}', Strategy='{strategy}'");
+		return true;
+	}
+
+	private bool TryRecoverExistingManagedAssemblyEditorIntegration(out string failureDetail)
+	{
+		failureDetail = "";
+		if (!ValidateManagedAssemblyUiReferences(out failureDetail))
+			return false;
+		if (!EnsureManagedAssemblySignalIntegrationsCurrent(out failureDetail))
+			return false;
+		if (!VerifyCriticalManagedAssemblySignals())
+		{
+			failureDetail = "Critical dock or context-menu signals are not connected to the current managed plugin instance.";
+			return false;
+		}
+		return true;
+	}
+
+	private bool TryRebuildManagedAssemblyEditorIntegration(out string failureDetail)
+	{
+		failureDetail = "";
+		try
+		{
+			ShutdownScriptEditorSync();
+			ShutdownFolderBindingFilesystemLifecycle();
+			DisconnectNamespaceRefactorDialogSignals();
+			DisconnectDockSignals();
+			_namespaceRefactorHost = null;
+
+			if (IsValidGodotObject(_editorDock))
+			{
+				if (_editorDock.IsInsideTree()) RemoveDock(_editorDock);
+				_editorDock.QueueFree();
+			}
+			else if (IsValidGodotObject(_dock))
+			{
+				_dock.QueueFree();
+			}
+
+			_editorDock = null;
+			_dock = null;
+			ClearDockControlReferences();
+			BuildDock();
+			_editorDock = new EditorDock { Title = "System Explorer", DefaultSlot = EditorDock.DockSlot.RightUl };
+			_editorDock.AddChild(_dock);
+			AddDock(_editorDock);
+
+			if (!EnsureManagedAssemblySignalIntegrationsCurrent(out failureDetail))
+				return false;
+			if (!VerifyCriticalManagedAssemblySignals())
+			{
+				failureDetail = "Critical signals were not current after dock rebuild.";
+				return false;
+			}
+
+			return true;
+		}
+		catch (Exception exception)
+		{
+			failureDetail = $"Dock rebuild exception: {exception}";
+			return false;
+		}
+	}
+
+	private bool VerifyCriticalManagedAssemblySignals()
+	{
+		return IsPluginSignalConnected(_tree, Control.SignalName.GuiInput, nameof(OnTreeGuiInputSignal))
+			&& IsPluginSignalConnected(_tree, Tree.SignalName.ItemSelected, nameof(OnItemSelectedSignal))
+			&& IsPluginSignalConnected(_contextMenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal))
+			&& IsPluginSignalConnected(_contextNewSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal))
+			&& IsPluginSignalConnected(_contextAddSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal))
+			&& IsPluginSignalConnected(_contextQuickActionsSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal));
+	}
+
+	private void QueueManagedAssemblyRecovery(string reason, string failureDetail)
+	{
+		_managedAssemblyRecoveryReason = reason ?? "Managed Assembly Recovery";
+		if (_managedAssemblyRecoveryState == ManagedAssemblyRecoveryState.Queued)
+			return;
+		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Queued;
+		DebugLogger.LogOperation("Managed assembly recovery deferred", failureDetail);
+		CallDeferred(nameof(RunDeferredManagedAssemblyRecovery));
+	}
+
+	private void RunDeferredManagedAssemblyRecovery()
+	{
+		if (_managedAssemblyRecoveryState != ManagedAssemblyRecoveryState.Queued)
+			return;
+		_managedAssemblyRecoveryDeferredAttempts++;
+		if (TryRecoverManagedAssemblyEditorIntegration(_managedAssemblyRecoveryReason, out string failureDetail))
+			return;
+		if (_managedAssemblyRecoveryState == ManagedAssemblyRecoveryState.PermanentlyFailed)
+			return;
+		if (_managedAssemblyRecoveryDeferredAttempts < ManagedAssemblyRecoveryMaximumDeferredAttempts)
+		{
+			_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Queued;
+			CallDeferred(nameof(RunDeferredManagedAssemblyRecovery));
+			return;
+		}
+		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.PermanentlyFailed;
+		ReportManagedAssemblyRecoveryFailure(_managedAssemblyRecoveryReason, failureDetail);
 	}
 
 	private bool TryReadAndCommitPersistentTreeStateFromDisk(
@@ -292,6 +411,7 @@ public partial class SystemExplorerPlugin
 
 	private void ResetManagedAssemblyTransientStateAfterReload()
 	{
+		RecoverEditorOperationBusyCursorAfterManagedAssemblyReload();
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 		ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload();
@@ -379,7 +499,6 @@ public partial class SystemExplorerPlugin
 		}
 		else
 		{
-			GD.PushWarning(ManagedAssemblyRecoveryFailureMessage);
 			DebugLogger.LogOperation(ManagedAssemblyRecoveryFailureTitle, details);
 		}
 	}

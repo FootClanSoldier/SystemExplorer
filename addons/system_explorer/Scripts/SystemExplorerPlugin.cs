@@ -176,12 +176,16 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	#region Lifecycle and Dock Setup
 	public override void _EnterTree()
 	{
-		DebugLogger.LogOperation("Enter Tree");
+		_editorOperationLifetime?.Dispose();
+		_editorOperationShutdownStarted = false;
+		_editorOperationLifetime = new SystemExplorer.EditorIntegration.Operations.EditorOperationLifetime();
+		TryLogEditorOperation("Enter Tree");
 
 		EnsureProjectSettings();
 		LoadEditorIcons();
 		EnsureScriptTemplateExists();
 		BuildDock();
+		ForceResetEditorOperationBusyCursor();
 
 		bool persistentStateReady =
 			InitializePersistentTreeStateForCurrentAssembly("Plugin Startup");
@@ -410,7 +414,8 @@ public sealed class {{CLASS_NAME}}
 
 	public override void _ExitTree()
 	{
-		DebugLogger.LogOperation("Exit Tree");
+		TryLogEditorOperation("Exit Tree");
+		ShutdownEditorOperationLifecycle();
 
 		CancelPendingScriptRenameEditorRestore();
 		_boundFolderSyncQueued = false;
@@ -440,6 +445,11 @@ public sealed class {{CLASS_NAME}}
 		ClearDockControlReferences();
 		_loadedPersistentTreeStateGeneration = "";
 		_isRecoveringManagedAssemblyState = false;
+		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.NotQueued;
+		_managedAssemblyRecoveryDeferredAttempts = 0;
+		_managedAssemblyRecoveryReason = "";
+		_editorOperationLifetime?.Dispose();
+		_editorOperationLifetime = null;
 	}
 
 	#endregion
