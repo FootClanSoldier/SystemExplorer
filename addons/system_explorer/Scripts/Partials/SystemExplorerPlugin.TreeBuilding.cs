@@ -10,6 +10,23 @@ public partial class SystemExplorerPlugin
 	#region Tree Building and Expansion State
 	private void BuildTree(bool keepCurrentExpansionState = false)
 	{
+		bool previousSuppression = _isRestoringOrRebuildingPersistentTreeExpansion;
+		_isRestoringOrRebuildingPersistentTreeExpansion = true;
+
+		try
+		{
+			BuildTreeCore(keepCurrentExpansionState);
+		}
+		finally
+		{
+			_isRestoringOrRebuildingPersistentTreeExpansion = previousSuppression;
+			if (!previousSuppression && _treeStateSaveDirty)
+				QueuePersistentTreeExpansionSave();
+		}
+	}
+
+	private void BuildTreeCore(bool keepCurrentExpansionState)
+	{
 		if (!EnsureManagedAssemblyStateCurrent("Build Tree"))
 			return;
 
@@ -483,6 +500,7 @@ public partial class SystemExplorerPlugin
 
 		CollapseTreeItemsRecursive(firstVisibleItem);
 		_tree.DeselectAll();
+		QueuePersistentTreeExpansionSave();
 	}
 
 	private static void CollapseTreeItemsRecursive(TreeItem item)

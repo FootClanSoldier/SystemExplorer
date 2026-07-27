@@ -98,6 +98,8 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
+			PrepareTreeStatePersistenceForManagedAssemblyRecovery();
+
 			if (!TryReadAndCommitPersistentTreeStateFromDisk(reason, out string stateFailureDetail))
 			{
 				failureDetail = stateFailureDetail;
@@ -281,6 +283,7 @@ public partial class SystemExplorerPlugin
 			validatedSystems,
 			folderBindingsReadResult.FolderBindings
 		);
+		LoadPersistentTreeExpansionStateBestEffort(reason);
 
 		DebugLogger.LogOperation(
 			"Persistent tree state loaded",
@@ -412,6 +415,7 @@ public partial class SystemExplorerPlugin
 	private void ResetManagedAssemblyTransientStateAfterReload()
 	{
 		RecoverEditorOperationBusyCursorAfterManagedAssemblyReload();
+		_renameFilesystemFinalStateRefreshQueued = false;
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 		ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload();

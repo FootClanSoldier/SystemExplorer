@@ -131,6 +131,61 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
+	private bool TryPreflightMetadataPersistenceForPhysicalMutation(
+		string operationName,
+		bool systemsRequired,
+		bool folderBindingsRequired,
+		string physicalConsequence
+	)
+	{
+		operationName = string.IsNullOrWhiteSpace(operationName)
+			? "Physical Operation"
+			: operationName.Trim();
+		physicalConsequence = string.IsNullOrWhiteSpace(physicalConsequence)
+			? "No project files were changed."
+			: physicalConsequence.Trim();
+		string physicalConsequenceClause = physicalConsequence.TrimEnd('.', ' ', '\t');
+
+		SystemsAndFolderBindingsSnapshot snapshot = systemsRequired
+			? CaptureSystemsAndFolderBindingsSnapshot()
+			: null;
+
+		if (systemsRequired && !SaveSystems())
+		{
+			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+			RestoreSystemsAndFolderBindingsSnapshot(snapshot);
+			ReportTreeOperationFailure(
+				metadataStateUnclear
+					? $"{physicalConsequenceClause}, but System Explorer could not verify the final state of systems.json. Restart Godot and inspect the metadata file before continuing."
+					: $"System Explorer could not verify that systems.json can be saved, so {operationName} was cancelled. {physicalConsequence}",
+				$"Operation='{operationName}', PreflightFile='systems.json', MetadataStateUnclear={metadataStateUnclear}",
+				metadataStateUnclear
+					? TreeOperationOutcomeSeverity.FinalStateUnclear
+					: TreeOperationOutcomeSeverity.Failed,
+				replaceExistingReport: true
+			);
+			return false;
+		}
+
+		if (folderBindingsRequired && !SaveFolderBindings())
+		{
+			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+			ReportTreeOperationFailure(
+				metadataStateUnclear
+					? $"{physicalConsequenceClause}, but System Explorer could not verify the final state of folder_bindings.json. Restart Godot and inspect the metadata file before continuing."
+					: $"System Explorer could not verify that folder_bindings.json can be saved, so {operationName} was cancelled. {physicalConsequence}",
+				$"Operation='{operationName}', PreflightFile='folder_bindings.json', MetadataStateUnclear={metadataStateUnclear}",
+				metadataStateUnclear
+					? TreeOperationOutcomeSeverity.FinalStateUnclear
+					: TreeOperationOutcomeSeverity.Failed,
+				replaceExistingReport: true
+			);
+			return false;
+		}
+
+		return true;
+	}
+
 	private bool SaveSystemsForCoordinatedMetadataMutation(
 		IntentionalEmptySystemsSaveAuthorization intentionalEmptyAuthorization
 	)
@@ -191,14 +246,21 @@ public partial class SystemExplorerPlugin
 			if (SaveSystemsForCoordinatedMetadataMutation(intentionalEmptyAuthorization))
 				return true;
 
+			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
 			RestoreSystemsAndFolderBindingsSnapshot(snapshot);
 			DebugLogger.LogOperation(
 				"Coordinated metadata persistence failed",
-				$"Operation='{operationName}', FailedSave=systems.json, BindingRollbackAttempted=false, BindingRollbackSucceeded=false"
+				$"Operation='{operationName}', FailedSave=systems.json, MetadataStateUnclear={metadataStateUnclear}, BindingRollbackAttempted=false, BindingRollbackSucceeded=false"
 			);
 			ReportTreeOperationFailure(
-				$"System Explorer could not complete {operationName} because the metadata could not be saved. The in-memory metadata was restored.",
-				$"Operation='{operationName}', FailedSave='systems.json'"
+				metadataStateUnclear
+					? $"System Explorer could not safely complete {operationName}. The local in-memory metadata was restored, but the final state of systems.json on disk could not be verified. Restart Godot and inspect systems.json before continuing."
+					: $"System Explorer could not complete {operationName} because the metadata could not be saved. The in-memory metadata was restored.",
+				$"Operation='{operationName}', FailedSave='systems.json', MetadataStateUnclear={metadataStateUnclear}",
+				metadataStateUnclear
+					? TreeOperationOutcomeSeverity.FinalStateUnclear
+					: TreeOperationOutcomeSeverity.Failed,
+				replaceExistingReport: metadataStateUnclear
 			);
 			return false;
 		}

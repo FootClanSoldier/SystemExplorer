@@ -407,6 +407,7 @@ public partial class SystemExplorerPlugin
 		connected &= TryConnectPluginSignal(_scriptFilterInput, Control.SignalName.GuiInput, nameof(OnScriptFilterInputGuiInputSignal), nameof(_scriptFilterInput));
 		connected &= TryConnectPluginSignal(_scriptFilterInput, Control.SignalName.MouseExited, nameof(OnScriptFilterInputMouseExited), nameof(_scriptFilterInput));
 		connected &= TryConnectPluginSignal(_tree, Tree.SignalName.ItemSelected, nameof(OnItemSelectedSignal), nameof(_tree));
+		TryConnectPluginSignal(_tree, Tree.SignalName.ItemCollapsed, nameof(OnTreeItemCollapsedSignal), nameof(_tree));
 		connected &= TryConnectPluginSignal(_tree, Control.SignalName.GuiInput, nameof(OnTreeGuiInputSignal), nameof(_tree));
 		connected &= TryConnectPluginSignal(_tree, Control.SignalName.MouseExited, nameof(OnTreeMouseExited), nameof(_tree));
 		connected &= TryConnectPluginSignal(_fileDialog, EditorFileDialog.SignalName.FilesSelected, nameof(OnScriptFilesSelectedSignal), nameof(_fileDialog));
@@ -456,6 +457,7 @@ public partial class SystemExplorerPlugin
 		DisconnectPluginSignal(_scriptFilterInput, Control.SignalName.GuiInput, nameof(OnScriptFilterInputGuiInputSignal), nameof(_scriptFilterInput));
 		DisconnectPluginSignal(_scriptFilterInput, Control.SignalName.MouseExited, nameof(OnScriptFilterInputMouseExited), nameof(_scriptFilterInput));
 		DisconnectPluginSignal(_tree, Tree.SignalName.ItemSelected, nameof(OnItemSelectedSignal), nameof(_tree));
+		DisconnectPluginSignal(_tree, Tree.SignalName.ItemCollapsed, nameof(OnTreeItemCollapsedSignal), nameof(_tree));
 		DisconnectPluginSignal(_tree, Control.SignalName.GuiInput, nameof(OnTreeGuiInputSignal), nameof(_tree));
 		DisconnectPluginSignal(_tree, Control.SignalName.MouseExited, nameof(OnTreeMouseExited), nameof(_tree));
 		DisconnectPluginSignal(_fileDialog, EditorFileDialog.SignalName.FilesSelected, nameof(OnScriptFilesSelectedSignal), nameof(_fileDialog));
@@ -578,6 +580,12 @@ public partial class SystemExplorerPlugin
 	{
 		if (EnsureManagedAssemblyStateCurrent("Tree Item Selected"))
 			OnItemSelected();
+	}
+
+	private void OnTreeItemCollapsedSignal(TreeItem item)
+	{
+		if (EnsureManagedAssemblyStateCurrent("Tree Item Expansion Changed"))
+			QueuePersistentTreeExpansionSave();
 	}
 
 	private void OnTreeGuiInputSignal(InputEvent inputEvent)

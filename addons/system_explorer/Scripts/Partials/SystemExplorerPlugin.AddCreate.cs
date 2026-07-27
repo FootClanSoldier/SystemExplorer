@@ -42,14 +42,26 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
 		_systems[systemName] = new List<string>();
 		DebugLogger.LogOperation("Add System Mutated", systemName);
 
 		_systemNameInput.Text = "";
 		UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Add System"
+			)
+		)
+		{
 			return;
+		}
 
 		ForceExpandSystem(systemName);
 		BuildTree();
@@ -88,6 +100,26 @@ public partial class SystemExplorerPlugin
 				closeOriginatingUi: CloseAddFolderUiAfterFailure
 			);
 
+		if (!EnsureSystemsLoadedForTreeOperation("Add Folder"))
+			return;
+
+		if (!EnsureSystemAvailable(targetSystemName, "Add Folder"))
+			return;
+
+		if (DoesFolderPathExistInSystem(targetSystemName, addedFolderPath))
+		{
+			DebugLogger.LogOperation(
+				"Add Folder failed: name conflict",
+				$"{targetSystemName}/{addedFolderPath}"
+			);
+			_addFolderInput.Text = "";
+			ShowAddFolderConflictWarning();
+			return;
+		}
+
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
 		FolderMutationResult result = AddFolderToPendingLocation();
 
 		if (result == FolderMutationResult.NameConflict)
@@ -110,8 +142,17 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Add Folder"
+			)
+		)
+		{
 			return;
+		}
 
 		ForceExpandFolderPath(targetSystemName, addedFolderPath);
 		_addFolderDialog.Hide();
@@ -203,6 +244,27 @@ public partial class SystemExplorerPlugin
 				closeOriginatingUi: CloseAddScriptUiAfterFailure
 			);
 
+		if (!EnsureSystemsLoadedForTreeOperation("Add Script"))
+			return;
+
+		if (!EnsureSystemAvailable(targetSystemName, "Add Script"))
+			return;
+
+		if (
+			!WouldAddScriptsToSelectedTreeLocation(
+				paths,
+				targetSystemName,
+				targetFolderPath
+			)
+		)
+		{
+			AddScriptsToSelectedTreeLocation(paths);
+			return;
+		}
+
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
 		AddTreeMutationResult result = AddScriptsToSelectedTreeLocation(paths);
 
 		if (result == AddTreeMutationResult.NoChange)
@@ -224,11 +286,46 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Add Scripts"
+			)
+		)
+		{
 			return;
+		}
 
 		ForceExpandTreeLocation(targetSystemName, targetFolderPath);
 		BuildTree();
+	}
+
+	private bool WouldAddScriptsToSelectedTreeLocation(
+		IEnumerable<string> paths,
+		string systemName,
+		string folderPath
+	)
+	{
+		if (
+			string.IsNullOrWhiteSpace(systemName)
+			|| !_systems.TryGetValue(systemName, out List<string> entries)
+			|| entries == null
+		)
+		{
+			return false;
+		}
+
+		return paths
+			.Where(path => !string.IsNullOrWhiteSpace(path))
+			.Distinct()
+			.Any(path =>
+			{
+				string linkedScenePath = GetExistingLinkedScenePathForScript(path);
+				string entry = BuildScriptEntry(folderPath, path, linkedScenePath);
+				return !entries.Contains(entry);
+			});
 	}
 
 	private AddTreeMutationResult AddScriptToSelectedTreeLocation(string path)
@@ -331,6 +428,27 @@ public partial class SystemExplorerPlugin
 				closeOriginatingUi: CloseAddSceneUiAfterFailure
 			);
 
+		if (!EnsureSystemsLoadedForTreeOperation("Add Scene"))
+			return;
+
+		if (!EnsureSystemAvailable(targetSystemName, "Add Scene"))
+			return;
+
+		if (
+			!WouldAddScenesToSelectedTreeLocation(
+				paths,
+				targetSystemName,
+				targetFolderPath
+			)
+		)
+		{
+			AddScenesToSelectedTreeLocation(paths);
+			return;
+		}
+
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
 		AddTreeMutationResult result = AddScenesToSelectedTreeLocation(paths);
 
 		if (result == AddTreeMutationResult.NoChange)
@@ -352,11 +470,41 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Add Scenes"
+			)
+		)
+		{
 			return;
+		}
 
 		ForceExpandTreeLocation(targetSystemName, targetFolderPath);
 		BuildTree();
+	}
+
+	private bool WouldAddScenesToSelectedTreeLocation(
+		IEnumerable<string> paths,
+		string systemName,
+		string folderPath
+	)
+	{
+		if (
+			string.IsNullOrWhiteSpace(systemName)
+			|| !_systems.TryGetValue(systemName, out List<string> entries)
+			|| entries == null
+		)
+		{
+			return false;
+		}
+
+		return paths
+			.Where(path => !string.IsNullOrWhiteSpace(path))
+			.Distinct()
+			.Any(path => !entries.Contains(BuildSceneEntry(folderPath, path)));
 	}
 
 	private AddTreeMutationResult AddSceneToSelectedTreeLocation(string path)
@@ -463,15 +611,51 @@ public partial class SystemExplorerPlugin
 		if (!EnsureSystemsLoadedForTreeOperation("Create Script"))
 			return;
 
+		if (!EnsureSystemAvailable(targetSystemName, "Create Script"))
+			return;
+
+		if (
+			!WouldAddScriptsToSelectedTreeLocation(
+				new[] { path },
+				targetSystemName,
+				targetFolderPath
+			)
+		)
+		{
+			DebugLogger.LogOperation("Create Script cancelled: metadata addition was a no-op", path);
+			return;
+		}
+
 		string className = path.GetFile().GetBaseName();
 
 		if (!TryBuildScriptContent(className, out string content))
 			return;
 
+		if (
+			!TryPreflightMetadataPersistenceForPhysicalMutation(
+				"Create Script",
+				systemsRequired: true,
+				folderBindingsRequired: false,
+				physicalConsequence: "No script file was created."
+			)
+		)
+		{
+			return;
+		}
+
 		if (!TryWriteCreatedScript(path, content))
 			return;
 
 		DebugLogger.LogOperation("Create Script File Written", path);
+
+		SystemsAndFolderBindingsSnapshot snapshot =
+			WouldAddScriptsToSelectedTreeLocation(
+				new[] { path },
+				targetSystemName,
+				targetFolderPath
+			)
+				? CaptureSystemsAndFolderBindingsSnapshot()
+				: null;
 
 		AddTreeMutationResult addResult = AddScriptToSelectedTreeLocation(path);
 
@@ -486,17 +670,26 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (addResult == AddTreeMutationResult.Success && !SaveSystems())
+		if (
+			addResult == AddTreeMutationResult.Success
+			&& !TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Create Script"
+			)
+		)
 		{
 			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
 			ReportTreeOperationFailure(
 				metadataStateUnclear
-					? "The script file was created, but the final state of System Explorer's updated metadata could not be verified."
-					: "The script file was created, but System Explorer could not save the updated tree metadata.",
-				$"Path='{path}'",
+					? "The script file was created and left in the FileSystem. The local in-memory tree metadata was restored, but the final state of systems.json on disk could not be verified. Restart Godot and inspect systems.json before continuing."
+					: "The script file was created, but System Explorer could not save the updated tree metadata. The in-memory tree metadata was restored, and the created script file was left in the FileSystem.",
+				$"Path='{path}', InMemoryMetadataRestored=true, CreatedFileRetained=true, MetadataStateUnclear={metadataStateUnclear}",
 				metadataStateUnclear
 					? TreeOperationOutcomeSeverity.FinalStateUnclear
-					: TreeOperationOutcomeSeverity.Incomplete
+					: TreeOperationOutcomeSeverity.Incomplete,
+				replaceExistingReport: true
 			);
 			EditorInterface.Singleton.GetResourceFilesystem().Scan();
 			return;

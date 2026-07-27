@@ -221,7 +221,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		AddDock(_editorDock);
 
 		if (persistentStateReady && integrationsReady)
-			BuildTree();
+			BuildTree(keepCurrentExpansionState: true);
 
 		SchedulePendingTreeOperationDialogPresentation();
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));
@@ -416,8 +416,10 @@ public sealed class {{CLASS_NAME}}
 	{
 		TryLogEditorOperation("Exit Tree");
 		ShutdownEditorOperationLifecycle();
+		FlushAndShutdownTreeStatePersistence();
 
 		CancelPendingScriptRenameEditorRestore();
+		_renameFilesystemFinalStateRefreshQueued = false;
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 		_isScriptEditorSyncDeferredQueued = false;

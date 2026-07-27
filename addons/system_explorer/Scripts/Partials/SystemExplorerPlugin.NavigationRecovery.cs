@@ -157,6 +157,28 @@ public partial class SystemExplorerPlugin
 
 		string missingEntry = _pendingMissingScriptEntry;
 
+		if (!EnsureSystemsLoadedForTreeOperation("Remove Missing Script"))
+			return;
+
+		if (
+			!EnsureEntryAvailableForReversibleMutation(
+				missingEntry,
+				"Remove Missing Script"
+			)
+		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not remove the missing script reference from the tree.",
+				missingEntry
+			);
+			return;
+		}
+
+		string selectedScriptEntryFromFilterBeforeMutation =
+			_selectedScriptEntryFromFilter;
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
 		if (!RemoveEntry(missingEntry))
 		{
 			if (!HasActiveTreeOperationFailure)
@@ -174,8 +196,19 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Remove Missing Script"
+			)
+		)
+		{
+			_selectedScriptEntryFromFilter =
+				selectedScriptEntryFromFilterBeforeMutation;
 			return;
+		}
 
 		HideTreeOperationOriginWindow(_missingScriptDialog);
 		HideTreeOperationOriginWindow(_relinkScriptDialog);
@@ -194,6 +227,24 @@ public partial class SystemExplorerPlugin
 		);
 
 		string oldEntry = _pendingMissingScriptEntry;
+
+		if (!EnsureSystemsLoadedForTreeOperation("Relink Missing Script"))
+			return;
+
+		if (
+			!EnsureEntryAvailableForReversibleMutation(
+				oldEntry,
+				"Relink Missing Script"
+			)
+		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not update the missing script reference.",
+				oldEntry
+			);
+			return;
+		}
+
 		string folderPath = GetFolderPathFromEntry(oldEntry);
 		string linkedScenePath = GetLinkedScenePathFromEntry(oldEntry);
 		string newEntry = BuildScriptEntry(
@@ -202,6 +253,10 @@ public partial class SystemExplorerPlugin
 			linkedScenePath,
 			IsEntryLocked(oldEntry)
 		);
+		string selectedScriptEntryFromFilterBeforeMutation =
+			_selectedScriptEntryFromFilter;
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
 
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
@@ -220,8 +275,19 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Relink Missing Script"
+			)
+		)
+		{
+			_selectedScriptEntryFromFilter =
+				selectedScriptEntryFromFilterBeforeMutation;
 			return;
+		}
 
 		HideTreeOperationOriginWindow(_missingScriptDialog);
 		HideTreeOperationOriginWindow(_relinkScriptDialog);

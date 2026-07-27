@@ -174,6 +174,28 @@ public partial class SystemExplorerPlugin
 
 		if (IsSceneEntry(entry))
 		{
+			if (!EnsureSystemsLoadedForTreeOperation("Remove Missing Scene"))
+				return;
+
+			if (
+				!EnsureEntryAvailableForReversibleMutation(
+					entry,
+					"Remove Missing Scene"
+				)
+			)
+			{
+				ReportTreeOperationFailure(
+					"System Explorer could not remove the missing scene reference.",
+					entry
+				);
+				return;
+			}
+
+			string selectedScriptEntryFromFilterBeforeMutation =
+				_selectedScriptEntryFromFilter;
+			SystemsAndFolderBindingsSnapshot snapshot =
+				CaptureSystemsAndFolderBindingsSnapshot();
+
 			if (!RemoveEntry(entry))
 			{
 				if (!HasActiveTreeOperationFailure)
@@ -187,8 +209,19 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			if (!SaveSystems())
+			if (
+				!TryPersistReversibleSystemsAndFolderBindingsMutation(
+					snapshot,
+					systemsChanged: true,
+					folderBindingsChanged: false,
+					operationName: "Remove Missing Scene"
+				)
+			)
+			{
+				_selectedScriptEntryFromFilter =
+					selectedScriptEntryFromFilterBeforeMutation;
 				return;
+			}
 
 			HideTreeOperationOriginWindow(_missingSceneDialog);
 			HideTreeOperationOriginWindow(_relinkSceneDialog);
@@ -247,6 +280,25 @@ public partial class SystemExplorerPlugin
 		if (string.Equals(oldEntry, newEntry, System.StringComparison.Ordinal))
 			return true;
 
+		if (
+			!EnsureEntryAvailableForReversibleMutation(
+				oldEntry,
+				"Update Scene"
+			)
+		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not update the selected scene reference.",
+				oldEntry
+			);
+			return false;
+		}
+
+		string selectedScriptEntryFromFilterBeforeMutation =
+			_selectedScriptEntryFromFilter;
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
 		if (!ReplaceEntry(oldEntry, newEntry))
 		{
 			if (!HasActiveTreeOperationFailure)
@@ -264,8 +316,19 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Update Scene"
+			)
+		)
+		{
+			_selectedScriptEntryFromFilter =
+				selectedScriptEntryFromFilterBeforeMutation;
 			return false;
+		}
 
 		BuildTree();
 		return true;
@@ -313,15 +376,19 @@ public partial class SystemExplorerPlugin
 
 		int matchedEntryCount = 0;
 		int changedEntryCount = 0;
+		bool systemsChanged = false;
 		ScriptTreeOccurrence? updatedSourceOccurrence = null;
+		Dictionary<string, List<string>> updatedSystems = new(_systems.Comparer);
+		List<KeyValuePair<string, string>> changedEntries = new();
 
 		foreach (string systemName in _systems.Keys.ToList())
 		{
+			List<string> currentEntries = _systems[systemName];
 			List<string> updatedEntries = new();
 			HashSet<string> updatedTargetEntries = new(System.StringComparer.Ordinal);
 			bool systemMatched = false;
 
-			foreach (string entry in _systems[systemName])
+			foreach (string entry in currentEntries)
 			{
 				if (entry.StartsWith("folder::") || IsSceneEntry(entry))
 				{
@@ -384,7 +451,7 @@ public partial class SystemExplorerPlugin
 
 				if (!string.Equals(entry, newEntry, System.StringComparison.Ordinal))
 				{
-					UpdateSelectedScriptEntryFromFilter(entry, newEntry);
+					changedEntries.Add(new KeyValuePair<string, string>(entry, newEntry));
 					changedEntryCount++;
 				}
 
@@ -392,8 +459,13 @@ public partial class SystemExplorerPlugin
 					updatedEntries.Add(newEntry);
 			}
 
-			if (systemMatched)
-				_systems[systemName] = updatedEntries;
+			if (!systemMatched)
+				continue;
+
+			updatedSystems[systemName] = updatedEntries;
+
+			if (!currentEntries.SequenceEqual(updatedEntries, System.StringComparer.Ordinal))
+				systemsChanged = true;
 		}
 
 		if (matchedEntryCount == 0)
@@ -411,10 +483,10 @@ public partial class SystemExplorerPlugin
 
 		DebugLogger.LogOperation(
 			"Update Linked Scene references mutated",
-			$"Path='{scriptPath}', Matched={matchedEntryCount}, Changed={changedEntryCount}"
+			$"Path='{scriptPath}', Matched={matchedEntryCount}, Changed={changedEntryCount}, SystemsChanged={systemsChanged}"
 		);
 
-		if (changedEntryCount == 0)
+		if (!systemsChanged)
 		{
 			if (updatedSourceOccurrence.HasValue)
 				RestoreLinkedSceneSourceOccurrence(updatedSourceOccurrence.Value);
@@ -422,8 +494,30 @@ public partial class SystemExplorerPlugin
 			return true;
 		}
 
-		if (!SaveSystems())
+		string selectedScriptEntryFromFilterBeforeMutation =
+			_selectedScriptEntryFromFilter;
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
+		foreach (KeyValuePair<string, List<string>> updatedSystem in updatedSystems)
+			_systems[updatedSystem.Key] = updatedSystem.Value;
+
+		foreach (KeyValuePair<string, string> changedEntry in changedEntries)
+			UpdateSelectedScriptEntryFromFilter(changedEntry.Key, changedEntry.Value);
+
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Update Scene Link"
+			)
+		)
+		{
+			_selectedScriptEntryFromFilter =
+				selectedScriptEntryFromFilterBeforeMutation;
 			return false;
+		}
 
 		BuildTree();
 

@@ -39,6 +39,38 @@ public partial class SystemExplorerPlugin
 			_selectedScriptEntryFromFilter = "";
 	}
 
+	private bool EnsureEntryAvailableForReversibleMutation(
+		string entry,
+		string reason,
+		string systemName = ""
+	)
+	{
+		if (DoesEntryExistForReversibleMutation(entry, systemName))
+			return true;
+
+		if (!TryRecoverSystemsFromDisk(reason, systemName))
+			return false;
+
+		return DoesEntryExistForReversibleMutation(entry, systemName);
+	}
+
+	private bool DoesEntryExistForReversibleMutation(string entry, string systemName)
+	{
+		if (string.IsNullOrWhiteSpace(entry))
+			return false;
+
+		if (!string.IsNullOrWhiteSpace(systemName))
+		{
+			return _systems.TryGetValue(systemName, out List<string> systemEntries)
+				&& systemEntries != null
+				&& FindEntryIndex(systemEntries, entry) >= 0;
+		}
+
+		return _systems.Values.Any(entries =>
+			entries != null && FindEntryIndex(entries, entry) >= 0
+		);
+	}
+
 	private bool RemoveEntry(string entry)
 	{
 		if (!EnsureSystemsLoadedForTreeOperation("Remove Entry"))

@@ -149,6 +149,7 @@ public partial class SystemExplorerPlugin
 		);
 
 		bool moved = false;
+		SystemsAndFolderBindingsSnapshot snapshot = null;
 
 		if (draggedMetadata.StartsWith("system::") && targetMetadata.StartsWith("system::"))
 		{
@@ -158,6 +159,20 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
+			string draggedSystemName = draggedMetadata.Replace("system::", "");
+			string targetSystemNameForMove = targetMetadata.Replace("system::", "");
+
+			if (
+				!EnsureSystemsAvailable(
+					new[] { draggedSystemName, targetSystemNameForMove },
+					"Move System"
+				)
+			)
+			{
+				return;
+			}
+
+			snapshot = CaptureSystemsAndFolderBindingsSnapshot();
 			moved = MoveSystem(draggedMetadata, targetMetadata);
 		}
 		else if (
@@ -165,8 +180,22 @@ public partial class SystemExplorerPlugin
 			&& IsValidScriptOrSceneDropTargetMetadata(targetMetadata)
 		)
 		{
+			if (
+				IsScriptOrSceneDropNoChange(
+					draggedMetadata,
+					targetItem,
+					sourceSystemName,
+					sourceEntry
+				)
+			)
+			{
+				DebugLogger.Log("Drag Move cancelled: source and target location are identical.");
+				return;
+			}
+
 			targetSystemToExpand = GetSystemNameFromTreeItem(targetItem);
 			targetFolderToExpand = GetDropFolderPathFromTargetItem(targetItem);
+			snapshot = CaptureSystemsAndFolderBindingsSnapshot();
 			moved = MoveScriptOrSceneToDropTarget(
 				draggedMetadata,
 				targetItem,
@@ -183,7 +212,11 @@ public partial class SystemExplorerPlugin
 			&& IsSystemEntryMetadata(targetMetadata)
 		)
 		{
-			moved = MoveSystemEntry(draggedMetadata, targetMetadata);
+			if (CanMoveSystemEntry(draggedMetadata, targetMetadata))
+			{
+				snapshot = CaptureSystemsAndFolderBindingsSnapshot();
+				moved = MoveSystemEntry(draggedMetadata, targetMetadata);
+			}
 		}
 
 		if (!moved)
@@ -195,8 +228,17 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Move Tree Item"
+			)
+		)
+		{
 			return;
+		}
 
 		if (!string.IsNullOrWhiteSpace(targetSystemToExpand))
 		{
@@ -249,6 +291,51 @@ public partial class SystemExplorerPlugin
 
 		sourceIndex = sourceEntries.IndexOf(sourceEntry);
 		return sourceIndex >= 0;
+	}
+
+	private bool IsScriptOrSceneDropNoChange(
+		string draggedMetadata,
+		TreeItem targetItem,
+		string sourceSystemName,
+		string draggedEntry
+	)
+	{
+		if (targetItem == null || string.IsNullOrWhiteSpace(draggedEntry))
+			return false;
+
+		string targetMetadata = targetItem.GetMetadata(0).AsString();
+		string targetSystemName = GetSystemNameFromTreeItem(targetItem);
+		string targetFolderPath = GetDropFolderPathFromTargetItem(targetItem);
+		string draggedPath = GetPathFromEntry(draggedEntry);
+
+		if (
+			string.IsNullOrWhiteSpace(targetSystemName)
+			|| string.IsNullOrWhiteSpace(draggedPath)
+		)
+		{
+			return false;
+		}
+
+		string newEntry = IsSceneEntry(draggedEntry)
+			? BuildSceneEntry(targetFolderPath, draggedPath, IsEntryLocked(draggedEntry))
+			: BuildScriptEntry(
+				targetFolderPath,
+				draggedPath,
+				GetLinkedScenePathFromEntry(draggedEntry),
+				IsEntryLocked(draggedEntry)
+			);
+
+		if (sourceSystemName != targetSystemName || draggedEntry != newEntry)
+			return false;
+
+		if (!IsScriptOrSceneMetadata(targetMetadata))
+			return true;
+
+		return string.Equals(
+			draggedEntry,
+			GetEntryFromMetadata(targetMetadata),
+			System.StringComparison.Ordinal
+		);
 	}
 
 	private bool MoveSystem(string draggedMetadata, string targetMetadata)
@@ -451,6 +538,69 @@ public partial class SystemExplorerPlugin
 		);
 
 		return true;
+	}
+
+	private bool CanMoveSystemEntry(string draggedMetadata, string targetMetadata)
+	{
+		string draggedSystemName = GetSystemNameFromEntryMetadata(draggedMetadata);
+		string targetSystemName = GetSystemNameFromEntryMetadata(targetMetadata);
+
+		if (
+			string.IsNullOrWhiteSpace(draggedSystemName)
+			|| string.IsNullOrWhiteSpace(targetSystemName)
+		)
+		{
+			TryRecoverSystemsFromDisk("Move Entry Resolve System");
+
+			draggedSystemName = GetSystemNameFromEntryMetadata(draggedMetadata);
+			targetSystemName = GetSystemNameFromEntryMetadata(targetMetadata);
+		}
+
+		if (string.IsNullOrWhiteSpace(draggedSystemName) || string.IsNullOrWhiteSpace(targetSystemName))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not identify the system that owns the moved entry.",
+				$"DraggedMetadata='{draggedMetadata}', TargetMetadata='{targetMetadata}'"
+			);
+			return false;
+		}
+
+		if (draggedSystemName != targetSystemName)
+			return false;
+
+		if (!EnsureSystemAvailable(draggedSystemName, "Move Entry"))
+			return false;
+
+		string draggedEntry = GetEntryFromMetadata(draggedMetadata);
+		string targetEntry = GetEntryFromMetadata(targetMetadata);
+
+		if (string.IsNullOrWhiteSpace(draggedEntry) || string.IsNullOrWhiteSpace(targetEntry))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the entries involved in the move.",
+				$"DraggedMetadata='{draggedMetadata}', TargetMetadata='{targetMetadata}'"
+			);
+			return false;
+		}
+
+		List<string> entries = _systems[draggedSystemName];
+		int draggedIndex = FindEntryIndex(entries, draggedEntry);
+		int targetIndex = FindEntryIndex(entries, targetEntry);
+
+		if (draggedIndex < 0 || targetIndex < 0)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the exact entries involved in the move.",
+				$"System='{draggedSystemName}', DraggedIndex={draggedIndex}, TargetIndex={targetIndex}"
+			);
+			return false;
+		}
+
+		if (draggedIndex == targetIndex)
+			return false;
+
+		return GetParentFolderPathFromEntryMetadata(draggedMetadata)
+			== GetParentFolderPathFromEntryMetadata(targetMetadata);
 	}
 
 	private bool MoveSystemEntry(string draggedMetadata, string targetMetadata)

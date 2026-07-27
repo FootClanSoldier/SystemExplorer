@@ -48,24 +48,6 @@ public partial class SystemExplorerPlugin
 		_editorOperationBusyCursorSnapshot != null
 		|| HasNativeEditorOperationBusyCursorMarker();
 
-	public override void _Process(double delta)
-	{
-		try
-		{
-			if (!ShouldReapplyEditorOperationBusyCursor())
-			{
-				TrySetEditorOperationBusyCursorProcessing(false);
-				return;
-			}
-
-			TrySetGlobalEditorOperationCursor(DisplayServer.CursorShape.Busy);
-		}
-		catch
-		{
-			TrySetEditorOperationBusyCursorProcessing(false);
-		}
-	}
-
 	private bool ShouldReapplyEditorOperationBusyCursor()
 	{
 		try
@@ -139,7 +121,7 @@ public partial class SystemExplorerPlugin
 		{
 			DisplayServer.CursorSetShape(DisplayServer.CursorShape.Busy);
 			SetEditorOperationDockCursorShapes(Control.CursorShape.Busy);
-			TrySetEditorOperationBusyCursorProcessing(true);
+			RefreshEditorPluginProcessingState();
 			return true;
 		}
 		catch
@@ -175,7 +157,7 @@ public partial class SystemExplorerPlugin
 
 	private void ForceResetEditorOperationBusyCursor()
 	{
-		TrySetEditorOperationBusyCursorProcessing(false);
+		RefreshEditorPluginProcessingState(busyCursorNeedsProcessing: false);
 
 		try
 		{
@@ -197,7 +179,7 @@ public partial class SystemExplorerPlugin
 
 	private void RecoverEditorOperationBusyCursorAfterManagedAssemblyReload()
 	{
-		TrySetEditorOperationBusyCursorProcessing(false);
+		RefreshEditorPluginProcessingState(busyCursorNeedsProcessing: false);
 
 		if (_editorOperationBusyCursorSnapshot == null)
 			RestoreEditorOperationBusyCursorFromNativeMarker();
@@ -216,7 +198,7 @@ public partial class SystemExplorerPlugin
 				return;
 
 			if (ReferenceEquals(_editorOperationBusyCursorSnapshot, snapshot))
-				TrySetEditorOperationBusyCursorProcessing(false);
+				RefreshEditorPluginProcessingState(busyCursorNeedsProcessing: false);
 
 			TrySetGlobalEditorOperationCursor(snapshot.PreviousGlobalCursorShape);
 			foreach (EditorOperationControlCursorSnapshot controlCursor in snapshot.ControlCursors)
@@ -233,12 +215,13 @@ public partial class SystemExplorerPlugin
 				_editorOperationBusyCursorSnapshot = null;
 
 			TryClearNativeEditorOperationBusyCursorMarker(snapshot.OwnerToken);
+			RefreshEditorPluginProcessingState();
 		}
 	}
 
 	private void RestoreEditorOperationBusyCursorFromNativeMarker()
 	{
-		TrySetEditorOperationBusyCursorProcessing(false);
+		RefreshEditorPluginProcessingState(busyCursorNeedsProcessing: false);
 
 		if (!HasNativeEditorOperationBusyCursorMarker())
 			return;
@@ -264,16 +247,18 @@ public partial class SystemExplorerPlugin
 		{
 			_editorOperationBusyCursorSnapshot = null;
 			TryClearNativeEditorOperationBusyCursorMarker();
+			RefreshEditorPluginProcessingState();
 		}
 	}
 
 	private void EmergencyResetEditorOperationBusyCursor()
 	{
-		TrySetEditorOperationBusyCursorProcessing(false);
+		RefreshEditorPluginProcessingState(busyCursorNeedsProcessing: false);
 		TrySetGlobalEditorOperationCursor(DisplayServer.CursorShape.Arrow);
 		RestoreNormalEditorOperationDockCursors();
 		_editorOperationBusyCursorSnapshot = null;
 		TryClearNativeEditorOperationBusyCursorMarker();
+		RefreshEditorPluginProcessingState();
 	}
 
 	private EditorOperationControlCursorSnapshot[] CaptureEditorOperationControlCursors()
@@ -453,20 +438,6 @@ public partial class SystemExplorerPlugin
 
 		cursorShape = (DisplayServer.CursorShape)cursorShapeValue;
 		return true;
-	}
-
-	private void TrySetEditorOperationBusyCursorProcessing(bool enabled)
-	{
-		if (!IsValidGodotObject(this))
-			return;
-
-		try
-		{
-			SetProcess(enabled);
-		}
-		catch
-		{
-		}
 	}
 
 	private static void TrySetGlobalEditorOperationCursor(DisplayServer.CursorShape cursorShape)

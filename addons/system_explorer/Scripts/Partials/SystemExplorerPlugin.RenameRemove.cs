@@ -259,9 +259,43 @@ public partial class SystemExplorerPlugin
 		}
 
 		if (
-			!TryPrepareScriptsForPhysicalRemove(
+			!TryCollectPhysicalRemoveTargets(
 				removeMetadata,
 				out List<string> filePathsToDelete,
+				out string collectionFailureMessage
+			)
+		)
+		{
+			if (!string.IsNullOrWhiteSpace(collectionFailureMessage))
+				ReportTreeOperationFailureOrWarning(collectionFailureMessage);
+			else if (!HasActiveTreeOperationFailure)
+				ReportTreeOperationFailure("System Explorer could not identify the selected files for removal.");
+
+			DebugLogger.LogOperation(
+				"Physical remove cancelled during target collection",
+				collectionFailureMessage
+			);
+			return;
+		}
+
+		bool folderBindingsPreflightRequired =
+			PhysicalRemoveMayChangeFolderBindings(removeMetadata);
+
+		if (
+			!TryPreflightMetadataPersistenceForPhysicalMutation(
+				"Remove",
+				systemsRequired: true,
+				folderBindingsRequired: folderBindingsPreflightRequired,
+				physicalConsequence: "No project files were deleted."
+			)
+		)
+		{
+			return;
+		}
+
+		if (
+			!TryPrepareScriptsForPhysicalRemove(
+				filePathsToDelete,
 				out string preparationFailureMessage
 			)
 		)
@@ -272,7 +306,7 @@ public partial class SystemExplorerPlugin
 				ReportTreeOperationFailure("System Explorer could not prepare the selected files for removal.");
 
 			DebugLogger.LogOperation(
-				"Physical remove cancelled during preparation",
+				"Physical remove cancelled during editor preparation",
 				preparationFailureMessage
 			);
 			return;
@@ -714,6 +748,46 @@ public partial class SystemExplorerPlugin
 		IReadOnlyList<string> FilePaths
 	);
 
+	private bool PhysicalRemoveMayChangeFolderBindings(string metadata)
+	{
+		if (string.IsNullOrWhiteSpace(metadata))
+			return false;
+
+		if (metadata.StartsWith("system::", StringComparison.Ordinal))
+		{
+			string targetSystemName = metadata.Substring("system::".Length);
+			return !string.IsNullOrWhiteSpace(targetSystemName)
+				&& _folderBindings.TryGetValue(targetSystemName, out Dictionary<string, string> bindings)
+				&& bindings != null
+				&& bindings.Count > 0;
+		}
+
+		if (!metadata.StartsWith("folder::", StringComparison.Ordinal))
+			return false;
+
+		string[] parts = metadata.Split(new[] { "::" }, StringSplitOptions.None);
+
+		if (parts.Length != 3)
+			return false;
+
+		string systemName = parts[1];
+		string folderPath = parts[2];
+
+		if (
+			!_folderBindings.TryGetValue(systemName, out Dictionary<string, string> systemBindings)
+			|| systemBindings == null
+		)
+		{
+			return false;
+		}
+
+		string descendantPrefix = $"{folderPath.TrimEnd('/')}/";
+		return systemBindings.Keys.Any(bindingPath =>
+			string.Equals(bindingPath, folderPath, StringComparison.Ordinal)
+			|| bindingPath.StartsWith(descendantPrefix, StringComparison.Ordinal)
+		);
+	}
+
 	private PhysicalRemoveTargetInspection InspectPhysicalRemoveTarget(string metadata)
 	{
 		if (string.IsNullOrWhiteSpace(metadata))
@@ -831,7 +905,7 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private bool TryPrepareScriptsForPhysicalRemove(
+	private bool TryCollectPhysicalRemoveTargets(
 		string metadata,
 		out List<string> filePaths,
 		out string failureMessage
@@ -899,6 +973,16 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
+
+		return true;
+	}
+
+	private bool TryPrepareScriptsForPhysicalRemove(
+		IReadOnlyList<string> filePaths,
+		out string failureMessage
+	)
+	{
+		failureMessage = "";
 
 		List<string> scriptPaths = filePaths
 			.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
@@ -1730,6 +1814,52 @@ public partial class SystemExplorerPlugin
 	private string _deferredScriptRenameSelectedEntry = "";
 	private bool _deferredScriptRenameEndSyncSuppression;
 	private PendingScriptRenameEditorRestore _pendingScriptRenameEditorRestore;
+	private bool _renameFilesystemFinalStateRefreshQueued;
+
+	private void RequestRenameFilesystemFinalStateRefresh()
+	{
+		if (_renameFilesystemFinalStateRefreshQueued)
+			return;
+
+		_renameFilesystemFinalStateRefreshQueued = true;
+		CallDeferred(nameof(RunQueuedRenameFilesystemFinalStateRefresh));
+	}
+
+	private void RunQueuedRenameFilesystemFinalStateRefresh()
+	{
+		if (!_renameFilesystemFinalStateRefreshQueued)
+			return;
+
+		if (!EnsureManagedAssemblyStateCurrent("Rename Filesystem Final-State Refresh"))
+		{
+			_renameFilesystemFinalStateRefreshQueued = false;
+			return;
+		}
+
+		if (!_renameFilesystemFinalStateRefreshQueued)
+			return;
+
+		EditorFileSystem resourceFilesystem =
+			EditorInterface.Singleton?.GetResourceFilesystem();
+
+		if (!IsValidGodotObject(resourceFilesystem))
+		{
+			_renameFilesystemFinalStateRefreshQueued = false;
+			DebugLogger.Log(
+				"Rename filesystem final-state refresh skipped: EditorFileSystem unavailable."
+			);
+			return;
+		}
+
+		if (resourceFilesystem.IsScanning())
+		{
+			CallDeferred(nameof(RunQueuedRenameFilesystemFinalStateRefresh));
+			return;
+		}
+
+		_renameFilesystemFinalStateRefreshQueued = false;
+		resourceFilesystem.Scan();
+	}
 
 	private RenameMutationResult RenameScript(string metadata, string newName)
 	{
@@ -1907,6 +2037,33 @@ public partial class SystemExplorerPlugin
 
 		if (!EnsureSystemsLoadedForTreeOperation("Rename Script"))
 			return RenameMutationResult.Failed;
+
+		if (
+			!DoesAnySystemContainEntry(entry)
+			&& (
+				!TryRecoverSystemsFromDisk("Rename Script")
+				|| !DoesAnySystemContainEntry(entry)
+			)
+		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the script metadata entry required for Rename Script. The script file was not renamed.",
+				$"Entry='{entry}', Path='{oldScriptPath}'"
+			);
+			return RenameMutationResult.Failed;
+		}
+
+		if (
+			!TryPreflightMetadataPersistenceForPhysicalMutation(
+				"Rename Script",
+				systemsRequired: true,
+				folderBindingsRequired: false,
+				physicalConsequence: "The script file was not renamed."
+			)
+		)
+		{
+			return RenameMutationResult.Failed;
+		}
 
 		bool hasValidActiveScriptBeforeOperation =
 			activeScriptBeforeOperation != null
@@ -2199,7 +2356,6 @@ public partial class SystemExplorerPlugin
 
 				if (originalPathAvailableAfterFailure && FileAccess.FileExists(oldScriptPath))
 				{
-					editorInterface.GetResourceFilesystem().Scan();
 					RestoreScriptRenameTreeState(treeState, entry, restoreFocus: false);
 
 					if (
@@ -2246,6 +2402,7 @@ public partial class SystemExplorerPlugin
 					syncSuppressionQueuedForDeferredEnd = true;
 				}
 
+				RequestRenameFilesystemFinalStateRefresh();
 				return RenameMutationResult.Failed;
 			}
 
@@ -2260,25 +2417,11 @@ public partial class SystemExplorerPlugin
 				);
 				QueueScriptRenameTreeRestore(treeState, entry, endSyncSuppression: true);
 				syncSuppressionQueuedForDeferredEnd = true;
+				RequestRenameFilesystemFinalStateRefresh();
 				return RenameMutationResult.Failed;
 			}
 
-			editorInterface.GetResourceFilesystem().Scan();
-
 			bool operationIncomplete = false;
-
-			if (!DoesAnySystemContainEntry(entry))
-			{
-				if (!TryRecoverSystemsFromDisk("Rename Script"))
-				{
-					ReportTreeOperationFailure(
-						"The script was renamed, but System Explorer could not reload the metadata required to update its tree entry.",
-						$"old='{oldScriptPath}', new='{newScriptPath}'",
-						TreeOperationOutcomeSeverity.Incomplete
-					);
-					operationIncomplete = true;
-				}
-			}
 
 			SystemsAndFolderBindingsSnapshot metadataSnapshot =
 				CaptureSystemsAndFolderBindingsSnapshot();
@@ -2352,7 +2495,7 @@ public partial class SystemExplorerPlugin
 						);
 					}
 
-					editorInterface.GetResourceFilesystem().Scan();
+					RequestRenameFilesystemFinalStateRefresh();
 					BuildTree(keepCurrentExpansionState: true);
 					RestoreScriptRenameTreeState(treeState, entry, restoreFocus: false);
 
@@ -2411,7 +2554,6 @@ public partial class SystemExplorerPlugin
 						"Rename Script warning: save failed and target rename retained",
 						rollbackResult.Details
 					);
-					editorInterface.GetResourceFilesystem().Scan();
 				}
 				else
 				{
@@ -2474,7 +2616,7 @@ public partial class SystemExplorerPlugin
 						rollbackResult.Details
 					);
 
-					editorInterface.GetResourceFilesystem().Scan();
+					RequestRenameFilesystemFinalStateRefresh();
 					BuildTree(keepCurrentExpansionState: true);
 					RestoreScriptRenameTreeState(
 						treeState,
@@ -2514,6 +2656,7 @@ public partial class SystemExplorerPlugin
 				}
 			}
 
+			RequestRenameFilesystemFinalStateRefresh();
 			BuildTree(keepCurrentExpansionState: true);
 			RestoreScriptRenameTreeState(treeState, selectedEntryAfterRename, restoreFocus: false);
 
@@ -5495,6 +5638,33 @@ public partial class SystemExplorerPlugin
 			return RenameMutationResult.NameConflict;
 		}
 
+		if (
+			!DoesAnySystemContainEntry(entry)
+			&& (
+				!TryRecoverSystemsFromDisk("Rename Scene")
+				|| !DoesAnySystemContainEntry(entry)
+			)
+		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the scene metadata entry required for Rename Scene. The scene file was not renamed.",
+				$"Entry='{entry}', Path='{oldScenePath}'"
+			);
+			return RenameMutationResult.Failed;
+		}
+
+		if (
+			!TryPreflightMetadataPersistenceForPhysicalMutation(
+				"Rename Scene",
+				systemsRequired: true,
+				folderBindingsRequired: false,
+				physicalConsequence: "The scene file was not renamed."
+			)
+		)
+		{
+			return RenameMutationResult.Failed;
+		}
+
 		string temporaryScenePath = "";
 
 		if (isCaseOnlyRename)
@@ -5555,7 +5725,7 @@ public partial class SystemExplorerPlugin
 				);
 
 				if (!rollbackRestoredOriginal)
-					EditorInterface.Singleton.GetResourceFilesystem().Scan();
+					RequestRenameFilesystemFinalStateRefresh();
 
 				return RenameMutationResult.Failed;
 			}
@@ -5584,21 +5754,7 @@ public partial class SystemExplorerPlugin
 				"Rename Scene failed: final path missing after filesystem success",
 				$"old='{oldScenePath}', temporary='{temporaryScenePath}', target='{newScenePath}'"
 			);
-			EditorInterface.Singleton.GetResourceFilesystem().Scan();
-			return RenameMutationResult.Failed;
-		}
-
-		if (
-			!DoesAnySystemContainEntry(entry)
-			&& !TryRecoverSystemsFromDisk("Rename Scene")
-		)
-		{
-			ReportTreeOperationFailure(
-				"The scene file was renamed, but System Explorer could not recover the metadata needed to update its references.",
-				$"Old='{oldScenePath}', New='{newScenePath}'",
-				TreeOperationOutcomeSeverity.Incomplete
-			);
-			EditorInterface.Singleton.GetResourceFilesystem().Scan();
+			RequestRenameFilesystemFinalStateRefresh();
 			return RenameMutationResult.Failed;
 		}
 
@@ -5621,7 +5777,7 @@ public partial class SystemExplorerPlugin
 				"Rename Scene warning: no System Explorer references updated after filesystem success",
 				$"old='{oldScenePath}', target='{newScenePath}'"
 			);
-			EditorInterface.Singleton.GetResourceFilesystem().Scan();
+			RequestRenameFilesystemFinalStateRefresh();
 			return RenameMutationResult.Failed;
 		}
 		else if (!SaveSystems())
@@ -5665,7 +5821,7 @@ public partial class SystemExplorerPlugin
 
 				SaveExpansionState();
 				BuildTree(keepCurrentExpansionState: true);
-				EditorInterface.Singleton.GetResourceFilesystem().Scan();
+				RequestRenameFilesystemFinalStateRefresh();
 				return RenameMutationResult.Failed;
 			}
 
@@ -5687,7 +5843,7 @@ public partial class SystemExplorerPlugin
 				);
 				SaveExpansionState();
 				BuildTree(keepCurrentExpansionState: true);
-				EditorInterface.Singleton.GetResourceFilesystem().Scan();
+				RequestRenameFilesystemFinalStateRefresh();
 				return RenameMutationResult.Failed;
 			}
 			else
@@ -5729,14 +5885,14 @@ public partial class SystemExplorerPlugin
 
 				SaveExpansionState();
 				BuildTree(keepCurrentExpansionState: true);
-				EditorInterface.Singleton.GetResourceFilesystem().Scan();
+				RequestRenameFilesystemFinalStateRefresh();
 				return RenameMutationResult.Failed;
 			}
 		}
 
 		SaveExpansionState();
 		BuildTree(keepCurrentExpansionState: true);
-		EditorInterface.Singleton.GetResourceFilesystem().Scan();
+		RequestRenameFilesystemFinalStateRefresh();
 
 		DebugLogger.LogOperation(
 			"Rename Scene Mutated",

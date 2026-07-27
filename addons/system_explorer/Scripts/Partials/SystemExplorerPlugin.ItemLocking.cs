@@ -77,6 +77,28 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		string targetSystemName = metadata.StartsWith("folder::")
+			? GetSystemNameFromMetadata(metadata)
+			: "";
+
+		if (
+			!EnsureEntryAvailableForReversibleMutation(
+				oldEntry,
+				"Toggle Item Lock",
+				targetSystemName
+			)
+		)
+		{
+			ReportTreeOperationFailure(
+				"System Explorer could not verify the selected item before changing its lock state.",
+				oldEntry
+			);
+			return;
+		}
+
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
+
 		string newEntry = SetEntryLocked(oldEntry, !IsEntryLocked(oldEntry));
 		bool replacedEntry = metadata.StartsWith("folder::")
 			? ReplaceEntryInSystem(
@@ -101,8 +123,17 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Toggle Item Lock"
+			)
+		)
+		{
 			return;
+		}
 
 		SaveExpansionState();
 		ClearDragState();
@@ -137,6 +168,8 @@ public partial class SystemExplorerPlugin
 
 		List<string> entries = _systems[systemName];
 		bool isLocked = IsSystemLocked(systemName);
+		SystemsAndFolderBindingsSnapshot snapshot =
+			CaptureSystemsAndFolderBindingsSnapshot();
 
 		if (isLocked)
 		{
@@ -151,8 +184,17 @@ public partial class SystemExplorerPlugin
 			DebugLogger.LogOperation("Toggle System Lock Mutated", $"{systemName} locked");
 		}
 
-		if (!SaveSystems())
+		if (
+			!TryPersistReversibleSystemsAndFolderBindingsMutation(
+				snapshot,
+				systemsChanged: true,
+				folderBindingsChanged: false,
+				operationName: "Toggle System Lock"
+			)
+		)
+		{
 			return;
+		}
 
 		SaveExpansionState();
 		ClearDragState();
