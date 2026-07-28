@@ -28,6 +28,7 @@
 
 > Evolving toward a lightweight C# IDE inside Godot.
 
+
 > [!WARNING]
 > **Current releases are deprecated**
 >
@@ -35,7 +36,8 @@
 >
 > During the development of v1.5.0, several issues were identified involving file-operation safety, editor-state handling, and assembly-reload stability. Because these issues may cause unexpected behavior or instability in the Godot editor, the existing releases have been reclassified as pre-releases.
 >
-> **v1.5.0 will be the earliest version considered stable and recommended for general use.**
+> **v1.5.0 is not yet available, but is currently nearing release. It will be the earliest version considered stable and recommended for general use.**
+
 
 ---
 
