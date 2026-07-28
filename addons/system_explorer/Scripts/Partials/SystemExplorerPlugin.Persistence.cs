@@ -144,40 +144,32 @@ public partial class SystemExplorerPlugin
 		physicalConsequence = string.IsNullOrWhiteSpace(physicalConsequence)
 			? "No project files were changed."
 			: physicalConsequence.Trim();
-		string physicalConsequenceClause = physicalConsequence.TrimEnd('.', ' ', '\t');
 
-		SystemsAndFolderBindingsSnapshot snapshot = systemsRequired
+		SystemsAndFolderBindingsSnapshot snapshot = systemsRequired || folderBindingsRequired
 			? CaptureSystemsAndFolderBindingsSnapshot()
 			: null;
 
-		if (systemsRequired && !SaveSystems())
+		if (systemsRequired && !SaveSystemsForPhysicalMutationPreflight())
 		{
 			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
 			RestoreSystemsAndFolderBindingsSnapshot(snapshot);
 			ReportTreeOperationFailure(
-				metadataStateUnclear
-					? $"{physicalConsequenceClause}, but System Explorer could not verify the final state of systems.json. Restart Godot and inspect the metadata file before continuing."
-					: $"System Explorer could not verify that systems.json can be saved, so {operationName} was cancelled. {physicalConsequence}",
+				$"System Explorer could not verify that systems.json can be saved, so {operationName} was cancelled. {physicalConsequence}",
 				$"Operation='{operationName}', PreflightFile='systems.json', MetadataStateUnclear={metadataStateUnclear}",
-				metadataStateUnclear
-					? TreeOperationOutcomeSeverity.FinalStateUnclear
-					: TreeOperationOutcomeSeverity.Failed,
+				TreeOperationOutcomeSeverity.Failed,
 				replaceExistingReport: true
 			);
 			return false;
 		}
 
-		if (folderBindingsRequired && !SaveFolderBindings())
+		if (folderBindingsRequired && !SaveFolderBindingsForPhysicalMutationPreflight())
 		{
 			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
+			RestoreSystemsAndFolderBindingsSnapshot(snapshot);
 			ReportTreeOperationFailure(
-				metadataStateUnclear
-					? $"{physicalConsequenceClause}, but System Explorer could not verify the final state of folder_bindings.json. Restart Godot and inspect the metadata file before continuing."
-					: $"System Explorer could not verify that folder_bindings.json can be saved, so {operationName} was cancelled. {physicalConsequence}",
+				$"System Explorer could not verify that folder_bindings.json can be saved, so {operationName} was cancelled. {physicalConsequence}",
 				$"Operation='{operationName}', PreflightFile='folder_bindings.json', MetadataStateUnclear={metadataStateUnclear}",
-				metadataStateUnclear
-					? TreeOperationOutcomeSeverity.FinalStateUnclear
-					: TreeOperationOutcomeSeverity.Failed,
+				TreeOperationOutcomeSeverity.Failed,
 				replaceExistingReport: true
 			);
 			return false;
@@ -315,9 +307,16 @@ public partial class SystemExplorerPlugin
 		return false;
 	}
 
+	private enum MetadataWriteVerificationMode
+	{
+		VerifiedFinalContent,
+		CommitCapabilityRequired,
+	}
+
 	private enum MetadataWriteFinalState
 	{
 		Succeeded,
+		CommitCapabilityNotVerified,
 		PreviousTargetPreserved,
 		PreviousTargetRestoredAndVerified,
 		FinalTargetStateUnclear,
@@ -369,7 +368,9 @@ public partial class SystemExplorerPlugin
 	private MetadataWriteResult TryWriteAndVerifyTextFile(
 		string path,
 		string expectedContent,
-		string displayName
+		string displayName,
+		MetadataWriteVerificationMode verificationMode =
+			MetadataWriteVerificationMode.VerifiedFinalContent
 	)
 	{
 		expectedContent ??= "";
@@ -448,6 +449,7 @@ public partial class SystemExplorerPlugin
 		}
 
 		string commitFailureDetail = "";
+		bool commitCompleted = false;
 
 		try
 		{
@@ -463,6 +465,8 @@ public partial class SystemExplorerPlugin
 			{
 				System.IO.File.Move(paths.StagingGlobalPath, paths.TargetGlobalPath);
 			}
+
+			commitCompleted = true;
 		}
 		catch (Exception exception)
 		{
@@ -470,22 +474,30 @@ public partial class SystemExplorerPlugin
 				$"DisplayName='{displayName}', TargetPath='{paths.TargetResourcePath}', StagingPath='{paths.StagingResourcePath}', BackupPath='{paths.BackupResourcePath}', Phase=commit, Exception='{exception}'";
 		}
 
-		if (
-			TryVerifyMetadataFileContent(
-				paths.TargetResourcePath,
-				paths.TargetGlobalPath,
-				expectedContent,
-				displayName,
-				"final-target-verification",
-				out string finalVerificationFailure
-			)
-		)
+		bool finalContentMatched = TryVerifyMetadataFileContent(
+			paths.TargetResourcePath,
+			paths.TargetGlobalPath,
+			expectedContent,
+			displayName,
+			"final-target-verification",
+			out string finalVerificationFailure
+		);
+
+		DebugLogger.LogOperation(
+			"Metadata write verification completed",
+			$"DisplayName='{displayName}', VerificationMode='{verificationMode}', CommitCompleted={commitCompleted}, FinalContentMatched={finalContentMatched}"
+		);
+
+		if (finalContentMatched)
 		{
-			if (!string.IsNullOrWhiteSpace(commitFailureDetail))
+			if (!commitCompleted)
 			{
 				DebugLogger.LogOperation(
 					"Metadata commit reported an exception but final verification succeeded",
-					commitFailureDetail
+					JoinMetadataFailureDetails(
+						commitFailureDetail,
+						$"VerificationMode='{verificationMode}', CommitCompleted={commitCompleted}, FinalContentMatched={finalContentMatched}"
+					)
 				);
 			}
 
@@ -501,6 +513,20 @@ public partial class SystemExplorerPlugin
 				displayName,
 				"backup"
 			);
+
+			if (
+				verificationMode == MetadataWriteVerificationMode.CommitCapabilityRequired
+				&& !commitCompleted
+			)
+			{
+				return new MetadataWriteResult(
+					MetadataWriteFinalState.CommitCapabilityNotVerified,
+					JoinMetadataFailureDetails(
+						commitFailureDetail,
+						$"DisplayName='{displayName}', VerificationMode='{verificationMode}', CommitCompleted={commitCompleted}, FinalContentMatched={finalContentMatched}"
+					)
+				);
+			}
 
 			return new MetadataWriteResult(MetadataWriteFinalState.Succeeded);
 		}
@@ -1287,6 +1313,8 @@ public partial class SystemExplorerPlugin
 
 		return result.FinalState switch
 		{
+			MetadataWriteFinalState.CommitCapabilityNotVerified =>
+				$"System Explorer could not verify that the commit operation for {displayName} completed, although the final file content matched.",
 			MetadataWriteFinalState.PreviousTargetPreserved =>
 				$"System Explorer could not save {displayName}, but the previous file on disk was preserved.",
 			MetadataWriteFinalState.PreviousTargetRestoredAndVerified =>
@@ -1315,15 +1343,32 @@ public partial class SystemExplorerPlugin
 
 	private bool SaveSystems()
 	{
-		return SaveSystemsCore(null);
+		return SaveSystemsCore(
+			null,
+			MetadataWriteVerificationMode.VerifiedFinalContent
+		);
 	}
 
 	private bool SaveSystems(IntentionalEmptySystemsSaveAuthorization authorization)
 	{
-		return SaveSystemsCore(authorization);
+		return SaveSystemsCore(
+			authorization,
+			MetadataWriteVerificationMode.VerifiedFinalContent
+		);
 	}
 
-	private bool SaveSystemsCore(IntentionalEmptySystemsSaveAuthorization authorization)
+	private bool SaveSystemsForPhysicalMutationPreflight()
+	{
+		return SaveSystemsCore(
+			null,
+			MetadataWriteVerificationMode.CommitCapabilityRequired
+		);
+	}
+
+	private bool SaveSystemsCore(
+		IntentionalEmptySystemsSaveAuthorization authorization,
+		MetadataWriteVerificationMode verificationMode
+	)
 	{
 		DebugLogger.LogOperation(
 			"Save Systems Requested",
@@ -1392,7 +1437,8 @@ public partial class SystemExplorerPlugin
 		MetadataWriteResult writeResult = TryWriteAndVerifyTextFile(
 			SavePath,
 			json,
-			"systems.json"
+			"systems.json",
+			verificationMode
 		);
 
 		if (!writeResult.Succeeded)

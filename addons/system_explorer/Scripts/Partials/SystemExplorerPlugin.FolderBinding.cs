@@ -183,6 +183,22 @@ public partial class SystemExplorerPlugin
 
 	private bool SaveFolderBindings()
 	{
+		return SaveFolderBindingsCore(
+			MetadataWriteVerificationMode.VerifiedFinalContent
+		);
+	}
+
+	private bool SaveFolderBindingsForPhysicalMutationPreflight()
+	{
+		return SaveFolderBindingsCore(
+			MetadataWriteVerificationMode.CommitCapabilityRequired
+		);
+	}
+
+	private bool SaveFolderBindingsCore(
+		MetadataWriteVerificationMode verificationMode
+	)
+	{
 		if (!EnsureResourcesFolderExists())
 		{
 			ReportTreeOperationFailureOrWarning(
@@ -230,7 +246,8 @@ public partial class SystemExplorerPlugin
 			MetadataWriteResult writeResult = TryWriteAndVerifyTextFile(
 				FolderBindingsPath,
 				json,
-				"folder_bindings.json"
+				"folder_bindings.json",
+				verificationMode
 			);
 
 			if (!writeResult.Succeeded)

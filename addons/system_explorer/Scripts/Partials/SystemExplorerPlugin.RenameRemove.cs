@@ -280,6 +280,8 @@ public partial class SystemExplorerPlugin
 
 		bool folderBindingsPreflightRequired =
 			PhysicalRemoveMayChangeFolderBindings(removeMetadata);
+		SystemsAndFolderBindingsSnapshot physicalRemoveBaseline =
+			CaptureSystemsAndFolderBindingsSnapshot();
 
 		if (
 			!TryPreflightMetadataPersistenceForPhysicalMutation(
@@ -290,6 +292,7 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
+			RestoreSystemsAndFolderBindingsSnapshot(physicalRemoveBaseline);
 			return;
 		}
 
@@ -300,6 +303,8 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
+			RestoreSystemsAndFolderBindingsSnapshot(physicalRemoveBaseline);
+
 			if (!string.IsNullOrWhiteSpace(preparationFailureMessage))
 				ReportTreeOperationFailureOrWarning(preparationFailureMessage);
 			else if (!HasActiveTreeOperationFailure)
@@ -313,18 +318,45 @@ public partial class SystemExplorerPlugin
 		}
 
 		PhysicalDeleteResult deleteResult = DeleteFiles(filePathsToDelete);
-		HashSet<string> deletedResourcePaths = deleteResult.DeletedResourcePaths
+		HashSet<string> verifiedDeletedResourcePaths = deleteResult
+			.VerifiedDeletedResourcePaths
 			.Select(NormalizePhysicalRemovePath)
 			.Where(path => !string.IsNullOrWhiteSpace(path))
 			.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		bool requestedPhysicalResources = filePathsToDelete.Count > 0;
 		bool allRequestedResourcesDeleted = filePathsToDelete.All(path =>
-			deletedResourcePaths.Contains(NormalizePhysicalRemovePath(path))
+			verifiedDeletedResourcePaths.Contains(NormalizePhysicalRemovePath(path))
 		);
+
+		if (requestedPhysicalResources && verifiedDeletedResourcePaths.Count == 0)
+		{
+			RestoreSystemsAndFolderBindingsSnapshot(physicalRemoveBaseline);
+			BuildTree(keepCurrentExpansionState: true);
+			ClearPendingPhysicalRemoveState();
+			HideTreeOperationOriginWindow(_removeDialog);
+
+			string terminalFailureMessage = GetActiveTreeOperationFailureUserMessage();
+
+			if (!string.IsNullOrWhiteSpace(terminalFailureMessage))
+				SuppressActiveTreeOperationDialogPresentation();
+
+			ShowPhysicalRemoveResultDialog(
+				deleteResult,
+				filePathsToDelete,
+				terminalFailureMessage
+			);
+
+			DebugLogger.LogOperation(
+				"Physical remove batch failed without verified resource deletion",
+				$"RequestedResources={filePathsToDelete.Count}, VerifiedDeletedResources=0, Failures={deleteResult.Failures.Count}, UnclearFailures={deleteResult.UnclearFailures.Count}, RecoveredAnomalies={deleteResult.RecoveredAnomalies.Count}"
+			);
+			return;
+		}
 
 		PhysicalRemoveMetadataRepairResult metadataRepairResult =
 			RemoveMetadataAfterPhysicalDelete(
 				removeMetadata,
-				deleteResult.DeletedResourcePaths,
+				deleteResult.VerifiedDeletedResourcePaths,
 				allRequestedResourcesDeleted
 			);
 
@@ -360,28 +392,28 @@ public partial class SystemExplorerPlugin
 		if (systemsSaved && metadataRepairResult.FolderBindingsChanged)
 			folderBindingsSaved = SaveFolderBindings();
 
-		bool deletedAnyPhysicalPath =
-			deleteResult.DeletedAnyResource || deleteResult.DeletedUidSidecarPaths.Count > 0;
+		bool deletedAnyVerifiedPhysicalPath =
+			deleteResult.VerifiedDeletedAnyResource
+			|| deleteResult.VerifiedDeletedUidSidecarPaths.Count > 0;
 
 		if (!systemsSaved && systemsChanged)
 		{
 			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
-			string userMessage = metadataStateUnclear
-				? deletedAnyPhysicalPath
-					? "One or more files were deleted, but the final state of the repaired systems metadata could not be verified. The repaired in-memory tree was kept."
-					: "The final state of the repaired systems metadata could not be verified after the removal attempt. The repaired in-memory tree was kept."
-				: deletedAnyPhysicalPath
-					? "One or more files were deleted, but System Explorer could not save the repaired systems metadata. The repaired in-memory tree was kept."
-					: "System Explorer could not save the repaired systems metadata after the removal attempt. The repaired in-memory tree was kept.";
+			string userMessage = deleteResult.VerifiedDeletedAnyResource
+				? metadataStateUnclear
+					? "One or more project files were deleted, but the final state of the repaired systems metadata could not be verified. The repaired in-memory tree was kept."
+					: "One or more project files were deleted, but System Explorer could not save the repaired systems metadata. The repaired in-memory tree was kept."
+				: "System Explorer could not save the remove operation. The repaired in-memory tree was kept.";
 
 			ReportTreeOperationFailure(
 				userMessage,
 				$"Metadata='{removeMetadata}', FolderBindingsSaveSkipped={metadataRepairResult.FolderBindingsChanged}",
 				metadataStateUnclear
 					? TreeOperationOutcomeSeverity.FinalStateUnclear
-					: deletedAnyPhysicalPath
+					: deleteResult.VerifiedDeletedAnyResource
 						? TreeOperationOutcomeSeverity.Incomplete
-						: TreeOperationOutcomeSeverity.Failed
+						: TreeOperationOutcomeSeverity.Failed,
+				replaceExistingReport: true
 			);
 			DebugLogger.LogOperation(
 				"Physical remove completed but systems metadata could not be persisted",
@@ -391,22 +423,21 @@ public partial class SystemExplorerPlugin
 		else if (!folderBindingsSaved)
 		{
 			bool metadataStateUnclear = IsActiveTreeOperationFinalStateUnclear;
-			string userMessage = metadataStateUnclear
-				? deletedAnyPhysicalPath
-					? "One or more files were deleted and systems.json was saved, but the final state of the folder binding cleanup could not be verified. The repaired in-memory state was kept."
-					: "The final state of the folder binding cleanup could not be verified after the removal attempt. The repaired in-memory state was kept."
-				: deletedAnyPhysicalPath
-					? "One or more files were deleted and systems.json was saved, but System Explorer could not save the folder binding cleanup. The repaired in-memory state was kept."
-					: "System Explorer could not save the folder binding cleanup after the removal attempt. The repaired in-memory state was kept.";
+			string userMessage = deleteResult.VerifiedDeletedAnyResource
+				? metadataStateUnclear
+					? "One or more project files were deleted and systems.json was saved, but the final state of the folder binding cleanup could not be verified. The repaired in-memory state was kept."
+					: "One or more project files were deleted and systems.json was saved, but System Explorer could not save the folder binding cleanup. The repaired in-memory state was kept."
+				: "System Explorer could not save the folder binding cleanup. The repaired in-memory state was kept.";
 
 			ReportTreeOperationFailure(
 				userMessage,
 				removeMetadata,
 				metadataStateUnclear
 					? TreeOperationOutcomeSeverity.FinalStateUnclear
-					: deletedAnyPhysicalPath
+					: deleteResult.VerifiedDeletedAnyResource
 						? TreeOperationOutcomeSeverity.Incomplete
-						: TreeOperationOutcomeSeverity.Failed
+						: TreeOperationOutcomeSeverity.Failed,
+				replaceExistingReport: true
 			);
 			DebugLogger.LogOperation(
 				"Physical remove completed but folder binding cleanup could not be persisted",
@@ -416,26 +447,31 @@ public partial class SystemExplorerPlugin
 
 		BuildTree(keepCurrentExpansionState: true);
 
-		if (deletedAnyPhysicalPath)
+		if (deletedAnyVerifiedPhysicalPath)
 			EditorInterface.Singleton.GetResourceFilesystem().Scan();
 
 		ClearPendingPhysicalRemoveState();
 
 		DebugLogger.LogOperation(
 			"Physical remove batch completed",
-			$"RequestedResources={filePathsToDelete.Count}, DeletedResources={deleteResult.DeletedResourcePaths.Count}, DeletedUidSidecars={deleteResult.DeletedUidSidecarPaths.Count}, FailedResources={deleteResult.Failures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.ResourceFile)}, FailedUidSidecars={deleteResult.Failures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.UidSidecar)}, RemovedEntries={metadataRepairResult.RemovedEntryCount}, ClearedSceneLinks={metadataRepairResult.ClearedSceneLinkCount}, FolderBindingsChanged={metadataRepairResult.FolderBindingsChanged}, SaveSystemsSucceeded={systemsSaved}, SaveFolderBindingsSucceeded={folderBindingsSaved}"
+			$"RequestedResources={filePathsToDelete.Count}, VerifiedDeletedResources={deleteResult.VerifiedDeletedResourcePaths.Count}, VerifiedDeletedUidSidecars={deleteResult.VerifiedDeletedUidSidecarPaths.Count}, FailedResources={deleteResult.Failures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.ResourceFile)}, FailedUidSidecars={deleteResult.Failures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.UidSidecar)}, UnclearResources={deleteResult.UnclearFailures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.ResourceFile)}, UnclearUidSidecars={deleteResult.UnclearFailures.Count(failure => failure.Kind == PhysicalDeleteFailureKind.UidSidecar)}, RecoveredAnomalies={deleteResult.RecoveredAnomalies.Count}, RemovedEntries={metadataRepairResult.RemovedEntryCount}, ClearedSceneLinks={metadataRepairResult.ClearedSceneLinkCount}, FolderBindingsChanged={metadataRepairResult.FolderBindingsChanged}, SaveSystemsSucceeded={systemsSaved}, SaveFolderBindingsSucceeded={folderBindingsSaved}"
 		);
 
-		if (deleteResult.HasFailures)
+		string metadataFailureMessage = GetActiveTreeOperationFailureUserMessage();
+		bool shouldShowPhysicalRemoveResult =
+			requestedPhysicalResources
+			&& (deleteResult.HasIssues || !string.IsNullOrWhiteSpace(metadataFailureMessage));
+
+		if (shouldShowPhysicalRemoveResult)
 		{
 			HideTreeOperationOriginWindow(_removeDialog);
-			string metadataFailureMessage = GetActiveTreeOperationFailureUserMessage();
 
 			if (!string.IsNullOrWhiteSpace(metadataFailureMessage))
 				SuppressActiveTreeOperationDialogPresentation();
 
-			ShowPhysicalRemoveIncompleteDialog(
-				deleteResult.Failures,
+			ShowPhysicalRemoveResultDialog(
+				deleteResult,
+				filePathsToDelete,
 				metadataFailureMessage
 			);
 		}
@@ -1142,174 +1178,798 @@ public partial class SystemExplorerPlugin
 		UidSidecar,
 	}
 
+	private enum PhysicalDeleteFailureReason
+	{
+		MissingBeforeDelete,
+		RemoveCallFailed,
+		StillExistsAfterRemove,
+		ExistenceVerificationFailed,
+	}
+
+	private enum PhysicalDeleteCallOutcome
+	{
+		NotAttempted,
+		ReturnedOk,
+		ReturnedError,
+		ThrewException,
+	}
+
+	private readonly record struct PhysicalPathExistenceObservation(
+		bool GlobalPathResolutionSucceeded,
+		string GlobalPath,
+		bool GodotCheckSucceeded,
+		bool GodotExists,
+		bool SystemIoCheckSucceeded,
+		bool SystemIoExists,
+		string Details
+	)
+	{
+		internal bool VerifiedExistsByBoth =>
+			GodotCheckSucceeded
+			&& GodotExists
+			&& SystemIoCheckSucceeded
+			&& SystemIoExists;
+
+		internal bool VerifiedMissingByBoth =>
+			GodotCheckSucceeded
+			&& !GodotExists
+			&& SystemIoCheckSucceeded
+			&& !SystemIoExists;
+
+		internal bool ChecksDisagree =>
+			GodotCheckSucceeded
+			&& SystemIoCheckSucceeded
+			&& GodotExists != SystemIoExists;
+	}
+
+	private readonly record struct PhysicalDeleteAttempt(
+		PhysicalDeleteFailureKind Kind,
+		string ResourcePath,
+		string TargetPath,
+		string GlobalPath,
+		bool MissingBeforeDeleteIsFailure,
+		PhysicalPathExistenceObservation PreDeleteObservation,
+		PhysicalDeleteCallOutcome CallOutcome,
+		Error? GodotError,
+		string CallDetails,
+		PhysicalPathExistenceObservation FirstPostDeleteObservation
+	)
+	{
+		internal bool DeleteCallAttempted =>
+			CallOutcome != PhysicalDeleteCallOutcome.NotAttempted;
+	}
+
 	private readonly record struct PhysicalDeleteFailure(
 		PhysicalDeleteFailureKind Kind,
+		PhysicalDeleteFailureReason Reason,
 		string ResourcePath,
 		string FailedPath,
 		string Details
 	);
 
+	private readonly record struct PhysicalDeleteRecoveredAnomaly(
+		PhysicalDeleteFailureKind Kind,
+		string ResourcePath,
+		string AffectedPath,
+		string Details
+	);
+
+	private readonly record struct PhysicalDeleteReconciliation(
+		IReadOnlyList<string> VerifiedDeletedPaths,
+		IReadOnlyList<PhysicalDeleteFailure> Failures,
+		IReadOnlyList<PhysicalDeleteFailure> UnclearFailures,
+		IReadOnlyList<PhysicalDeleteRecoveredAnomaly> RecoveredAnomalies
+	);
+
 	private readonly record struct PhysicalDeleteResult(
-		IReadOnlyList<string> DeletedResourcePaths,
-		IReadOnlyList<string> DeletedUidSidecarPaths,
-		IReadOnlyList<PhysicalDeleteFailure> Failures
+		IReadOnlyList<string> VerifiedDeletedResourcePaths,
+		IReadOnlyList<string> VerifiedDeletedUidSidecarPaths,
+		IReadOnlyList<PhysicalDeleteFailure> Failures,
+		IReadOnlyList<PhysicalDeleteFailure> UnclearFailures,
+		IReadOnlyList<PhysicalDeleteRecoveredAnomaly> RecoveredAnomalies
 	)
 	{
-		internal bool HasFailures => Failures.Count > 0;
-		internal bool DeletedAnyResource => DeletedResourcePaths.Count > 0;
+		internal bool HasIssues => Failures.Count > 0 || UnclearFailures.Count > 0;
+		internal bool VerifiedDeletedAnyResource => VerifiedDeletedResourcePaths.Count > 0;
 	}
 
 	private PhysicalDeleteResult DeleteFiles(IReadOnlyList<string> filePaths)
 	{
-		List<string> deletedResourcePaths = new();
-		List<string> deletedUidSidecarPaths = new();
-		List<PhysicalDeleteFailure> failures = new();
-		HashSet<string> recordedDeletedResources = new(StringComparer.OrdinalIgnoreCase);
-		HashSet<string> recordedDeletedUidSidecars = new(StringComparer.OrdinalIgnoreCase);
-		HashSet<string> recordedFailurePaths = new(StringComparer.OrdinalIgnoreCase);
+		List<PhysicalDeleteAttempt> resourceAttempts = new();
+		HashSet<string> scheduledResourcePaths = new(StringComparer.OrdinalIgnoreCase);
 
 		foreach (string resourcePath in filePaths ?? Array.Empty<string>())
 		{
-			TryDeletePhysicalResource(
-				resourcePath,
-				deletedResourcePaths,
-				deletedUidSidecarPaths,
-				failures,
-				recordedDeletedResources,
-				recordedDeletedUidSidecars,
-				recordedFailurePaths
-			);
-		}
+			string normalizedResourcePath = NormalizePhysicalRemovePath(resourcePath);
 
-		return new PhysicalDeleteResult(
-			deletedResourcePaths,
-			deletedUidSidecarPaths,
-			failures
-		);
-	}
+			if (!scheduledResourcePaths.Add(normalizedResourcePath))
+			{
+				DebugLogger.LogOperation(
+					"Physical remove skipped duplicate resource target",
+					normalizedResourcePath
+				);
+				continue;
+			}
 
-	private void TryDeletePhysicalResource(
-		string resourcePath,
-		List<string> deletedResourcePaths,
-		List<string> deletedUidSidecarPaths,
-		List<PhysicalDeleteFailure> failures,
-		HashSet<string> recordedDeletedResources,
-		HashSet<string> recordedDeletedUidSidecars,
-		HashSet<string> recordedFailurePaths
-	)
-	{
-		string normalizedResourcePath = NormalizePhysicalRemovePath(resourcePath);
-
-		if (!FileAccess.FileExists(normalizedResourcePath))
-		{
-			AddPhysicalDeleteFailure(
-				failures,
-				recordedFailurePaths,
-				new PhysicalDeleteFailure(
+			resourceAttempts.Add(
+				CreatePhysicalDeleteAttempt(
 					PhysicalDeleteFailureKind.ResourceFile,
 					normalizedResourcePath,
 					normalizedResourcePath,
-					"File did not exist when the delete phase began."
+					missingBeforeDeleteIsFailure: true
 				)
 			);
-			return;
 		}
 
-		Error resourceError = DirAccess.RemoveAbsolute(
-			ProjectSettings.GlobalizePath(normalizedResourcePath)
-		);
+		PhysicalDeleteReconciliation resourceReconciliation =
+			ReconcilePhysicalDeleteAttempts(resourceAttempts);
+		List<PhysicalDeleteAttempt> uidAttempts = new();
 
-		if (resourceError != Error.Ok)
+		foreach (string verifiedDeletedResourcePath in resourceReconciliation.VerifiedDeletedPaths)
 		{
-			AddPhysicalDeleteFailure(
-				failures,
-				recordedFailurePaths,
-				new PhysicalDeleteFailure(
-					PhysicalDeleteFailureKind.ResourceFile,
-					normalizedResourcePath,
-					normalizedResourcePath,
-					$"Godot error: {resourceError}"
-				)
-			);
-			return;
-		}
-
-		if (recordedDeletedResources.Add(normalizedResourcePath))
-			deletedResourcePaths.Add(normalizedResourcePath);
-
-		string uidPath = $"{normalizedResourcePath}.uid";
-
-		if (!FileAccess.FileExists(uidPath))
-			return;
-
-		Error uidError = DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(uidPath));
-
-		if (uidError != Error.Ok)
-		{
-			AddPhysicalDeleteFailure(
-				failures,
-				recordedFailurePaths,
-				new PhysicalDeleteFailure(
+			string uidPath = $"{verifiedDeletedResourcePath}.uid";
+			uidAttempts.Add(
+				CreatePhysicalDeleteAttempt(
 					PhysicalDeleteFailureKind.UidSidecar,
-					normalizedResourcePath,
+					verifiedDeletedResourcePath,
 					uidPath,
-					$"Godot error: {uidError}"
+					missingBeforeDeleteIsFailure: false
 				)
 			);
-			return;
 		}
 
-		if (recordedDeletedUidSidecars.Add(uidPath))
-			deletedUidSidecarPaths.Add(uidPath);
-
-		DebugLogger.LogOperation("Delete File: removed uid sidecar", uidPath);
-	}
-
-	private static void AddPhysicalDeleteFailure(
-		List<PhysicalDeleteFailure> failures,
-		HashSet<string> recordedFailurePaths,
-		PhysicalDeleteFailure failure
-	)
-	{
-		if (recordedFailurePaths.Add(failure.FailedPath))
-			failures.Add(failure);
-	}
-
-	private void ShowPhysicalRemoveIncompleteDialog(
-		IReadOnlyList<PhysicalDeleteFailure> failures,
-		string additionalResultMessage = ""
-	)
-	{
-		if (_physicalRemoveIncompleteDialog == null || failures == null || failures.Count == 0)
-			return;
-
-		List<string> failedPaths = failures
-			.Select(failure => failure.FailedPath)
-			.Where(path => !string.IsNullOrWhiteSpace(path))
-			.Distinct(StringComparer.OrdinalIgnoreCase)
+		PhysicalDeleteReconciliation uidReconciliation =
+			ReconcilePhysicalDeleteAttempts(uidAttempts);
+		List<PhysicalDeleteFailure> failures = resourceReconciliation.Failures
+			.Concat(uidReconciliation.Failures)
 			.ToList();
+		List<PhysicalDeleteFailure> unclearFailures = resourceReconciliation.UnclearFailures
+			.Concat(uidReconciliation.UnclearFailures)
+			.ToList();
+		List<PhysicalDeleteRecoveredAnomaly> recoveredAnomalies =
+			resourceReconciliation.RecoveredAnomalies
+				.Concat(uidReconciliation.RecoveredAnomalies)
+				.ToList();
 
-		if (failedPaths.Count == 0)
+		PhysicalDeleteResult result = new(
+			resourceReconciliation.VerifiedDeletedPaths,
+			uidReconciliation.VerifiedDeletedPaths,
+			failures,
+			unclearFailures,
+			recoveredAnomalies
+		);
+
+		LogPhysicalDeleteResultInvariantViolations(result);
+		return result;
+	}
+
+	private PhysicalDeleteAttempt CreatePhysicalDeleteAttempt(
+		PhysicalDeleteFailureKind kind,
+		string resourcePath,
+		string targetPath,
+		bool missingBeforeDeleteIsFailure
+	)
+	{
+		PhysicalPathExistenceObservation preDeleteObservation =
+			ObservePhysicalPathExistence(targetPath);
+		PhysicalPathExistenceObservation firstPostDeleteObservation =
+			CreateUnobservedPhysicalPathExistenceObservation(
+				preDeleteObservation.GlobalPath,
+				"No post-delete observation was performed because no delete call was attempted."
+			);
+
+		if (!preDeleteObservation.VerifiedExistsByBoth)
+		{
+			return new PhysicalDeleteAttempt(
+				kind,
+				resourcePath,
+				targetPath,
+				preDeleteObservation.GlobalPath,
+				missingBeforeDeleteIsFailure,
+				preDeleteObservation,
+				PhysicalDeleteCallOutcome.NotAttempted,
+				null,
+				"DirAccess.RemoveAbsolute was not called because the strict pre-delete existence requirement was not satisfied.",
+				firstPostDeleteObservation
+			);
+		}
+
+		PhysicalDeleteCallOutcome callOutcome;
+		Error? godotError = null;
+		string callDetails;
+
+		try
+		{
+			Error removeError = DirAccess.RemoveAbsolute(preDeleteObservation.GlobalPath);
+			godotError = removeError;
+			callOutcome = removeError == Error.Ok
+				? PhysicalDeleteCallOutcome.ReturnedOk
+				: PhysicalDeleteCallOutcome.ReturnedError;
+			callDetails = $"DirAccess.RemoveAbsolute returned {removeError}.";
+		}
+		catch (Exception exception)
+		{
+			callOutcome = PhysicalDeleteCallOutcome.ThrewException;
+			callDetails = $"DirAccess.RemoveAbsolute threw. Exception='{exception}'";
+		}
+
+		firstPostDeleteObservation = ObservePhysicalPathExistence(
+			targetPath,
+			preDeleteObservation.GlobalPath
+		);
+
+		return new PhysicalDeleteAttempt(
+			kind,
+			resourcePath,
+			targetPath,
+			preDeleteObservation.GlobalPath,
+			missingBeforeDeleteIsFailure,
+			preDeleteObservation,
+			callOutcome,
+			godotError,
+			callDetails,
+			firstPostDeleteObservation
+		);
+	}
+
+	private PhysicalDeleteReconciliation ReconcilePhysicalDeleteAttempts(
+		IReadOnlyList<PhysicalDeleteAttempt> attempts
+	)
+	{
+		List<string> verifiedDeletedPaths = new();
+		List<PhysicalDeleteFailure> failures = new();
+		List<PhysicalDeleteFailure> unclearFailures = new();
+		List<PhysicalDeleteRecoveredAnomaly> recoveredAnomalies = new();
+		HashSet<string> recordedVerifiedPaths = new(StringComparer.OrdinalIgnoreCase);
+		HashSet<string> recordedIssuePaths = new(StringComparer.OrdinalIgnoreCase);
+
+		foreach (PhysicalDeleteAttempt attempt in attempts ?? Array.Empty<PhysicalDeleteAttempt>())
+		{
+			PhysicalPathExistenceObservation finalObservation;
+			string finalClassification;
+
+			if (!attempt.DeleteCallAttempted)
+			{
+				finalObservation = attempt.PreDeleteObservation;
+
+				if (attempt.PreDeleteObservation.VerifiedMissingByBoth)
+				{
+					if (attempt.MissingBeforeDeleteIsFailure)
+					{
+						PhysicalDeleteFailure failure = new(
+							attempt.Kind,
+							PhysicalDeleteFailureReason.MissingBeforeDelete,
+							attempt.ResourcePath,
+							attempt.TargetPath,
+							BuildPhysicalDeleteDiagnostic(
+								attempt,
+								finalObservation,
+								"MissingBeforeDelete"
+							)
+						);
+						AddPhysicalDeleteIssue(failures, recordedIssuePaths, failure);
+						finalClassification = "MissingBeforeDelete";
+					}
+					else
+					{
+						finalClassification = "MissingBeforeDeleteNoAction";
+					}
+				}
+				else
+				{
+					PhysicalDeleteFailure failure = new(
+						attempt.Kind,
+						PhysicalDeleteFailureReason.ExistenceVerificationFailed,
+						attempt.ResourcePath,
+						attempt.TargetPath,
+						BuildPhysicalDeleteDiagnostic(
+							attempt,
+							finalObservation,
+							"PreDeleteVerificationUnclear"
+						)
+					);
+					AddPhysicalDeleteIssue(unclearFailures, recordedIssuePaths, failure);
+					finalClassification = "PreDeleteVerificationUnclear";
+				}
+
+				LogPhysicalDeleteAttemptDiagnostic(
+					attempt,
+					finalObservation,
+					finalClassification
+				);
+				continue;
+			}
+
+			finalObservation = ObservePhysicalPathExistence(
+				attempt.TargetPath,
+				attempt.GlobalPath
+			);
+
+			if (finalObservation.SystemIoCheckSucceeded && !finalObservation.SystemIoExists)
+			{
+				if (recordedVerifiedPaths.Add(attempt.TargetPath))
+					verifiedDeletedPaths.Add(attempt.TargetPath);
+
+				finalClassification = "VerifiedDeleted";
+				string anomalyDetails = BuildRecoveredPhysicalDeleteAnomalyDetails(
+					attempt,
+					finalObservation
+				);
+
+				if (!string.IsNullOrWhiteSpace(anomalyDetails))
+				{
+					PhysicalDeleteRecoveredAnomaly anomaly = new(
+						attempt.Kind,
+						attempt.ResourcePath,
+						attempt.TargetPath,
+						anomalyDetails
+					);
+					recoveredAnomalies.Add(anomaly);
+					DebugLogger.LogOperation(
+						"Physical remove recovered delete anomaly",
+						$"Kind={anomaly.Kind}, ResourcePath='{anomaly.ResourcePath}', AffectedPath='{anomaly.AffectedPath}', {anomaly.Details}"
+					);
+				}
+			}
+			else if (finalObservation.SystemIoCheckSucceeded && finalObservation.SystemIoExists)
+			{
+				PhysicalDeleteFailureReason reason =
+					attempt.CallOutcome == PhysicalDeleteCallOutcome.ReturnedOk
+						? PhysicalDeleteFailureReason.StillExistsAfterRemove
+						: PhysicalDeleteFailureReason.RemoveCallFailed;
+				finalClassification = reason == PhysicalDeleteFailureReason.StillExistsAfterRemove
+					? "VerifiedStillExists"
+					: "RemoveCallFailedAndVerifiedStillExists";
+				PhysicalDeleteFailure failure = new(
+					attempt.Kind,
+					reason,
+					attempt.ResourcePath,
+					attempt.TargetPath,
+					BuildPhysicalDeleteDiagnostic(
+						attempt,
+						finalObservation,
+						finalClassification
+					)
+				);
+				AddPhysicalDeleteIssue(failures, recordedIssuePaths, failure);
+			}
+			else
+			{
+				finalClassification = "FinalExistenceUnclear";
+				PhysicalDeleteFailure failure = new(
+					attempt.Kind,
+					PhysicalDeleteFailureReason.ExistenceVerificationFailed,
+					attempt.ResourcePath,
+					attempt.TargetPath,
+					BuildPhysicalDeleteDiagnostic(
+						attempt,
+						finalObservation,
+						finalClassification
+					)
+				);
+				AddPhysicalDeleteIssue(unclearFailures, recordedIssuePaths, failure);
+			}
+
+			LogPhysicalDeleteAttemptDiagnostic(
+				attempt,
+				finalObservation,
+				finalClassification
+			);
+		}
+
+		return new PhysicalDeleteReconciliation(
+			verifiedDeletedPaths,
+			failures,
+			unclearFailures,
+			recoveredAnomalies
+		);
+	}
+
+	private PhysicalPathExistenceObservation ObservePhysicalPathExistence(
+		string resourcePath,
+		string knownGlobalPath = ""
+	)
+	{
+		List<string> details = new();
+		string globalPath = knownGlobalPath ?? "";
+		bool globalPathResolutionSucceeded = !string.IsNullOrWhiteSpace(globalPath);
+
+		if (string.IsNullOrWhiteSpace(resourcePath))
+		{
+			details.Add("ResourcePath='', existence verification could not inspect a Godot resource path.");
+		}
+
+		if (!globalPathResolutionSucceeded && !string.IsNullOrWhiteSpace(resourcePath))
+		{
+			try
+			{
+				globalPath = ProjectSettings.GlobalizePath(resourcePath);
+				globalPathResolutionSucceeded = !string.IsNullOrWhiteSpace(globalPath);
+
+				if (!globalPathResolutionSucceeded)
+					details.Add("ProjectSettings.GlobalizePath returned an empty path.");
+			}
+			catch (Exception exception)
+			{
+				details.Add($"Phase=globalize, Exception='{exception}'");
+			}
+		}
+
+		bool godotCheckSucceeded = false;
+		bool godotExists = false;
+
+		if (!string.IsNullOrWhiteSpace(resourcePath))
+		{
+			try
+			{
+				godotExists = FileAccess.FileExists(resourcePath);
+				godotCheckSucceeded = true;
+				details.Add($"Godot FileExists returned {godotExists}.");
+			}
+			catch (Exception exception)
+			{
+				details.Add($"Phase=godot-existence, Exception='{exception}'");
+			}
+		}
+
+		bool systemIoCheckSucceeded = false;
+		bool systemIoExists = false;
+
+		if (globalPathResolutionSucceeded)
+		{
+			systemIoCheckSucceeded = TryGetSystemIoFileExistence(
+				globalPath,
+				out systemIoExists,
+				out string systemExistenceDetails
+			);
+			details.Add(systemExistenceDetails);
+		}
+		else
+		{
+			details.Add("System.IO existence verification was not attempted because the global path was unavailable.");
+		}
+
+		return new PhysicalPathExistenceObservation(
+			globalPathResolutionSucceeded,
+			globalPath,
+			godotCheckSucceeded,
+			godotExists,
+			systemIoCheckSucceeded,
+			systemIoExists,
+			$"ResourcePath='{resourcePath}', GlobalPath='{globalPath}' | {string.Join(" | ", details)}"
+		);
+	}
+
+	private static PhysicalPathExistenceObservation CreateUnobservedPhysicalPathExistenceObservation(
+		string globalPath,
+		string details
+	)
+	{
+		return new PhysicalPathExistenceObservation(
+			!string.IsNullOrWhiteSpace(globalPath),
+			globalPath ?? "",
+			false,
+			false,
+			false,
+			false,
+			details ?? ""
+		);
+	}
+
+	private string BuildRecoveredPhysicalDeleteAnomalyDetails(
+		PhysicalDeleteAttempt attempt,
+		PhysicalPathExistenceObservation finalObservation
+	)
+	{
+		List<string> anomalyDetails = new();
+
+		if (attempt.CallOutcome != PhysicalDeleteCallOutcome.ReturnedOk)
+		{
+			anomalyDetails.Add(
+				$"RemoveCallOutcome={attempt.CallOutcome}, RemoveCallError={attempt.GodotError?.ToString() ?? "<none>"}, RemoveCallDetails='{attempt.CallDetails}', FinalDiskState=VerifiedMissing, FinalClassification=VerifiedDeleted."
+			);
+		}
+
+		AddGodotDiskAbsenceDisagreementDetail(
+			anomalyDetails,
+			attempt.FirstPostDeleteObservation,
+			"first post-delete observation"
+		);
+		AddGodotDiskAbsenceDisagreementDetail(
+			anomalyDetails,
+			finalObservation,
+			"final reconciliation"
+		);
+
+		if (
+			attempt.FirstPostDeleteObservation.ChecksDisagree
+			&& !(attempt.FirstPostDeleteObservation.SystemIoCheckSucceeded
+				&& !attempt.FirstPostDeleteObservation.SystemIoExists
+				&& attempt.FirstPostDeleteObservation.GodotCheckSucceeded
+				&& attempt.FirstPostDeleteObservation.GodotExists)
+		)
+		{
+			anomalyDetails.Add(
+				"The first Godot and System.IO post-delete observations disagreed before final reconciliation."
+			);
+		}
+
+		return string.Join(" ", anomalyDetails);
+	}
+
+	private static void AddGodotDiskAbsenceDisagreementDetail(
+		List<string> details,
+		PhysicalPathExistenceObservation observation,
+		string phase
+	)
+	{
+		if (
+			observation.GodotCheckSucceeded
+			&& observation.GodotExists
+			&& observation.SystemIoCheckSucceeded
+			&& !observation.SystemIoExists
+		)
+		{
+			details.Add(
+				$"Godot observation disagreed with verified global disk absence during {phase}."
+			);
+		}
+	}
+
+	private string BuildPhysicalDeleteDiagnostic(
+		PhysicalDeleteAttempt attempt,
+		PhysicalPathExistenceObservation finalObservation,
+		string finalClassification
+	)
+	{
+		return
+			$"ResourcePath='{attempt.ResourcePath}', TargetPath='{attempt.TargetPath}', GlobalPath='{attempt.GlobalPath}', PreDeleteGlobalPathResolutionSucceeded={attempt.PreDeleteObservation.GlobalPathResolutionSucceeded}, "
+			+ $"PreDeleteGodotCheckSucceeded={attempt.PreDeleteObservation.GodotCheckSucceeded}, PreDeleteGodotExists={attempt.PreDeleteObservation.GodotExists}, "
+			+ $"PreDeleteSystemCheckSucceeded={attempt.PreDeleteObservation.SystemIoCheckSucceeded}, PreDeleteSystemExists={attempt.PreDeleteObservation.SystemIoExists}, "
+			+ $"RemoveCallOutcome={attempt.CallOutcome}, RemoveCallError={attempt.GodotError?.ToString() ?? "<none>"}, RemoveCallDetails='{attempt.CallDetails}', "
+			+ $"FirstPostDeleteGodotCheckSucceeded={attempt.FirstPostDeleteObservation.GodotCheckSucceeded}, FirstPostDeleteGodotExists={attempt.FirstPostDeleteObservation.GodotExists}, "
+			+ $"FirstPostDeleteSystemCheckSucceeded={attempt.FirstPostDeleteObservation.SystemIoCheckSucceeded}, FirstPostDeleteSystemExists={attempt.FirstPostDeleteObservation.SystemIoExists}, "
+			+ $"FinalGodotCheckSucceeded={finalObservation.GodotCheckSucceeded}, FinalGodotExists={finalObservation.GodotExists}, "
+			+ $"FinalSystemCheckSucceeded={finalObservation.SystemIoCheckSucceeded}, FinalSystemExists={finalObservation.SystemIoExists}, "
+			+ $"FinalClassification={finalClassification}, "
+			+ $"PreDeleteDetails='{attempt.PreDeleteObservation.Details}', FirstPostDeleteDetails='{attempt.FirstPostDeleteObservation.Details}', FinalDetails='{finalObservation.Details}'";
+	}
+
+	private void LogPhysicalDeleteAttemptDiagnostic(
+		PhysicalDeleteAttempt attempt,
+		PhysicalPathExistenceObservation finalObservation,
+		string finalClassification
+	)
+	{
+		DebugLogger.LogOperation(
+			attempt.Kind == PhysicalDeleteFailureKind.ResourceFile
+				? "Physical remove resource reconciled"
+				: "Physical remove UID sidecar reconciled",
+			BuildPhysicalDeleteDiagnostic(
+				attempt,
+				finalObservation,
+				finalClassification
+			)
+		);
+	}
+
+	private static bool TryGetSystemIoFileExistence(
+		string globalPath,
+		out bool exists,
+		out string details
+	)
+	{
+		exists = false;
+
+		try
+		{
+			exists = System.IO.File.Exists(globalPath);
+
+			if (exists)
+			{
+				details = "System.IO.File.Exists returned true.";
+				return true;
+			}
+
+			try
+			{
+				System.IO.File.GetAttributes(globalPath);
+				exists = true;
+				details =
+					"System.IO.File.Exists returned false, but File.GetAttributes confirmed that the file exists.";
+				return true;
+			}
+			catch (System.IO.FileNotFoundException)
+			{
+				details = "System.IO confirmed that the file is missing.";
+				return true;
+			}
+			catch (System.IO.DirectoryNotFoundException)
+			{
+				details = "System.IO confirmed that the parent directory or file is missing.";
+				return true;
+			}
+			catch (Exception exception)
+			{
+				details =
+					$"System.IO.File.Exists returned false and File.GetAttributes could not verify absence. Exception='{exception}'";
+				return false;
+			}
+		}
+		catch (Exception exception)
+		{
+			details = $"System.IO existence verification threw. Exception='{exception}'";
+			return false;
+		}
+	}
+
+	private static void AddPhysicalDeleteIssue(
+		List<PhysicalDeleteFailure> issues,
+		HashSet<string> recordedIssuePaths,
+		PhysicalDeleteFailure issue
+	)
+	{
+		string issueKey = $"{issue.Kind}|{issue.FailedPath}";
+
+		if (recordedIssuePaths.Add(issueKey))
+			issues.Add(issue);
+	}
+
+	private void LogPhysicalDeleteResultInvariantViolations(PhysicalDeleteResult result)
+	{
+		HashSet<string> verifiedResourcePaths = result.VerifiedDeletedResourcePaths
+			.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		HashSet<string> verifiedUidPaths = result.VerifiedDeletedUidSidecarPaths
+			.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+		foreach (PhysicalDeleteFailure issue in result.Failures.Concat(result.UnclearFailures))
+		{
+			bool overlapsVerifiedResult = issue.Kind == PhysicalDeleteFailureKind.ResourceFile
+				? verifiedResourcePaths.Contains(issue.FailedPath)
+				: verifiedUidPaths.Contains(issue.FailedPath);
+
+			if (!overlapsVerifiedResult)
+				continue;
+
+			DebugLogger.LogOperation(
+				"Physical remove result invariant violation",
+				$"Kind={issue.Kind}, Path='{issue.FailedPath}' appeared in both a verified-deletion list and an issue list."
+			);
+		}
+	}
+	private void ShowPhysicalRemoveResultDialog(
+		PhysicalDeleteResult result,
+		IReadOnlyList<string> requestedResourcePaths,
+		string metadataFailureMessage
+	)
+	{
+		if (!IsValidGodotObject(_physicalRemoveIncompleteDialog))
 			return;
 
-		string noun = failedPaths.Count == 1 ? "file" : "files";
-		string resultSuffix = string.IsNullOrWhiteSpace(additionalResultMessage)
-			? ""
-			: $"\n\n{additionalResultMessage.Trim()}";
-		_physicalRemoveIncompleteDialog.DialogText =
-			$"The following {noun} could not be deleted from FileSystem:\n\n{string.Join("\n", failedPaths)}{resultSuffix}";
+		bool deletedAnyResource = result.VerifiedDeletedAnyResource;
+		List<string> failedResourcePaths = GetPhysicalDeleteIssuePaths(
+			result.Failures,
+			PhysicalDeleteFailureKind.ResourceFile
+		);
+		List<string> unclearResourcePaths = GetPhysicalDeleteIssuePaths(
+			result.UnclearFailures,
+			PhysicalDeleteFailureKind.ResourceFile
+		);
+		List<string> failedUidPaths = GetPhysicalDeleteIssuePaths(
+			result.Failures,
+			PhysicalDeleteFailureKind.UidSidecar
+		);
+		List<string> unclearUidPaths = GetPhysicalDeleteIssuePaths(
+			result.UnclearFailures,
+			PhysicalDeleteFailureKind.UidSidecar
+		);
+		List<string> sections = new();
 
-		foreach (PhysicalDeleteFailure failure in failures)
+		if (!deletedAnyResource)
+		{
+			if (failedResourcePaths.Count > 0)
+			{
+				string noun = failedResourcePaths.Count == 1 ? "file" : "files";
+				sections.Add(
+					$"System Explorer could not delete the following project {noun}:\n\n{string.Join("\n", failedResourcePaths)}"
+				);
+			}
+
+			if (unclearResourcePaths.Count > 0)
+			{
+				sections.Add(
+					$"The final state of the following project files could not be verified:\n\n{string.Join("\n", unclearResourcePaths)}"
+				);
+			}
+
+			if (failedResourcePaths.Count == 0 && unclearResourcePaths.Count == 0)
+			{
+				List<string> unresolvedResourcePaths = (requestedResourcePaths ?? Array.Empty<string>())
+					.Where(path => !string.IsNullOrWhiteSpace(path))
+					.Distinct(StringComparer.OrdinalIgnoreCase)
+					.ToList();
+
+				if (unresolvedResourcePaths.Count > 0)
+				{
+					string noun = unresolvedResourcePaths.Count == 1 ? "file" : "files";
+					sections.Add(
+						$"System Explorer could not delete the following project {noun}:\n\n{string.Join("\n", unresolvedResourcePaths)}"
+					);
+				}
+			}
+
+			sections.Add("No System Explorer metadata was removed.");
+		}
+		else
+		{
+			if (failedResourcePaths.Count > 0)
+			{
+				string noun = failedResourcePaths.Count == 1 ? "file" : "files";
+				sections.Add(
+					$"Some project files were deleted, but System Explorer could not delete the following {noun}:\n\n{string.Join("\n", failedResourcePaths)}"
+				);
+			}
+
+			if (unclearResourcePaths.Count > 0)
+			{
+				sections.Add(
+					$"Some project files were deleted, but the final state of the following files could not be verified:\n\n{string.Join("\n", unclearResourcePaths)}"
+				);
+			}
+
+			if (failedResourcePaths.Count > 0 || unclearResourcePaths.Count > 0)
+				sections.Add("The tree was updated for the files that were deleted.");
+		}
+
+		if (failedUidPaths.Count > 0)
+		{
+			sections.Add(
+				$"For the resource files that were deleted, System Explorer could not delete the following UID sidecars:\n\n{string.Join("\n", failedUidPaths)}"
+			);
+		}
+
+		if (unclearUidPaths.Count > 0)
+		{
+			sections.Add(
+				$"For the resource files that were deleted, the final state of the following UID sidecars could not be verified:\n\n{string.Join("\n", unclearUidPaths)}"
+			);
+		}
+
+		if (!string.IsNullOrWhiteSpace(metadataFailureMessage))
+			sections.Add(metadataFailureMessage.Trim());
+
+		if (sections.Count == 0)
+			return;
+
+		_physicalRemoveIncompleteDialog.Title = deletedAnyResource
+			? "Remove Incomplete"
+			: "Remove Failed";
+		_physicalRemoveIncompleteDialog.DialogText = string.Join("\n\n", sections);
+
+		foreach (PhysicalDeleteFailure failure in result.Failures.Concat(result.UnclearFailures))
 		{
 			DebugLogger.LogOperation(
-				"Physical remove delete failure",
-				$"Kind={failure.Kind}, ResourcePath={failure.ResourcePath}, FailedPath={failure.FailedPath}, Details={failure.Details}"
+				"Physical remove delete issue",
+				$"Kind={failure.Kind}, Reason={failure.Reason}, ResourcePath={failure.ResourcePath}, FailedPath={failure.FailedPath}, Details={failure.Details}"
 			);
 		}
 
 		Callable
 			.From(() => _physicalRemoveIncompleteDialog.PopupCentered())
 			.CallDeferred();
+	}
+
+	private static List<string> GetPhysicalDeleteIssuePaths(
+		IReadOnlyList<PhysicalDeleteFailure> issues,
+		PhysicalDeleteFailureKind kind
+	)
+	{
+		return (issues ?? Array.Empty<PhysicalDeleteFailure>())
+			.Where(issue => issue.Kind == kind)
+			.Select(issue => issue.FailedPath)
+			.Where(path => !string.IsNullOrWhiteSpace(path))
+			.Distinct(StringComparer.OrdinalIgnoreCase)
+			.ToList();
 	}
 
 	private void OnRenameConfirmed()

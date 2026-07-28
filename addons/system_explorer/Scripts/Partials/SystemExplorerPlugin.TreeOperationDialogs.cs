@@ -95,6 +95,12 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
+	private const int TreeOperationDialogWidth = 480;
+	private const int TreeOperationDialogMinimumHeight = 150;
+
+	private static readonly Vector2I TreeOperationDialogMinimumSize =
+		new(TreeOperationDialogWidth, TreeOperationDialogMinimumHeight);
+
 	private AcceptDialog _treeOperationDialog;
 	private TreeOperationDialogContext _activeTreeOperationDialogContext;
 	private readonly Queue<TreeOperationDialogPresentation> _pendingTreeOperationPresentations = new();
@@ -111,8 +117,25 @@ public partial class SystemExplorerPlugin
 			Title = "Operation Failed",
 			DialogText = "System Explorer could not complete the operation.",
 			OkButtonText = "OK",
-			MinSize = new Vector2I(520, 180),
+			MinSize = TreeOperationDialogMinimumSize,
+			Unresizable = true,
+			DialogAutowrap = true,
 		};
+
+		ConfigureTreeOperationDialogMessageLabel(_treeOperationDialog);
+	}
+
+	private static void ConfigureTreeOperationDialogMessageLabel(AcceptDialog dialog)
+	{
+		if (!IsValidGodotObject(dialog))
+			return;
+
+		Label messageLabel = dialog.GetLabel();
+
+		if (!IsValidGodotObject(messageLabel))
+			return;
+
+		messageLabel.AutowrapMode = TextServer.AutowrapMode.WordSmart;
 	}
 
 	private bool ConnectTreeOperationDialogSignals()
@@ -494,7 +517,26 @@ public partial class SystemExplorerPlugin
 		_visibleTreeOperationPresentationFingerprint = presentation.Fingerprint;
 		_treeOperationDialog.Title = presentation.Title;
 		_treeOperationDialog.DialogText = presentation.UserMessage;
-		_treeOperationDialog.PopupCentered();
+		PopupTreeOperationDialogForCurrentContent();
+	}
+
+	private void PopupTreeOperationDialogForCurrentContent()
+	{
+		if (!IsValidGodotObject(_treeOperationDialog))
+			return;
+
+		_treeOperationDialog.Size = TreeOperationDialogMinimumSize;
+		_treeOperationDialog.ChildControlsChanged();
+		_treeOperationDialog.ResetSize();
+
+		Vector2I fittedSize = _treeOperationDialog.Size;
+		fittedSize = new Vector2I(
+			TreeOperationDialogWidth,
+			Math.Max(fittedSize.Y, TreeOperationDialogMinimumHeight)
+		);
+
+		_treeOperationDialog.Size = fittedSize;
+		_treeOperationDialog.PopupCentered(fittedSize);
 	}
 
 	private void OnTreeOperationDialogClosed()
