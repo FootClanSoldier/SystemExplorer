@@ -38,9 +38,8 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	{
 		internal static readonly ScriptEditorBufferLocator Instance = new(
 			ScriptPathUtility.Normalize,
-			ScriptTextFileService.ReadText,
-			ScriptTextFileService.TextsMatchForDiskVerification,
-			FileAccess.FileExists
+			ScriptTextFileService.TryReadText,
+			ScriptTextFileService.TextsMatchForDiskVerification
 		);
 	}
 
@@ -58,7 +57,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	{
 		internal static readonly ScriptEditorBufferAutosaveService AutosaveService =
 			new(
-				ScriptTextFileService.ReadText,
+				ScriptTextFileService.TryReadText,
 				ScriptTextFileService.WriteText,
 				ScriptTextFileService.TextsMatchForDiskVerification
 			);
@@ -221,7 +220,10 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		AddDock(_editorDock);
 
 		if (persistentStateReady && integrationsReady)
+		{
 			BuildTree(keepCurrentExpansionState: true);
+			RestorePersistentTreeSelectionBestEffort("Plugin Startup");
+		}
 
 		SchedulePendingTreeOperationDialogPresentation();
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));

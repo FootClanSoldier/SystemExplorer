@@ -22,15 +22,13 @@ internal sealed class ScriptEditorBufferLocator
 	}
 
 	private readonly Func<string, string> _normalizePath;
-	private readonly Func<string, string> _readTextFile;
+	private readonly Func<string, ScriptTextFileReadResult> _readTextFile;
 	private readonly Func<string, string, bool> _scriptTextsMatchForDiskVerification;
-	private readonly Func<string, bool> _fileExists;
 
 	internal ScriptEditorBufferLocator(
 		Func<string, string> normalizePath,
-		Func<string, string> readTextFile,
-		Func<string, string, bool> scriptTextsMatchForDiskVerification,
-		Func<string, bool> fileExists
+		Func<string, ScriptTextFileReadResult> readTextFile,
+		Func<string, string, bool> scriptTextsMatchForDiskVerification
 	)
 	{
 		_normalizePath = normalizePath ?? throw new ArgumentNullException(nameof(normalizePath));
@@ -38,7 +36,6 @@ internal sealed class ScriptEditorBufferLocator
 		_scriptTextsMatchForDiskVerification =
 			scriptTextsMatchForDiskVerification
 			?? throw new ArgumentNullException(nameof(scriptTextsMatchForDiskVerification));
-		_fileExists = fileExists ?? throw new ArgumentNullException(nameof(fileExists));
 	}
 
 	// Compatibility surface for Beautify. Refactor Namespace uses the group-oriented methods.
@@ -143,15 +140,34 @@ internal sealed class ScriptEditorBufferLocator
 		{
 			string path = inventoryEntry.Path;
 
-			if (
-				!path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-				|| !_fileExists(path)
-			)
+			if (!path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+				continue;
+
+			ScriptTextFileReadResult readResult;
+
+			try
 			{
+				readResult = _readTextFile(path);
+			}
+			catch (Exception exception)
+			{
+				readResult = ScriptTextFileReadResult.Failed(
+					ScriptTextFileReadStatus.ReadFailed,
+					$"Read delegate threw {exception.GetType().Name}: {NormalizeDiagnosticDetail(exception.Message)}"
+				);
+			}
+
+			if (!readResult.IsSuccess)
+			{
+				diagnostics?.Log(
+					"BufferLookup",
+					() =>
+						$"Disk verification read failed; Path='{path}'; Status={readResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(readResult.FailureDetail)}'"
+				);
 				continue;
 			}
 
-			diskTextsByPath[path] = _readTextFile(path);
+			diskTextsByPath[path] = readResult.Text;
 		}
 
 		HashSet<string> ambiguousVerificationPaths = GetPathsWithAmbiguousVerificationTexts(
@@ -868,6 +884,13 @@ internal sealed class ScriptEditorBufferLocator
 	private static string FormatInventory(IEnumerable<OpenScriptPathInventoryEntry> inventory)
 	{
 		return $"[{string.Join(", ", (inventory ?? Array.Empty<OpenScriptPathInventoryEntry>()).Select(entry => $"'{entry.Path}'={entry.OpenOccurrenceCount}"))}]";
+	}
+
+	private static string NormalizeDiagnosticDetail(string detail)
+	{
+		return string.IsNullOrWhiteSpace(detail)
+			? ""
+			: detail.Replace('\r', ' ').Replace('\n', ' ').Trim();
 	}
 
 	private static string FormatPaths(IEnumerable<string> paths)

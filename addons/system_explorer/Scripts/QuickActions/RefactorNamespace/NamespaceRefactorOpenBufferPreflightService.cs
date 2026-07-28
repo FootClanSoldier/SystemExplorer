@@ -388,6 +388,9 @@ internal sealed class NamespaceRefactorOpenBufferPreflightService
 					$"Preflight group autosave completed; Path='{group.Path}'; Success={autosaveResult.Success}; DidAutosave={autosaveResult.DidAutosave}; Failure={autosaveResult.FailedAutosave.Failure}; DiagnosticReason={autosaveResult.FailedAutosave.DiagnosticReason}"
 			);
 
+			if (autosaveResult.DidAutosave)
+				didAutosaveCandidateScripts = true;
+
 			if (!autosaveResult.Success)
 			{
 				string autosaveFailureMessage =
@@ -418,9 +421,6 @@ internal sealed class NamespaceRefactorOpenBufferPreflightService
 			}
 
 			verifiedGroupsByPath.Add(groupPair.Key, group);
-
-			if (autosaveResult.DidAutosave)
-				didAutosaveCandidateScripts = true;
 		}
 
 		Dictionary<string, OpenScriptEditorBufferGroup> verifiedGroupsForDiagnostics =
@@ -515,6 +515,9 @@ internal sealed class NamespaceRefactorOpenBufferPreflightService
 					$"Activating autosave completed; Path='{candidatePath}'; Success={autosaveResult.Success}; DidAutosave={autosaveResult.DidAutosave}; Failure={autosaveResult.FailedAutosave.Failure}; DiagnosticReason={autosaveResult.FailedAutosave.DiagnosticReason}; FailurePath='{autosaveResult.FailedAutosave.ScriptPath}'"
 			);
 
+			if (autosaveResult.DidAutosave)
+				didAutosaveCandidateScripts = true;
+
 			if (!autosaveResult.Success)
 			{
 				string autosaveFailureMessage =
@@ -540,8 +543,6 @@ internal sealed class NamespaceRefactorOpenBufferPreflightService
 				continue;
 			}
 
-			if (autosaveResult.DidAutosave)
-				didAutosaveCandidateScripts = true;
 		}
 
 		return NamespaceRefactorOpenBufferPreflightResult.Succeeded(

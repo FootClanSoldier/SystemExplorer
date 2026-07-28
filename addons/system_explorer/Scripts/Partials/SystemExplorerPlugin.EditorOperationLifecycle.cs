@@ -33,7 +33,7 @@ public partial class SystemExplorerPlugin
 	public override bool _Build()
 	{
 		EditorOperationLifetime lifetime = EnsureEditorOperationLifecycleCurrentForManagedAssembly();
-		if (!lifetime.HasActiveOperation)
+		if (!lifetime.HasActiveOperation && !lifetime.HasPendingForegroundPreemption)
 			return true;
 
 		Task completion = lifetime.RequestCancellationAndGetCompletion();
@@ -57,6 +57,40 @@ public partial class SystemExplorerPlugin
 			&& IsInsideTree();
 	}
 
+	private bool IsManagedForegroundPreemptionRetryValid(
+		SystemExplorerPlugin capturedPlugin,
+		EditorOperationLifetime capturedLifetime,
+		long preemptionReservationId
+	)
+	{
+		if (_editorOperationShutdownStarted)
+			return false;
+
+		if (!ReferenceEquals(this, capturedPlugin))
+			return false;
+
+		if (!ReferenceEquals(_editorOperationLifetime, capturedLifetime))
+			return false;
+
+		if (capturedLifetime?.IsActive != true)
+			return false;
+
+		if (!capturedLifetime.OwnsForegroundPreemption(preemptionReservationId))
+			return false;
+
+		return string.IsNullOrEmpty(_loadedPersistentTreeStateGeneration)
+			|| string.Equals(
+				_loadedPersistentTreeStateGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			);
+	}
+
+	private bool IsGodotForegroundPreemptionRetryValid()
+	{
+		return GodotObject.IsInstanceValid(this) && IsInsideTree();
+	}
+
 	private void StartObservedEditorOperation(string operationName, Func<EditorOperationLease, Task> operation, bool backgroundOperation = false)
 	{
 		_ = RunProtectedEditorOperationAsync(operationName, operation, backgroundOperation);
@@ -65,13 +99,82 @@ public partial class SystemExplorerPlugin
 	private async Task RunProtectedEditorOperationAsync(string operationName, Func<EditorOperationLease, Task> operation, bool backgroundOperation)
 	{
 		if (operation == null) throw new ArgumentNullException(nameof(operation));
-		if (_editorOperationShutdownStarted || !EditorOperations.TryBegin(operationName, backgroundOperation, out EditorOperationLease lease))
+		if (_editorOperationShutdownStarted) return;
+
+		SystemExplorerPlugin capturedPlugin = this;
+		EditorOperationLifetime capturedLifetime = EditorOperations;
+		EditorOperationBeginResult beginResult = capturedLifetime.TryBegin(
+			operationName,
+			backgroundOperation
+		);
+
+		if (beginResult.Status == EditorOperationBeginStatus.BackgroundCancellationRequested)
 		{
-			if (!_editorOperationShutdownStarted)
+			long reservationId = beginResult.PreemptionReservationId;
+			TryLogEditorOperation("Editor Operation Background Preemption Requested", operationName);
+			TryLogEditorOperation("Editor Operation Waiting For Background Cleanup", operationName);
+
+			try
+			{
+				await beginResult.PreemptedOperationCompletion;
+
+				if (!IsManagedForegroundPreemptionRetryValid(
+					capturedPlugin,
+					capturedLifetime,
+					reservationId
+				))
+				{
+					return;
+				}
+
+				if (!IsGodotForegroundPreemptionRetryValid())
+					return;
+
+				beginResult = capturedLifetime.TryBeginReservedForeground(
+					operationName,
+					reservationId
+				);
+
+				if (beginResult.Status == EditorOperationBeginStatus.Started)
+				{
+					TryLogEditorOperation(
+						"Editor Operation Started After Background Preemption",
+						operationName
+					);
+				}
+				else if (beginResult.Status == EditorOperationBeginStatus.Rejected)
+				{
+					TryLogEditorOperation("Editor Operation Rejected", operationName);
+					return;
+				}
+				else
+				{
+					TryLogEditorOperation(
+						"Editor Operation Background Preemption Abandoned",
+						operationName
+					);
+					return;
+				}
+			}
+			finally
+			{
+				capturedLifetime.AbandonForegroundPreemption(reservationId);
+			}
+		}
+
+		if (beginResult.Status != EditorOperationBeginStatus.Started)
+		{
+			if (
+				beginResult.Status == EditorOperationBeginStatus.Rejected
+				&& !_editorOperationShutdownStarted
+			)
+			{
 				TryLogEditorOperation("Editor Operation Rejected", operationName);
+			}
 			return;
 		}
 
+		EditorOperationLease lease = beginResult.Lease;
 		try
 		{
 			TryLogEditorOperation("Editor Operation Started", operationName);

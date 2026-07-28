@@ -11,8 +11,7 @@ internal sealed class NamespaceRefactorPostApplyEditorService
 {
 	private readonly ScriptEditorBufferLocator _bufferLocator;
 	private readonly ScriptEditorBufferBatchService _bufferBatchService;
-	private readonly Func<string, bool> _fileExists;
-	private readonly Func<string, string> _readText;
+	private readonly Func<string, ScriptTextFileReadResult> _readText;
 	private readonly Func<string, Script> _loadScript;
 	private Dictionary<string, string> _deferredOriginalTextsByPath = new(
 		StringComparer.OrdinalIgnoreCase
@@ -22,15 +21,13 @@ internal sealed class NamespaceRefactorPostApplyEditorService
 	internal NamespaceRefactorPostApplyEditorService(
 		ScriptEditorBufferLocator bufferLocator,
 		ScriptEditorBufferBatchService bufferBatchService,
-		Func<string, bool> fileExists,
-		Func<string, string> readText,
+		Func<string, ScriptTextFileReadResult> readText,
 		Func<string, Script> loadScript
 	)
 	{
 		_bufferLocator = bufferLocator ?? throw new ArgumentNullException(nameof(bufferLocator));
 		_bufferBatchService =
 			bufferBatchService ?? throw new ArgumentNullException(nameof(bufferBatchService));
-		_fileExists = fileExists ?? throw new ArgumentNullException(nameof(fileExists));
 		_readText = readText ?? throw new ArgumentNullException(nameof(readText));
 		_loadScript = loadScript ?? throw new ArgumentNullException(nameof(loadScript));
 	}
@@ -89,35 +86,84 @@ internal sealed class NamespaceRefactorPostApplyEditorService
 
 		IReadOnlyList<string> payloadPaths = NamespaceScriptPathPayloadCodec.Parse(scriptPathPayload);
 		Dictionary<string, string> updatedTextsByPath = new(StringComparer.OrdinalIgnoreCase);
-		List<string> existingPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
+		List<string> successfullyReadPaths = diagnosticContext?.IsEnabled == true
+			? new List<string>()
+			: null;
 		List<string> missingPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
+		List<string> failedPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
 
 		foreach (string payloadPath in payloadPaths)
 		{
-			if (!_fileExists(payloadPath))
+			ScriptTextFileReadResult readResult;
+
+			try
 			{
-				missingPaths?.Add(payloadPath);
+				readResult = _readText(payloadPath);
+			}
+			catch (Exception exception)
+			{
+				readResult = ScriptTextFileReadResult.Failed(
+					ScriptTextFileReadStatus.ReadFailed,
+					exception.Message
+				);
+			}
+
+			if (!readResult.IsSuccess)
+			{
+				if (readResult.Status == ScriptTextFileReadStatus.MissingFile)
+					missingPaths?.Add(payloadPath);
+				else
+					failedPaths?.Add(payloadPath);
+
+				diagnosticContext?.Log(
+					"DeferredSync",
+					() =>
+						$"Deferred read-back skipped; Path='{payloadPath ?? ""}'; Status={readResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(readResult.FailureDetail)}'."
+				);
 				continue;
 			}
 
-			existingPaths?.Add(payloadPath);
-			updatedTextsByPath.Add(
-				ScriptPathUtility.Normalize(payloadPath),
-				_readText(payloadPath)
-			);
+			string normalizedPath;
+
+			try
+			{
+				normalizedPath = ScriptPathUtility.Normalize(payloadPath);
+			}
+			catch (Exception exception)
+			{
+				failedPaths?.Add(payloadPath);
+				diagnosticContext?.Log(
+					"DeferredSync",
+					() =>
+						$"Deferred read-back path normalization failed; Path='{payloadPath ?? ""}'; Status={ScriptTextFileReadStatus.InvalidPath}; FailureDetail='{NormalizeDiagnosticDetail(exception.Message)}'."
+				);
+				continue;
+			}
+
+			if (string.IsNullOrWhiteSpace(normalizedPath))
+			{
+				failedPaths?.Add(payloadPath);
+				diagnosticContext?.Log(
+					"DeferredSync",
+					() =>
+						$"Deferred read-back path normalization produced an empty path; Path='{payloadPath ?? ""}'; Status={ScriptTextFileReadStatus.InvalidPath}; FailureDetail=''."
+				);
+				continue;
+			}
+
+			updatedTextsByPath[normalizedPath] = readResult.Text;
+			successfullyReadPaths?.Add(normalizedPath);
 		}
 
 		diagnosticContext?.Log(
 			"DeferredSync",
 			() =>
-				$"Deferred payload files inspected; PayloadPathCount={payloadPaths.Count}; ExistingCount={existingPaths?.Count ?? 0}; MissingCount={missingPaths?.Count ?? 0}; ExistingPaths={diagnosticContext.FormatPaths(existingPaths)}; MissingPaths={diagnosticContext.FormatPaths(missingPaths)}; UpdatedTextCount={updatedTextsByPath.Count}."
+				$"Deferred payload files inspected; PayloadPathCount={payloadPaths.Count}; SuccessfulReadCount={successfullyReadPaths?.Count ?? updatedTextsByPath.Count}; MissingCount={missingPaths?.Count ?? 0}; FailedCount={failedPaths?.Count ?? 0}; SuccessfulReadPaths={diagnosticContext.FormatPaths(successfullyReadPaths)}; MissingPaths={diagnosticContext.FormatPaths(missingPaths)}; FailedPaths={diagnosticContext.FormatPaths(failedPaths)}; UpdatedTextCount={updatedTextsByPath.Count}."
 		);
 
 		if (diagnosticContext?.IsEnabled == true)
 		{
-			HashSet<string> payloadPathSet = payloadPaths
-				.Select(ScriptPathUtility.Normalize)
-				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+			HashSet<string> payloadPathSet = BuildNormalizedPathSetForDiagnostics(payloadPaths);
 			HashSet<string> storedPathSet = _deferredOriginalTextsByPath.Keys.ToHashSet(
 				StringComparer.OrdinalIgnoreCase
 			);
@@ -237,6 +283,41 @@ internal sealed class NamespaceRefactorPostApplyEditorService
 
 		editorInterface.EditScript(script);
 		debugLog?.Invoke($"Refactor Namespace restored target script editor '{normalizedPath}'.");
+	}
+
+	private static HashSet<string> BuildNormalizedPathSetForDiagnostics(
+		IEnumerable<string> paths
+	)
+	{
+		HashSet<string> normalizedPaths = new(StringComparer.OrdinalIgnoreCase);
+
+		if (paths == null)
+			return normalizedPaths;
+
+		foreach (string path in paths)
+		{
+			try
+			{
+				string normalizedPath = ScriptPathUtility.Normalize(path);
+
+				if (!string.IsNullOrWhiteSpace(normalizedPath))
+					normalizedPaths.Add(normalizedPath);
+			}
+			catch
+			{
+				// Diagnostic set construction must not affect deferred synchronization.
+			}
+		}
+
+		return normalizedPaths;
+	}
+
+	private static string NormalizeDiagnosticDetail(string detail)
+	{
+		if (string.IsNullOrWhiteSpace(detail))
+			return "";
+
+		return detail.Replace("\r", " ").Replace("\n", " ").Trim();
 	}
 
 	private static bool IsCurrentScriptPath(

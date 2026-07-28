@@ -31,7 +31,7 @@ Partials/SystemExplorerPlugin.DockUi.cs
 - Handles System Name input behavior, including the inline Enter hint icon and cursor updates, while deferring to the shared editor-operation busy-cursor ownership when a protected foreground operation is active.
 
 Partials/SystemExplorerPlugin.EditorReloadLifecycle.cs
-- Owns bounded managed-generation recovery that first reconnects valid existing UI and otherwise tears down and rebuilds the plugin-owned dock integration, reloads architecture metadata plus best-effort tree expansion state, recreates managed integrations/lifetime state, restores any native busy-cursor marker left by a protected foreground operation, and verifies critical tree/context-menu signals against the current plugin instance before accepting recovery.
+- Owns bounded managed-generation recovery that first reconnects valid existing UI and otherwise tears down and rebuilds the plugin-owned dock integration, reloads architecture metadata plus best-effort persistent tree view state, recreates managed integrations/lifetime state, rebuilds the tree, restores the exact persisted selection without navigation, restores any native busy-cursor marker left by a protected foreground operation, and verifies critical tree/context-menu signals against the current plugin instance before accepting recovery.
 - Owns the per-assembly generation token, initialized-generation marker, reentrancy guard, and deduplicated user-facing failure path used to detect and recover a managed C# assembly reload without interpreting legitimately empty metadata as lost state.
 - Reads systems.json first and folder_bindings.json second into local validated models, then replaces _systems and _folderBindings together only after both read paths succeed; the recovery path is read-only and never invokes save, rollback, or startup folder synchronization.
 - Resets reload-unsafe queued and pending managed operation state, validates the surviving dock/dialog objects, and restores dock, TreeOperationDialog, Refactor Namespace, EditorFileSystem, ScriptEditor, and polling-timer integrations idempotently.
@@ -53,21 +53,23 @@ Partials/SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
 - Routes context-menu opening and every plugin-owned Refactor Namespace signal through the ensure path, logs invalid component names or composition exceptions, and emits one warning for a failed user action.
 
 Partials/SystemExplorerPlugin.TreeStatePersistence.cs
-- Owns best-effort project-local persistence of normal system/folder expanded state in res://.godot/system_explorer/tree_state.json, including format-version validation, metadata filtering, ItemCollapsed-driven dirty/save coalescing, a callback-free frame-pumped save queue, final exit flush, and managed reload/shutdown queue reset.
+- Owns best-effort project-local persistence of normal system/folder expansion plus the exact selected-item identity in res://.godot/system_explorer/tree_state.json. Selection identity is managed data composed of the owning system name and exact TreeItem metadata; no TreeItem reference is persisted or retained across rebuild/reload.
+- Serializes expansion and nullable selection atomically through one ItemCollapsed/ItemSelected-driven dirty state and the same callback-free frame-pumped save queue, temporary-file write, promote flow, final exit flush, and managed reload/shutdown queue reset.
+- Restores selection only after tree construction, scopes script/scene lookup to the exact owning system or exact ScriptFilterResult occurrence, scrolls the visual selection into view, and suppresses script/scene navigation while applying persistent state. Invalid identities are cleared quietly without blocking expansion or startup; temporarily filter-hidden identities are retained until the normal tree returns, and neither path chooses a physical-path fallback.
 - Exposes pending tree-state process work to EditorProcess.cs so the plugin's single _Process callback remains active until the queued save has waited beyond its first process frame and completed; it creates no tree-state-specific deferred Callable, timer, delegate, or signal-based one-shot callback.
 - Keeps voluntary UI-state load/save failures outside systems.json and folder_bindings.json validation, recovery failure reporting, metadata preflight, popups, and tree-operation rollback.
-- Uses TreeBuilding.cs expansion capture/apply helpers rather than duplicating TreeItem traversal, and uses ScriptFilter.cs's pre-filter snapshot whenever the flat filtered tree is active.
+- Uses TreeBuilding.cs expansion capture/apply and generic parent/subtree helpers rather than duplicating TreeItem traversal, and uses ScriptFilter.cs's pre-filter snapshot and exact flat-row mapping whenever the filtered tree is active.
 
 Partials/SystemExplorerPlugin.TreeBuilding.cs
-- Builds/rebuilds the tree only after the managed assembly generation and persistent tree state have been verified, restores expansion state, tracks forced expansion, and contains collapse/expand helpers.
-- Provides tree expansion snapshot helpers used by operations that must restore the user's exact visual tree state after temporary editor/script sync work.
+- Builds/rebuilds the tree only after the managed assembly generation and persistent tree state have been verified, restores expansion state, re-establishes filter-mode bookkeeping after managed reload, tracks forced expansion, and contains collapse/expand helpers.
+- Provides tree expansion snapshot helpers plus generic system-parent discovery, exact metadata-within-subtree lookup, and parent expansion used by persistent selection, rename restoration, and ScriptEditorSync. Collapse Entire Tree explicitly clears the persistent selected-item identity while rebuild-time Tree.Clear() does not.
 - Handles lock icon visibility/display state and script tooltip text during tree creation.
 - Applies the bound-folder color and exact physical res:// tooltip only to folders with their own loaded binding; normal folders retain the standard folder color and empty tooltip.
 
 Partials/SystemExplorerPlugin.ScriptFilter.cs
 - Handles script filtering, ordered filter result generation, filter UI icons, clear/search icon behavior, restoring the normal tree after filtering, and preserving the shared editor-operation busy cursor against filter hover/exit cursor updates.
-- Provides the ordered ScriptFilterResult projection reused by rename restoration and ScriptEditorSync to map flat filter-tree children back to exact system/folder/entry occurrences.
-- Handles revealing/selecting a script again after exiting filter mode.
+- Provides the ordered ScriptFilterResult projection and centralized direct-child index mapping reused by persistent selection and ScriptEditorSync to map flat filter-tree rows back to exact system/folder/entry/type occurrences.
+- Preserves exact owning-system context when a filter selection becomes the persistent selection, and restores that exact identity when returning to the normal tree instead of using a global first-entry match.
 
 Partials/SystemExplorerPlugin.AddCreate.cs
 - Handles adding systems/folders/scripts/scenes and creating new C# script files from the template.
@@ -77,6 +79,7 @@ Partials/SystemExplorerPlugin.AddCreate.cs
 
 Partials/SystemExplorerPlugin.NavigationRecovery.cs
 - Handles tree item selection/navigation for scripts and scenes, reopening selected scripts, and missing script recovery dialogs.
+- Forwards every meaningful ItemSelected change to TreeStatePersistence.cs before ScriptEditorSync navigation suppression is consumed, so user, right-click, filter, and Script Editor Sync selections share the same persistent save queue; persistent restore suppression still permits lock-icon refresh without navigation or resave.
 - Captures the exact virtual source occurrence from a selected script TreeItem and forwards it through the shared script-open flow without mutating system data.
 - Handles relinking or removing missing scripts and safely replacing entries in systems.
 - Delegates System Explorer script opening to Partials/SystemExplorerPlugin.ScriptOpenPosition.cs so navigation behavior stays centralized.
@@ -94,7 +97,7 @@ Partials/SystemExplorerPlugin.ScriptEditorSync.cs
 - Defines the in-memory virtual script occurrence identity as exact system name plus full entry, with the normalized physical script path used for validation.
 - Distinguishes token-guarded System Explorer-initiated activations from external editor activations without retaining TreeItem references or adding persistent metadata.
 - Resolves active scripts in priority order: exact pending occurrence, current same-path selection, last valid session occurrence, then deterministic first path match.
-- Uses parent-chain system discovery in the normal tree and the current ScriptFilterResult-to-direct-child index mapping in the flat filter tree for exact occurrence capture and lookup.
+- Uses TreeBuilding.cs's shared parent-chain system discovery in the normal tree and ScriptFilter.cs's centralized ScriptFilterResult-to-direct-child mapping in the flat filter tree for exact occurrence capture and lookup.
 - Keeps the specialized NormalizeScriptPathForSync(...) wrapper, using ScriptPathUtility.Normalize(...) before and after ProjectSettings.LocalizePath(...) while retaining its res:// and .cs validation.
 - Connects to ScriptEditor active-script changes through a named method callable when available, with an idempotently connected named-callable Timer polling fallback if the editor signal cannot be connected.
 - Primes the initially active editor script without changing tree selection, then syncs only after subsequent active-script changes or explicit post-operation requests.
@@ -223,6 +226,7 @@ Partials/SystemExplorerPlugin.QuickAction.Beautify.cs
 - Owns a Beautify-local C# script-entry classifier with the same lock, linked-scene, scene-entry, and .cs semantics previously supplied by the removed Refactor Namespace plugin helper.
 - Collects and validates single-script, active-editor script, and batch targets; stores pending beautify actions when CSharpier needs installation; and enters all long-running Beautify work through the shared EditorOperationLease execution boundary.
 - Handles beautify result summaries, unchanged/skipped/failed handling, safe write checks, and main operation orchestration.
+- Requires successful status-based disk reads before editor matching/CSharpier and again before committing formatter output; missing or unreadable input never enters originalTextsByPath, and a failed post-CSharpier verification read is reported distinctly from a verified concurrent file change.
 - Uses ScriptResourceRefreshService at the existing unchanged-after-autosave, failed-write rollback, and successful-write refresh points.
 - Preserves refresh ordering relative to rollback, committed open-buffer application, and editor view-state restoration.
 - Uses ScriptEditorSync batch context preservation for Beautify Scripts so normal completion retains the existing deferred post-operation suppression release, while shutdown performs managed-only suppression cleanup without CallDeferred.
@@ -248,10 +252,11 @@ QuickActions/Beautify/BeautifyEditorViewState.cs
 - Reports validity only from the presence of the TextEdit reference and contains no formatting, autosave, deferred scheduling, or orchestration behavior.
 
 QuickActions/Beautify/BeautifyEditorStateService.cs
-- Defines the ordinary internal sealed BeautifyEditorStateService under SystemExplorer.QuickActions.Beautify; it does not inherit a Godot lifecycle type and does not reference SystemExplorerPlugin.
+- Defines the ordinary internal sealed BeautifyEditorStateService plus the operation-local BeautifyEditorAutosaveFailure enum under SystemExplorer.QuickActions.Beautify; it does not inherit a Godot lifecycle type and does not reference SystemExplorerPlugin.
 - Receives Beautify debug logging and strongly typed deferred scheduling through defensive constructor injection, and exposes managed-only cancellation of pending restore passes for plugin shutdown.
 - Owns the pending editor view-state list and two-pass deferred restore counter for immediate/deferred caret, first-visible-line, scroll, and focus restoration.
 - Preserves Beautify-specific autosave, exact saved-buffer/disk validation, preliminary editor-first text application, and failed-write rollback rules while reusing the shared ScriptEditing primitives.
+- Requires a successful ScriptTextFileReadResult after an editor-buffer autosave before comparing text or tagging the editor version saved. AutosaveVerificationReadFailed is returned distinctly, leaves the editor version untagged, never applies unverified text to another buffer, and reports that the file may already have been autosaved.
 - Does not run or probe CSharpier, choose Beautify targets, own formatter orchestration, write operation summaries, manage dialogs, or preserve batch context.
 
 QuickActions/Beautify/CSharpier/CSharpierCommand.cs
@@ -330,11 +335,15 @@ EditorIntegration/ScriptEditing/ScriptEditorBufferDiagnosticSink.cs
 
 EditorIntegration/ScriptEditing/ScriptEditorBufferAutosaveService.cs
 - Defines the internal per-buffer and per-group autosave service plus its structured result and operation-neutral failure enum under SystemExplorer.EditorIntegration.ScriptEditing.
+- Receives the status-based Func<string, ScriptTextFileReadResult> reader together with the existing write and disk-verification comparison delegates; it never treats an empty string as proof that a read succeeded.
 - Preserves generic single-buffer saved-disk verification, unsaved TextEdit writes, read-back verification, and saved-version transition for rename/remove and other existing single-buffer call sites.
-- For a complete group, verifies every member instance/path, allows at most one unsaved member, requires that member to be the current-editor member, verifies all other members are saved and match the current disk text, performs at most one physical write for the path through the existing single-buffer autosave route, and synchronizes the committed text to every other member after successful read-back.
-- Returns UnsafeOpenBufferGroupState when multiple members are unsaved, a non-current member is unsaved, a member/path is invalid, or saved alias buffers no longer match disk; its internal diagnostic reason distinguishes every existing unsafe branch, including SavedMemberBecameUnsaved versus SavedMemberDiskMismatch, without changing the public failure or control flow.
-- Optionally emits gated per-member diagnostics through ScriptEditorBufferDiagnosticSink, including defensive version/state reads and deterministic text summaries rather than source text.
-- Receives general read, write, and disk-verification comparison delegates through constructor injection and does not activate scripts, refresh resources, choose required/optional policy, or know operation names.
+- Returns DiskReadFailed when required disk text cannot be verified before a saved-buffer check or before an autosave write. It returns AutosaveVerificationReadFailed with DidAutosave=true when the write completed but read-back could not be performed, so callers cannot claim that no file changed.
+- Never passes failed or Uninitialized read results to TextsMatchForDiskVerification(...), and tags the current editor version saved only after a successful read-back and verified text match.
+- For a complete group, verifies every member instance/path, allows at most one unsaved member, requires that member to be the current-editor member, verifies all other members are saved and match verified current disk text, performs at most one physical write for the path through the existing single-buffer autosave route, and synchronizes committed text to every other member only after a separate successful committed-text read.
+- A failed group committed-text read stops synchronization before any unverified text is applied to alias buffers and preserves DidAutosave from the already completed write.
+- Returns UnsafeOpenBufferGroupState when multiple members are unsaved, a non-current member is unsaved, a member/path is invalid, or saved alias buffers no longer match disk; its internal diagnostic reason distinguishes every unsafe and read-failure branch.
+- Optionally emits gated per-member diagnostics through ScriptEditorBufferDiagnosticSink, including read status and sanitized FailureDetail, defensive version/state reads, and deterministic text summaries rather than source text.
+- Does not activate scripts, refresh resources, choose required/optional policy, format user-facing messages, or know operation names.
 
 EditorIntegration/ScriptEditing/ScriptEditorBufferBatchService.cs
 - Defines the internal sealed operation-neutral multi-buffer/multi-group service plus its readonly technical batch-autosave result under SystemExplorer.EditorIntegration.ScriptEditing.
@@ -358,20 +367,28 @@ EditorIntegration/ScriptEditing/ScriptEditorBufferActivationService.cs
 EditorIntegration/ScriptEditing/ScriptEditorBufferLocator.cs
 - Owns the shared non-activating buffer matching core and keeps GetOpenScripts() and GetOpenScriptEditors() as completely separate inventories; no path/editor relationship is inferred from index, order, equal totals, or arbitrary first matches.
 - Builds a canonical open-script inventory from the caller's normalized target paths. Raw Godot ResourcePath casing is used only for case-insensitive lookup into that canonical map; each entry stores the canonical target path, first open occurrence order, and count of distinct valid Script instances. Repeated appearances of the same Script instance do not increase the count.
-- Processes the safe GetCurrentScript()/GetCurrentEditor() relation first. A matching current TextEdit is provisionally assigned to the canonical target and is the only member allowed to be unsaved during lookup, but it is not exposed unless the entire group later becomes complete.
-- Reads disk text only for canonical target paths actually reported open. Every remaining candidate TextEdit must be valid, unused, and saved; each editor is related to paths only by ScriptTextFileService-compatible full-text comparison.
+- Processes the safe GetCurrentScript()/GetCurrentEditor() relation first. A matching current TextEdit is provisionally assigned to the canonical target and can complete a one-occurrence group even when disk verification cannot be read; it remains the only member allowed to be unsaved during lookup.
+- Receives Func<string, ScriptTextFileReadResult> for disk reads and adds disk text to its verification dictionary only when IsSuccess is true. Missing, invalid, failed, thrown, or Uninitialized reads are logged diagnostically with path/status/detail and cannot match a non-direct editor through a false empty string.
+- Every remaining candidate TextEdit must be valid, unused, and saved; each editor is related to paths only by verified ScriptTextFileService-compatible full-text comparison. The service never activates a script tab to compensate for a failed read.
 - Repeatedly completes a path only when all remaining editors that match it match no other unresolved path and their exact count fills that path's remaining open Script occurrences. A path may therefore receive multiple alias TextEdits, but three candidates are never reduced to an expected two, and the same TextEdit can never be assigned to two paths.
 - Registers groups atomically only when member count exactly equals the open occurrence count. Partial groups, unsaved non-current editors, non-current editors that cannot be verified by full text, and unresolved multi-occurrence paths remain wholly unsafe.
 - Marks different open targets with overlapping full verification texts as ambiguous for non-current text assignment, so identical script texts are never guessed. A direct current-editor relation may identify that one member, but any other required target that still depends on identical text remains unmatched.
-- Exposes LocateOpenScriptEditorGroupsWithoutActivation(...) for disk-based preflight and LocateOpenScriptEditorGroupsByScriptTextsWithoutActivation(...) for Refactor Namespace apply/deferred synchronization using original-or-updated text.
-- Both group-oriented methods optionally report the separate open-Script/editor-control inventories, current-editor relation, occurrence counts, direct/text matches, complete groups, and the full unsafe/ambiguous/unmatched structured result through ScriptEditorBufferDiagnosticSink without changing matching order or candidacy.
+- Exposes LocateOpenScriptEditorGroupsWithoutActivation(...) for verified disk-based preflight and LocateOpenScriptEditorGroupsByScriptTextsWithoutActivation(...) for Refactor Namespace apply/deferred synchronization using already verified original-or-updated text.
 - Keeps LocateByScriptTextsWithoutActivation(...) as Beautify's compatibility wrapper: exactly one-member groups convert to the existing dictionary, while complete multi-member groups remain unsafe for Beautify instead of selecting a primary editor.
-- Does not activate scripts, autosave/write files, apply committed text, refresh resources, inspect namespaces/usings, show UI, or mutate editor/tree/project state.
+- Does not autosave/write files, apply committed text, refresh resources, inspect namespaces/usings, show UI, or mutate editor/tree/project state.
+
+EditorIntegration/ScriptEditing/ScriptTextFileReadResult.cs
+- Defines the Godot-independent ScriptTextFileReadStatus enum and immutable ScriptTextFileReadResult value type under SystemExplorer.EditorIntegration.ScriptEditing.
+- Uses one status as the sole source of truth: Uninitialized is the default value, followed by Success, InvalidPath, MissingFile, and ReadFailed; IsSuccess is derived only from Status == Success.
+- Defensively normalizes Text and FailureDetail to non-null strings, so default(ScriptTextFileReadResult) exposes Uninitialized, IsSuccess=false, Text="", and FailureDetail="".
+- Succeeded(...) always creates Success, including for a legitimate empty file. Failed(...) rejects Success, normalizes unknown status values to Uninitialized, and never represents failure as a successful empty text.
+- FailureDetail is diagnostic data only and is not itself user-facing policy.
 
 EditorIntegration/ScriptEditing/ScriptTextFileService.cs
 - Defines the internal stateless text-file service under SystemExplorer.EditorIntegration.ScriptEditing.
-- Owns safe general text-file reading and writing, including res:// and user:// globalization before System.IO access.
-- Owns UTF-8 writes without BOM and preserves the existing empty-string/false fallback behavior for missing files and caught I/O failures.
+- TryReadText(...) owns status-based general text-file reading, including res:// and user:// globalization before System.IO access, path-resolution exception containment, missing-file classification, UTF-8 reads, and sanitized bounded diagnostic FailureDetail.
+- A legitimate empty file returns Success with Text="". Blank/invalid paths return InvalidPath, absent files return MissingFile, and read failures return ReadFailed; no failure path uses an empty string as implicit proof of success.
+- Owns the unchanged WriteText(...) behavior with UTF-8 without BOM and false on write failure.
 - Owns CRLF/standalone-CR to LF normalization and ordinal disk-text comparison after that normalization.
 - Does not normalize general script paths, create directories, refresh Godot resources, autosave or update editor buffers, display UI, log, or hold mutable operation state.
 
@@ -390,8 +407,8 @@ EditorIntegration/ScriptEditing/ScriptResourceRefreshService.cs
 FileOperations/ScriptFileOperationAutosaveFailureMessageBuilder.cs
 - Defines the internal static script-file-operation autosave failure-message builder under SystemExplorer.FileOperations.
 - Translates technical ScriptEditorBufferAutosaveResult failures into user-facing messages used by Rename Script and Remove Script while receiving each operation's existing name as input.
-- Preserves the existing saved-disk mismatch, write-failure, and read-back mismatch wording and provides a non-empty UnsafeOpenBufferGroupState message explaining that only the active matching duplicate may be unsaved and that every alias buffer must be verifiable.
-- Physical Remove remains a single-buffer caller; the new group-state wording is used by group-aware file operations such as Script Rename without changing remove policy.
+- Distinguishes DiskReadFailed before mutation from AutosaveVerificationReadFailed after a possible successful autosave; the latter explicitly says the buffer was autosaved but the requested operation was not applied.
+- Preserves the existing saved-disk mismatch, write-failure, read-back mismatch, and UnsafeOpenBufferGroupState wording.
 - Returns an empty string for unknown or empty failure values and does not perform autosave, own rollback, display UI, log, mutate editor state, decide whether an operation aborts, or reference SystemExplorerPlugin.
 
 
@@ -410,22 +427,21 @@ QuickActions/RefactorNamespace/NamespaceRefactorDiagnosticTrace.cs
 QuickActions/RefactorNamespace/NamespaceRefactorPluginHost.cs
 - Defines the internal sealed, ordinary C# NamespaceRefactorPluginHost under SystemExplorer.QuickActions.RefactorNamespace; it does not inherit Node, GodotObject, or another Godot lifecycle type and does not reference SystemExplorerPlugin.
 - Is a rebuildable managed composition root and feature facade around already-created plugin-owned Refactor Namespace dialogs and controls; it creates no Godot nodes, mounts no children, and connects no UI signals.
-- Creates one NamespaceRefactorDialogView from injected controls and one NamespaceRefactorFeature from the injected shared ScriptEditing services, live systems/EditorInterface providers, metadata helpers, logging callbacks, editor-context callbacks, and foreground-operation starter.
+- Creates one NamespaceRefactorDialogView and one NamespaceRefactorFeature from the injected shared ScriptEditing services, live systems/EditorInterface providers, metadata helpers, logging callbacks, editor-context callbacks, and foreground-operation starter.
+- Injects ScriptTextFileService.TryReadText directly into NamespaceRefactorFeature; the former empty-string namespace adapter and its separate FileAccess.FileExists check no longer exist.
 - Receives and forwards the narrow Action<string, Action> foreground-operation starter through defensive constructor injection; it does not acquire an EditorOperationLease or own cursor, operation-gate, cancellation, or cleanup policy.
-- Retains the injected main dialog, incomplete-write report dialog, and all controls used to compose NamespaceRefactorDialogView and verify the complete UI binding through IsBoundTo(...); these references support managed composition, presentation, reporting, and binding verification without making the host the Godot-lifetime owner of the nodes.
+- Retains the injected main dialog, incomplete-write report dialog, and all controls used to compose NamespaceRefactorDialogView and verify the complete UI binding through IsBoundTo(...).
 - Exposes narrow forwarding methods for Open, confirmation, batch apply-mode selection, and existing-namespace selection; plugin-owned signal handlers call these through the centralized ensure path.
-- Owns main-dialog presentation, fixed-size application, centered popup, strongly typed deferred size correction, focus, and optional SelectAll behavior in the existing order. It formats singular/plural incomplete-write text with one path per line, ignores empty failure lists, and schedules the injected report dialog popup deferred.
-- Owns the unchanged file-based namespace read through FileAccess.FileExists(...), ScriptTextFileService.ReadText(...), and NamespaceTextRewriter.GetNamespaceFromText(...).
-- Translates feature-specific deferred buffer-refresh, target-editor-restoration, selection-sync, and tree-focus requests into strongly typed Callable.From(...).CallDeferred() calls; deferred buffer callbacks also capture the exact operation diagnostic context, so concurrent/later confirmations cannot replace the callback's trace id, while callbacks still capture this host's private NamespaceRefactorFeature after reload.
-- Uses providers for current systems data and current EditorInterface rather than capturing their construction-time values.
-- The primary plugin chain is SystemExplorerPlugin context-menu/plugin-owned UI signals -> ensured NamespaceRefactorPluginHost -> NamespaceRefactorFeature -> request/dialog/operation coordinators -> underlying services.
-- The signal chain is SystemExplorerPlugin-owned dialog signals -> centralized host ensure/recovery -> NamespaceRefactorPluginHost forwarding methods -> NamespaceRefactorFeature facade -> dialog confirmation / operation chain.
-- Partials/SystemExplorerPlugin.QuickAction.RefactorNamespace.cs owns the plugin UI creation, signal wiring, host composition/recovery, and UI-to-host forwarding; this host owns only the managed view/feature composition, dialog presentation/report callbacks, and deferred integration around the injected UI.
+- Owns main-dialog presentation, fixed-size application, centered popup, strongly typed deferred size correction, focus, optional SelectAll behavior, and the existing singular/plural incomplete-write report presentation.
+- Translates feature-specific deferred buffer-refresh, target-editor-restoration, selection-sync, and tree-focus requests into strongly typed Callable.From(...).CallDeferred() calls; deferred buffer callbacks capture the exact diagnostic context.
+- Uses providers for current systems data and current EditorInterface rather than capturing construction-time values.
+- Partials/SystemExplorerPlugin.QuickAction.RefactorNamespace.cs remains the Godot UI/signal/lifecycle owner; this host owns only managed view/feature composition and delegated presentation/integration.
 
 QuickActions/RefactorNamespace/NamespaceRefactorFeature.cs
 - Defines the internal sealed, ordinary C# feature-composition root and facade under SystemExplorer.QuickActions.RefactorNamespace; it is not a Godot Node, RefCounted, or GodotObject and does not reference SystemExplorerPlugin.
 - Owns the four static Refactor Namespace foundation services with their existing lifetime and construction: NamespaceRefactorScopeResolver, NamespaceRefactorSnapshotLoader, NamespaceRefactorPreparationService, and NamespaceOpenBufferActivationService.
-- Receives the host-owned NamespaceRefactorDialogView, shared ScriptEditorBufferLocator, ScriptEditorBufferAutosaveCoordinator, and ScriptEditorBufferBatchService plus all systems, metadata, editor, logging, dynamic debug-state, dialog-host, batch-context, incomplete-write reporting, foreground-operation starter, and post-apply host integrations through defensive constructor injection.
+- Receives the host-owned NamespaceRefactorDialogView, shared ScriptEditorBufferLocator, ScriptEditorBufferAutosaveCoordinator, and ScriptEditorBufferBatchService plus the status-based script-text reader and all systems, metadata, editor, logging, dynamic debug-state, dialog-host, batch-context, incomplete-write reporting, foreground-operation starter, and post-apply host integrations through defensive constructor injection.
+- Composes NamespaceRefactorSnapshotLoader, single-dialog reading, Batch Add confirmation rereads, and deferred post-apply rereads with ScriptTextFileService.TryReadText so no namespace flow reintroduces an empty-string failure adapter.
 - Lazily owns one NamespaceRefactorDiagnosticTrace used by confirmation to create an immutable context only when a validated operation attempt begins; that same context is explicitly propagated through request, preflight, plan, apply, immediate sync, post-apply scheduling, and deferred refresh.
 - Uses providers for current systems data and current EditorInterface so no systems dictionary or editor instance is captured when the feature is constructed.
 - Lazily composes the complete project-scope, dialog-request, dialog-opening, dialog-session, dialog-confirmation, preflight, plan-build, pending-write-apply, apply, operation, and post-apply graph while preserving the existing dependency wiring and lazy boundaries; it forwards the host-owned incomplete-write callback to NamespaceRefactorApplyCoordinator without owning UI formatting.
@@ -447,36 +463,34 @@ QuickActions/RefactorNamespace/NamespaceRefactorDialogSessionState.cs
 - Defines NamespaceRefactorDialogMode with explicit None, SingleReplacement, SingleAdd, and Batch values plus the internal sealed NamespaceRefactorDialogSessionState under SystemExplorer.QuickActions.RefactorNamespace.
 - Owns pending metadata, the explicit current dialog mode, and private materialized script-path and namespace-option lists exposed through read-only views while preserving supplied order.
 - Provides explicit transitions for beginning single replacement, transitioning that existing single session to Add Namespace with a plugin-supplied script path, and beginning a batch session with defensively copied paths and namespace options.
+- The batch session keeps the complete scoped path list for freshness but does not cache a previous "scripts without namespace" list as confirmation truth; confirmation rereads every current session path.
 - Clears metadata, mode, script paths, and namespace options together through Clear().
 - Does not own UI, metadata analysis, path normalization/filtering/deduplication, namespace sorting, file access, logging, validation, operations, or Godot/editor policy.
 
 QuickActions/RefactorNamespace/NamespaceRefactorDialogRequestCoordinator.cs
-- Defines the internal sealed NamespaceRefactorDialogRequestCoordinator under SystemExplorer.QuickActions.RefactorNamespace as the plugin-independent request-routing layer for opening Refactor Namespace dialogs.
-- Receives NamespaceRefactorProjectScopeCoordinator, NamespaceRefactorDialogOpeningCoordinator, the systems-loaded safeguard, metadata-to-entry projection, entry-to-scriptpath projection, and debug logging through defensive constructor injection; it never references SystemExplorerPlugin, reads plugin fields or _systems directly, uses Godot controls, or presents dialogs itself.
-- Open(...) preserves the plugin-facing metadata control order: blank metadata is a silent no-op; system:: and folder:: requests enter the shared batch policy and return; unknown prefixes are silent no-ops; script:: requests resolve entry before raw scriptpath and delegate to NamespaceRefactorDialogOpeningCoordinator.OpenSingle(...).
-- Does not normalize or verify single scriptpaths, read namespaces, or perform file-existence checks; those responsibilities remain in the existing lower dialog-opening chain.
-- Its private batch request policy preserves systems-loaded safeguarding with operation name "Refactor Namespace" before scope resolution, delegates to NamespaceRefactorProjectScopeCoordinator.ResolveBatchTargetScriptPaths(...), retains the returned list unchanged, preserves the exact zero-target debug message, and otherwise passes the same list to NamespaceRefactorDialogOpeningCoordinator.OpenBatch(...).
-- Does not add normalization, deduplication, copying, sorting, file checks, namespace scans, or systems-data caching.
-- The dialog-opening chain is SystemExplorerPlugin context-menu -> NamespaceRefactorPluginHost -> NamespaceRefactorFeature facade -> NamespaceRefactorDialogRequestCoordinator -> NamespaceRefactorProjectScopeCoordinator for batch -> NamespaceRefactorDialogOpeningCoordinator -> NamespaceRefactorBatchDialogPreparationCoordinator -> NamespaceRefactorPreparationService.ScanNamespaces(...) -> NamespaceRefactorDialogSessionState -> NamespaceRefactorDialogView -> NamespaceRefactorPluginHost-owned Godot presentation.
+- Defines the internal sealed NamespaceRefactorDialogRequestCoordinator under SystemExplorer.QuickActions.RefactorNamespace as the plugin-independent request-routing and top-level single-dialog feedback layer.
+- Receives NamespaceRefactorProjectScopeCoordinator, NamespaceRefactorDialogOpeningCoordinator, the systems-loaded safeguard, metadata projections, debug logging, and one warning callback through defensive constructor injection; it never references SystemExplorerPlugin or reads _systems directly.
+- Open(...) preserves the metadata routing order. For script:: requests it resolves the path, invokes OpenSingle(...), and shows at most one returned failure message; the lower opening coordinator never presents a second dialog.
+- Its private batch request policy preserves systems-loaded safeguarding, current scope resolution, zero-target diagnostics, and otherwise passes the complete path list to OpenBatch(...).
+- Does not read script text itself, parse namespaces, activate buffers, execute operations, or own Godot controls.
 
 QuickActions/RefactorNamespace/NamespaceRefactorDialogOpeningCoordinator.cs
-- Defines the internal sealed NamespaceRefactorDialogOpeningCoordinator under SystemExplorer.QuickActions.RefactorNamespace.
-- Receives the existing NamespaceRefactorDialogView, NamespaceRefactorDialogSessionState, and NamespaceRefactorBatchDialogPreparationCoordinator plus scriptpath normalization, file-based namespace reading, configured-dialog presentation, and debug-log delegates through defensive constructor injection.
-- Orchestrates opening an already resolved single-script dialog by beginning the single replacement session before reading the raw supplied scriptpath, then configuring either existing-namespace replacement or single Add Namespace while normalizing the scriptpath only during the Add transition.
-- Preserves the exact no-namespace diagnostic, requests SelectAll for single replacement, and requests presentation without SelectAll for single Add Namespace.
-- Orchestrates opening an already scoped batch dialog by invoking NamespaceRefactorBatchDialogPreparationCoordinator, leaving session state unchanged on preparation failure, materializing the successful namespace list with ToList(), beginning the batch session, configuring NamespaceRefactorDialogView, and requesting presentation with SelectAll.
-- Receives already prepared single or batch requests from NamespaceRefactorDialogRequestCoordinator and does not interpret script::, system::, or folder:: metadata, read _systems, look up script entries, build System/Folder scopes, perform systems-loaded or zero-script policy, connect signals, use CallDeferred(...), handle confirmation, execute namespace operations, or access Godot/editor APIs.
-- Does not reference SystemExplorerPlugin, GD, DebugLogger, EditorInterface, or ScriptEditor; all plugin and presentation integration is supplied through delegates.
+- Defines the internal sealed NamespaceRefactorDialogOpeningCoordinator and immutable NamespaceRefactorDialogOpenResult under SystemExplorer.QuickActions.RefactorNamespace.
+- Receives NamespaceRefactorDialogView, NamespaceRefactorDialogSessionState, NamespaceRefactorBatchDialogPreparationCoordinator, path normalization, Func<string, ScriptTextFileReadResult>, configured-dialog presentation, and debug logging through defensive constructor injection.
+- OpenSingle(...) begins the pending session, then requires IsSuccess before namespace parsing. Missing, invalid, failed, thrown, or Uninitialized reads clear the session, log status/sanitized detail, return one short failure result, and never open either replacement or Add Namespace UI.
+- A successful legitimate empty file is parsed as having no namespace, normalized, transitioned to SingleAdd, and presented normally; successful non-empty namespace text preserves the existing replacement-dialog behavior.
+- OpenBatch(...) retains preparation-result behavior and stores the complete scoped path list rather than a cached confirmation candidate list.
+- Does not display warnings itself, interpret metadata prefixes, execute namespace operations, or access Godot editor APIs.
 
 QuickActions/RefactorNamespace/NamespaceRefactorDialogConfirmationCoordinator.cs
 - Defines the internal sealed NamespaceRefactorDialogConfirmationCoordinator under SystemExplorer.QuickActions.RefactorNamespace.
-- Receives NamespaceRefactorDialogView, NamespaceRefactorDialogSessionState, namespace validation and namespace-reading functions, single replacement/Add Namespace/batch replacement callbacks, debug logging, warning display, and operation logging through defensive constructor injection.
-- Reads and trims dialog values where the previous plugin confirmation did, then explicitly routes None, single replacement, single Add Namespace, and batch modes without interpreting metadata or building operation scopes.
-- Preserves each flow's separate validation, warning/debug channel, operation-log ordering, unchanged checks, exact operation names/messages, and policy of leaving session state intact on validation or unchanged returns.
-- Re-reads each pending batch script's current namespace at confirmation time for batch Add Namespace, filters namespace-less scripts, deduplicates with StringComparer.OrdinalIgnoreCase while preserving first occurrence order, and materializes the result before invoking the Add Namespace callback.
-- Materializes operation-owned request snapshots before invoking callbacks: Single Replacement captures metadata, Single Add and Batch Replacement copy script paths to arrays, and Batch Add uses its already independent materialized target list, so clearing the dialog session cannot mutate a scheduled request.
-- Clears the complete session only after an actual operation callback returns and does not interpret the request coordinator operation's underlying bool result.
-- Does not reference SystemExplorerPlugin, GD, DebugLogger, _systems, EditorInterface, ScriptEditor, metadata formats, path policy, scope resolution, preflight, plan building, apply, dialog configuration, or dialog presentation.
+- Receives NamespaceRefactorDialogView, NamespaceRefactorDialogSessionState, namespace validation, Func<string, ScriptTextFileReadResult>, operation callbacks, debug logging, one warning callback, and operation logging through defensive constructor injection.
+- Preserves validation, unchanged checks, operation names, request snapshot materialization, and session clearing for single replacement, single Add, and batch replacement.
+- ConfirmBatchAdd(...) rereads every distinct current session path at confirmation. Only successful reads whose current parsed namespace is blank become candidates; successful namespaced files are excluded, MissingFile is recorded separately, and InvalidPath/ReadFailed/Uninitialized/thrown reads are recorded as failed.
+- Missing or unreadable paths can never be represented as scripts without namespace. Safe readable candidates continue according to existing batch atomics, while the read problems are reported through at most one batch summary rather than one dialog per file.
+- The confirmation reread selects current candidates only; NamespaceRefactorPreparationService and NamespaceRefactorSnapshotLoader still perform the final fresh snapshot reads before plan construction and mutation.
+- Raw FailureDetail is used only in diagnostics and is not copied into normal warning text.
+- Does not perform preflight, plan building, writes, editor-buffer mutation, or dialog presentation.
 
 QuickActions/RefactorNamespace/NamespaceOpenBufferActivationService.cs
 - Defines the internal Refactor Namespace-specific activation orchestration service under SystemExplorer.QuickActions.RefactorNamespace.
@@ -538,7 +552,7 @@ QuickActions/RefactorNamespace/NamespaceRefactorOpenBufferPreflightService.cs
 - ActivatingOnly preserves the existing single-buffer activation and autosave policy used by Single Add Namespace.
 - NonActivatingOnly preserves batch ordering as group lookup -> group autosave -> NamespaceOpenBufferReferenceGuard. Required group failures block; an optional group whose autosave/final verification fails is removed as an entire group before the guard, so every member remains inspectable.
 - NonActivatingWithActivationFallback first autosaves complete groups without activation. AmbiguousRequiredOpenBufferGroup blocks directly and can never be bypassed by activating one duplicate entry; only unsafe single-occurrence paths and optional one-member groups that failed group autosave may use the existing selective activation fallback.
-- Batch policies never activate script tabs. DidAutosave combines completed non-activating and selective activating phases, while failures remain pre-plan/pre-write.
+- Batch policies never activate script tabs. DidAutosave combines completed non-activating and selective activating phases and also remains true when an autosave write completed before its read-back verification failed; failures still remain pre-plan/pre-write for the requested namespace mutation.
 - Does not interpret metadata/_systems, build plans, write namespace files, refresh resources, display warnings/dialogs, or alter tree/selection/batch context outside explicitly selected activation policy.
 
 QuickActions/RefactorNamespace/NamespaceRefactorPlanBuildCoordinator.cs
@@ -593,11 +607,13 @@ QuickActions/RefactorNamespace/NamespaceRefactorPostApplyCoordinator.cs
 
 QuickActions/RefactorNamespace/NamespaceRefactorPostApplyEditorService.cs
 - Defines the internal deferred editor synchronization/target restoration service under SystemExplorer.QuickActions.RefactorNamespace.
-- Preserves the single pending case-insensitive original-text state, payload codec, file-existence filter, updated-text reread, original/updated reconstruction, state clearing, target restoration, and existing post-apply call order.
-- Adds only a diagnostic owner operation id beside the shared deferred text state; prepare/consume logs expose missing, replaced, or path-mismatched state as DeferredStateOperationMismatch-style evidence without changing which state is consumed.
-- During deferred refresh, uses LocateOpenScriptEditorGroupsByScriptTextsWithoutActivation(...) and applies committed disk text to every member of every complete group through ScriptEditorBufferBatchService.ApplyCommittedTexts(...), keeping stale case-alias tabs synchronized and saved.
-- Incomplete groups remain untouched rather than selecting a representative editor; successful blocking apply/preflight is responsible for ensuring affected groups were complete before physical writes.
-- Does not schedule deferred calls, interpret apply results, display warnings, write files, refresh resources itself, mutate tree/selection/focus, or know operation policy/metadata/_systems.
+- Preserves the single pending case-insensitive original-text state, payload codec, original/updated reconstruction, state clearing, target restoration, and existing post-apply call order.
+- Receives Func<string, ScriptTextFileReadResult> and adds a path to updatedTextsByPath only after IsSuccess. Missing, invalid, failed, thrown, and Uninitialized reads are logged with path/status/sanitized detail, never become an empty updated text, and do not block successful rereads for other paths.
+- A failed deferred read occurs after the namespace write may already have succeeded: the service performs no speculative rollback, leaves that path's open buffer untouched, clears deferred state safely, and continues synchronization for the verified successful subset.
+- During deferred refresh, uses LocateOpenScriptEditorGroupsByScriptTextsWithoutActivation(...) and applies committed verified disk text to every member of every complete group through ScriptEditorBufferBatchService.ApplyCommittedTexts(...).
+- Adds only a diagnostic owner operation id beside the shared deferred text state; prepare/consume logs expose state mismatch and partial read-back results without changing callback ordering.
+- Incomplete groups and failed-read paths remain untouched rather than selecting a representative editor or applying unverified text.
+- Does not schedule deferred calls, display warnings, write files, refresh resources itself, mutate tree/selection/focus, or know operation policy/metadata/_systems.
 
 QuickActions/RefactorNamespace/NamespaceScriptPathPayloadCodec.cs
 - Defines the internal static Refactor Namespace-specific path-payload codec under SystemExplorer.QuickActions.RefactorNamespace.
@@ -608,7 +624,8 @@ QuickActions/RefactorNamespace/NamespaceScriptPathPayloadCodec.cs
 
 QuickActions/RefactorNamespace/NamespaceScriptEditorBufferAutosaveFailureMessageBuilder.cs
 - Defines the internal static Refactor Namespace-specific mapping from operation-neutral ScriptEditorBufferAutosaveResult failures to cancellation messages.
-- Preserves existing saved-disk mismatch, write-failure, and read-back mismatch wording and adds the group-state warning for UnsafeOpenBufferGroupState when aliases can no longer be verified safely.
+- Distinguishes DiskReadFailed before mutation from AutosaveVerificationReadFailed after a possible completed autosave; the latter says the buffer was autosaved but the namespace operation was not applied.
+- Preserves saved-disk mismatch, write-failure, verification-mismatch, and UnsafeOpenBufferGroupState messages.
 - Returns an empty string for unknown/empty failures and does not autosave, read/write files, show UI, log, choose operation policy, or reference SystemExplorerPlugin.
 
 QuickActions/RefactorNamespace/NamespaceTextRewriter.cs
@@ -648,24 +665,21 @@ QuickActions/RefactorNamespace/NamespaceRefactorScopeResolver.cs
 
 QuickActions/RefactorNamespace/NamespaceRefactorSnapshotLoader.cs
 - Defines the Godot-independent NamespaceRefactorSnapshotLoader and NamespaceSnapshotLoadResult under SystemExplorer.QuickActions.RefactorNamespace.
-- Reads already-decided C# script paths into immutable NamespaceScriptSnapshot objects through small normalization, existence-check, and text-read delegates supplied by the plugin; the normalization delegate is ScriptPathUtility.Normalize.
-- Filters blank/non-C# paths, normalizes and deduplicates paths case-insensitively, and builds a read-only snapshot index using StringComparer.OrdinalIgnoreCase.
-- Preserves the first-request order separately for target-sensitive plan input and can reuse an existing snapshot index through LoadInto(...) without rereading paths.
-- When existing snapshots are reused, normalizes each snapshot's own Path as its identity, recreates only snapshots whose stored path is not already normalized, and prevents an external dictionary key from creating an alias or disagreeing with the indexed snapshot path.
-- If multiple imported snapshots normalize to the same path, the later enumerated snapshot retains the existing dictionary assignment behavior and wins.
-- Reports missing paths and delegate failures as separate read-only lists without Godot warnings, dialogs, or debug logging.
+- Reads already-decided C# script paths through Func<string, ScriptTextFileReadResult>; the former separate existence-check delegate is absent, avoiding an extra time-of-check/time-of-use split.
+- Filters blank/non-C# paths, normalizes and deduplicates case-insensitively, and builds a read-only snapshot index plus first-request-order list.
+- Creates NamespaceScriptSnapshot only when IsSuccess is true, including Success with Text="" for a legitimate empty file. MissingFile enters MissingPaths; InvalidPath, ReadFailed, Uninitialized, normalization failures, and thrown read delegates enter FailedPaths.
+- Failed reads never enter SnapshotsByPath or SnapshotsInRequestOrder, and readResult.Text is consumed only inside the verified-success branch.
+- Preserves imported snapshot reuse, path identity rules, request order, and read-only result collections.
 - Receives one combined operation path list from NamespaceRefactorPreparationService, so a path shared by target/reference/declaration roles is read at most once within that preparation.
-- Does not decide System/Folder/single scope, inspect _systems, assign operational snapshot roles, build namespace-plan semantics, write files, cache snapshots across operations, or handle editor buffers/state.
+- Does not decide scope, inspect _systems, build namespace-plan semantics, write files, cache snapshots across operations, display warnings, or handle editor buffers/state.
 
 QuickActions/RefactorNamespace/NamespaceRefactorBatchDialogPreparationCoordinator.cs
 - Defines the internal sealed, Godot-independent NamespaceRefactorBatchDialogPreparationCoordinator and immutable NamespaceRefactorBatchDialogPreparationResult under SystemExplorer.QuickActions.RefactorNamespace.
-- Receives the existing NamespaceRefactorPreparationService and a general Action<string> debug-log delegate through defensive constructor injection; it does not reference SystemExplorerPlugin or instantiate DebugLogger.
-- Calls NamespaceRefactorPreparationService.ScanNamespaces(...) for already-selected batch script paths and owns the operational interpretation of that scan before dialog setup.
-- Logs missing paths first and failed paths second in the scan result's exposed order with the existing exact batch namespace-scan messages.
-- Builds dialog namespace options only from NamespacesByPath.Values by filtering null/empty/whitespace values, applying Distinct(StringComparer.Ordinal), applying ordinal OrderBy(...), and materializing the result in that order.
-- Identifies readable scripts without namespaces through NamespacesByPath.Values.Any(string.IsNullOrWhiteSpace), so missing and unreadable scripts are not counted.
-- Logs the existing metadata-specific cancellation only after scan diagnostics when neither namespace options nor readable scripts without namespaces exist, and returns a failed result with an empty read-only list and false HasScriptsWithoutNamespace.
-- Returns only Success, a defensively copied read-only namespace list, and HasScriptsWithoutNamespace; it owns no metadata scope resolution, pending state, callbacks, Godot controls, dialog presentation, confirmation, preflight, plan building, writes, or editor context.
+- Receives NamespaceRefactorPreparationService and a debug-log delegate, calls ScanNamespaces(...) for already-selected paths, and interprets only the dialog-opening snapshot.
+- Logs missing paths first and failed paths second, builds ordered distinct namespace options only from successful snapshots, and identifies scripts without namespace only from successfully read text; legitimate empty files count, missing/unreadable files do not.
+- Returns only dialog information: Success, a defensively copied namespace list, and HasScriptsWithoutNamespace. It does not preserve a scripts-without-namespace candidate list for execution.
+- NamespaceRefactorDialogSessionState retains the complete scoped paths, and NamespaceRefactorDialogConfirmationCoordinator rereads them at confirmation before the final plan builder rereads snapshots again.
+- Does not own metadata scope resolution, pending state, callbacks, Godot controls, confirmation, preflight, writes, or editor context.
 
 QuickActions/RefactorNamespace/NamespaceRefactorPreparationService.cs
 - Defines the Godot-independent NamespaceRefactorPreparationService plus immutable NamespaceRefactorPreparationResult and NamespaceRefactorNamespaceScanResult models under SystemExplorer.QuickActions.RefactorNamespace.
@@ -694,13 +708,14 @@ QuickActions/RefactorNamespace/NamespaceRefactorPlanBuilder.cs
 - After a successful preflight, the plan-build responsibility chain is NamespaceRefactorFeature-composed request metadata and path-role policy -> NamespaceRefactorPlanBuildCoordinator -> NamespaceRefactorPreparationService -> NamespaceRefactorPlanBuilder -> NamespaceRefactorApplyCoordinator.
 - Application then continues through NamespaceRefactorPendingWriteApplyService -> NamespaceRefactorPostApplyCoordinator -> NamespaceRefactorPostApplyEditorService plus NamespaceRefactorPluginHost-supplied current-editor, logging, warning, deferred-target, selection, and focus delegates backed by injected plugin integrations. NamespaceRefactorApplyCoordinator invokes the apply service first, treats blocking pre-write failures through the warning path, proceeds to NamespaceRefactorPostApplyCoordinator only for the successful applied subset, and then invokes the host-owned incomplete-write report callback when failed paths remain.
 Partials/SystemExplorerPlugin.EditorOperationLifecycle.cs
-- Owns the plugin-facing execution boundary for protected long-running editor operations, including single-operation admission, observed Task execution, expected cancellation handling, exception observation, post-await plugin/Godot validity checks, foreground busy-cursor entry/exit around the complete protected body, and idempotent shutdown coordination before the normal editor teardown.
-- Implements the EditorPlugin _Build pre-run barrier: any active System Explorer editor operation is cancelled and its managed completion is checked without synchronously blocking Godot's main thread; the current Play attempt is denied when quiescence has not yet been reached and cursor cleanup remains tied to actual execution completion.
+- Owns the plugin-facing execution boundary for protected long-running editor operations, including explicit begin-status handling, observed Task execution, expected cancellation handling, exception observation, post-await plugin/Godot validity checks, foreground busy-cursor entry/exit around the complete protected body, and idempotent shutdown coordination before the normal editor teardown.
+- Owns the managed asynchronous handoff when the first foreground request preempts an active background operation: it awaits the exact preempted lease Completion once, validates the captured plugin and EditorOperationLifetime plus managed-assembly and Godot lifecycle state, and then performs one reserved foreground start attempt without deferred calls, signals, timers, frame queues, or _Process retries.
+- Implements the EditorPlugin _Build pre-run barrier: any active System Explorer editor operation or pending foreground-preemption reservation is cancelled/invalidated and its managed completion is checked without synchronously blocking Godot's main thread; the current Play attempt is denied when quiescence has not yet been reached and cursor cleanup remains tied to actual execution completion.
 - Recreates the pure managed operation lifetime idempotently for the current managed assembly generation and connects it to Beautify/CSharpier and the plugin-facing NamespaceRefactor adapter without moving formatter, namespace request/write, dialog, editor-state, process, or Godot cursor semantics into the shared lifetime layer.
 
 Partials/SystemExplorerPlugin.EditorProcess.cs
-- Owns the plugin's single Godot _Process override and pumps pending callback-free tree-state work before evaluating busy-cursor reapplication on every active process frame.
-- Centrally enables or disables plugin processing from the combined need of the current foreground busy cursor and TreeStatePersistence.cs's pending frame-based save queue.
+- Owns the plugin's single Godot _Process override and pumps pending callback-free tree-view-state work before evaluating busy-cursor reapplication on every active process frame.
+- Centrally enables or disables plugin processing from the combined need of the current foreground busy cursor and TreeStatePersistence.cs's shared expansion/selection frame-based save queue.
 - Keeps processing active while either responsibility needs more frames and disables it only when neither tree-state work nor busy-cursor reapplication remains; a native busy-cursor marker without a valid managed cursor owner never drives frame reapplication.
 
 Partials/SystemExplorerPlugin.EditorOperationCursor.cs
@@ -712,12 +727,14 @@ Partials/SystemExplorerPlugin.EditorOperationCursor.cs
 
 EditorIntegration/Operations/EditorOperationLifetime.cs
 - Defines the Godot-independent plugin-instance operation lifetime and one-operation gate, owns the shared shutdown CancellationTokenSource, rejects new leases after shutdown, tracks the current lease through actual execution completion, and registers a non-static AssemblyLoadContext unload callback that performs managed-only cancellation and process termination.
+- Owns the explicit Started / Rejected / background-cancellation-requested / unavailable begin-status model and the lock-protected short-lived reservation that lets only the first foreground request await and retry after one active background lease; it returns Completion from that exact lease while requesting cancellation through the lease's existing process-kill path.
+- Rejects all additional starts while the foreground-preemption reservation exists, validates reservation ownership on the single retry, clears the reservation on start, retry rejection, build cancellation, shutdown, assembly unload, and disposal, and never stores Godot references or implements a general operation queue.
 - Exposes active-operation quiescence through the current lease completion Task, keeps cancellation-requested separate from execution-completed, and does not clear the active lease until the protected operation's outer finally signals completion.
 - Its shutdown and disposal paths are idempotent and do not reference SystemExplorerPlugin, Godot objects, controls, editor APIs, dialogs, or Godot-backed logging.
 
 EditorIntegration/Operations/EditorOperationLease.cs
 - Defines the Godot-independent disposable handle for one protected editor operation, exposes its name, cancellation token, completion Task, cancellation/execution/disposal state, current state, and thread-safe active-process registration.
-- Its RunContinuationsAsynchronously completion source is signalled exactly once by the plugin-facing outer execution boundary; cancellation and shutdown kill registered process trees best-effort, while execution completion and disposal remain distinct idempotent transitions.
+- Its RunContinuationsAsynchronously completion source is signalled exactly once by the plugin-facing outer execution boundary after the owner has identity-safely released the completed lease; cancellation and shutdown kill registered process trees best-effort, while execution completion and disposal remain distinct idempotent transitions.
 
 QuickActions/Beautify/CSharpier/CSharpierProcessRunner.cs
 - Defines the Godot-independent asynchronous CSharpier process runner used by formatting, installation, uninstall, warm-up, fallback probing, and normal command probing.

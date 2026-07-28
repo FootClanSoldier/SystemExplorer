@@ -688,60 +688,6 @@ public partial class SystemExplorerPlugin
 		return true;
 	}
 
-	private bool TryGetScriptFilterResultForTreeItem(
-		TreeItem item,
-		out ScriptFilterResult matchingResult
-	)
-	{
-		matchingResult = default;
-
-		if (!IsScriptFilterActive() || _tree == null || item == null)
-			return false;
-
-		TreeItem root = _tree.GetRoot();
-		TreeItem current = root?.GetFirstChild();
-		List<ScriptFilterResult> results = GetFilteredScriptResults(
-			(_scriptFilterInput?.Text ?? "").Trim().ToLowerInvariant()
-		);
-
-		for (int index = 0; current != null && index < results.Count; index++)
-		{
-			if (current == item)
-			{
-				matchingResult = results[index];
-				return true;
-			}
-
-			current = current.GetNext();
-		}
-
-		return false;
-	}
-
-	private static bool TryGetSystemNameFromTreeItemParentChain(
-		TreeItem item,
-		out string systemName
-	)
-	{
-		systemName = "";
-		TreeItem current = item?.GetParent();
-
-		while (current != null)
-		{
-			string metadata = current.GetMetadata(0).AsString();
-
-			if (metadata.StartsWith("system::", StringComparison.Ordinal))
-			{
-				systemName = GetSystemNameFromMetadata(metadata);
-				return !string.IsNullOrWhiteSpace(systemName);
-			}
-
-			current = current.GetParent();
-		}
-
-		return false;
-	}
-
 	private bool TryFindScriptTreeItemByOccurrence(
 		ScriptTreeOccurrence occurrence,
 		out TreeItem item
@@ -811,39 +757,28 @@ public partial class SystemExplorerPlugin
 	)
 	{
 		item = null;
-		List<ScriptFilterResult> results = GetFilteredScriptResults(
-			(_scriptFilterInput?.Text ?? "").Trim().ToLowerInvariant()
-		);
-		TreeItem current = root.GetFirstChild();
 
-		for (int index = 0; current != null && index < results.Count; index++)
-		{
-			ScriptFilterResult result = results[index];
-
-			if (
-				string.Equals(result.SystemName, occurrence.SystemName, StringComparison.Ordinal)
-				&& string.Equals(result.Entry, occurrence.Entry, StringComparison.Ordinal)
-				&& string.Equals(
-					current.GetMetadata(0).AsString(),
-					$"script::{occurrence.Entry}",
-					StringComparison.Ordinal
-				)
-				&& TryGetScriptPathFromTreeItem(current, out string currentScriptPath)
-				&& string.Equals(
-					currentScriptPath,
-					occurrence.ScriptPath,
-					StringComparison.OrdinalIgnoreCase
-				)
+		if (
+			root == null
+			|| !TryFindScriptFilterTreeItemByIdentity(
+				occurrence.SystemName,
+				occurrence.Entry,
+				isSceneEntry: false,
+				out TreeItem matchingItem
 			)
-			{
-				item = current;
-				return true;
-			}
-
-			current = current.GetNext();
+			|| !TryGetScriptPathFromTreeItem(matchingItem, out string currentScriptPath)
+			|| !string.Equals(
+				currentScriptPath,
+				occurrence.ScriptPath,
+				StringComparison.OrdinalIgnoreCase
+			)
+		)
+		{
+			return false;
 		}
 
-		return false;
+		item = matchingItem;
+		return true;
 	}
 
 	private bool IsScriptTreeOccurrenceStillValid(ScriptTreeOccurrence occurrence)
@@ -1090,17 +1025,6 @@ public partial class SystemExplorerPlugin
 				normalizedPath,
 				StringComparison.OrdinalIgnoreCase
 			);
-	}
-
-	private void ExpandParentsForTreeItem(TreeItem item)
-	{
-		TreeItem parent = item?.GetParent();
-
-		while (parent != null)
-		{
-			parent.Collapsed = false;
-			parent = parent.GetParent();
-		}
 	}
 
 	private bool IsFocusedControlInsideCurrentScriptEditor(Control focusedControl)

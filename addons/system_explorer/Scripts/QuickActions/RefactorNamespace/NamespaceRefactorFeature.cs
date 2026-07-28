@@ -15,8 +15,7 @@ internal sealed class NamespaceRefactorFeature
 	);
 	private static readonly NamespaceRefactorSnapshotLoader RefactorNamespaceSnapshotLoader = new(
 		ScriptPathUtility.Normalize,
-		FileAccess.FileExists,
-		ScriptTextFileService.ReadText
+		ScriptTextFileService.TryReadText
 	);
 	private static readonly NamespaceRefactorPreparationService RefactorNamespacePreparationService =
 		new(RefactorNamespaceScopeResolver, RefactorNamespaceSnapshotLoader);
@@ -45,7 +44,7 @@ internal sealed class NamespaceRefactorFeature
 	private readonly Action<string, Action> _startForegroundEditorOperation;
 	private readonly Action _beginBatchScriptEditorContextPreservation;
 	private readonly Action _endBatchScriptEditorContextPreservation;
-	private readonly Func<string, string> _readNamespaceFromScript;
+	private readonly Func<string, ScriptTextFileReadResult> _readText;
 	private readonly Action<bool> _showConfiguredDialog;
 	private readonly Action<string, NamespaceRefactorDiagnosticContext> _scheduleDeferredBufferRefresh;
 	private readonly Action _syncSelectionAfterOperation;
@@ -93,7 +92,7 @@ internal sealed class NamespaceRefactorFeature
 		Action<string, Action> startForegroundEditorOperation,
 		Action beginBatchScriptEditorContextPreservation,
 		Action endBatchScriptEditorContextPreservation,
-		Func<string, string> readNamespaceFromScript,
+		Func<string, ScriptTextFileReadResult> readText,
 		Action<bool> showConfiguredDialog,
 		Action<string, NamespaceRefactorDiagnosticContext> scheduleDeferredBufferRefresh,
 		Action syncSelectionAfterOperation,
@@ -152,9 +151,7 @@ internal sealed class NamespaceRefactorFeature
 		_endBatchScriptEditorContextPreservation =
 			endBatchScriptEditorContextPreservation
 			?? throw new ArgumentNullException(nameof(endBatchScriptEditorContextPreservation));
-		_readNamespaceFromScript =
-			readNamespaceFromScript
-			?? throw new ArgumentNullException(nameof(readNamespaceFromScript));
+		_readText = readText ?? throw new ArgumentNullException(nameof(readText));
 		_showConfiguredDialog =
 			showConfiguredDialog ?? throw new ArgumentNullException(nameof(showConfiguredDialog));
 		_scheduleDeferredBufferRefresh =
@@ -236,8 +233,7 @@ internal sealed class NamespaceRefactorFeature
 		_postApplyEditorService ??= new NamespaceRefactorPostApplyEditorService(
 			_bufferLocator,
 			_bufferBatchService,
-			FileAccess.FileExists,
-			ScriptTextFileService.ReadText,
+			_readText,
 			path => ResourceLoader.Load<Script>(path)
 		);
 
@@ -297,7 +293,7 @@ internal sealed class NamespaceRefactorFeature
 				DialogSessionState,
 				BatchDialogPreparationCoordinator,
 				ScriptPathUtility.Normalize,
-				_readNamespaceFromScript,
+				_readText,
 				_showConfiguredDialog,
 				_debugLog
 			);
@@ -310,7 +306,8 @@ internal sealed class NamespaceRefactorFeature
 				_ensureSystemsLoadedForTreeOperation,
 				_getEntryFromMetadata,
 				_getScriptPathFromEntry,
-				_debugLog
+				_debugLog,
+				_showWarning
 			);
 
 	private NamespaceRefactorDialogConfirmationCoordinator DialogConfirmationCoordinator =>
@@ -320,7 +317,7 @@ internal sealed class NamespaceRefactorFeature
 				DialogSessionState,
 				DiagnosticTrace,
 				NamespaceTextRewriter.IsValidNamespaceName,
-				_readNamespaceFromScript,
+				_readText,
 				(diagnosticContext, metadata, oldNamespace, newNamespace) =>
 				{
 					_startForegroundEditorOperation(

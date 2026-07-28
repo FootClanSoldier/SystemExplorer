@@ -10,8 +10,8 @@ public partial class SystemExplorerPlugin
 	#region Tree Building and Expansion State
 	private void BuildTree(bool keepCurrentExpansionState = false)
 	{
-		bool previousSuppression = _isRestoringOrRebuildingPersistentTreeExpansion;
-		_isRestoringOrRebuildingPersistentTreeExpansion = true;
+		bool previousSuppression = _isRestoringOrRebuildingPersistentTreeState;
+		_isRestoringOrRebuildingPersistentTreeState = true;
 
 		try
 		{
@@ -19,9 +19,9 @@ public partial class SystemExplorerPlugin
 		}
 		finally
 		{
-			_isRestoringOrRebuildingPersistentTreeExpansion = previousSuppression;
+			_isRestoringOrRebuildingPersistentTreeState = previousSuppression;
 			if (!previousSuppression && _treeStateSaveDirty)
-				QueuePersistentTreeExpansionSave();
+				QueuePersistentTreeStateSave();
 		}
 	}
 
@@ -34,6 +34,17 @@ public partial class SystemExplorerPlugin
 
 		if (IsScriptFilterActive())
 		{
+			if (!_isFilteringScripts)
+			{
+				_expandedItemsBeforeScriptFilter.Clear();
+
+				foreach (string metadata in _expandedItems)
+					_expandedItemsBeforeScriptFilter.Add(metadata);
+
+				_selectedScriptEntryFromFilter = "";
+				_isFilteringScripts = true;
+			}
+
 			BuildFilteredItemTree(_scriptFilterInput.Text);
 			return;
 		}
@@ -474,6 +485,64 @@ public partial class SystemExplorerPlugin
 		return parent;
 	}
 
+	private static bool TryGetSystemNameFromTreeItemParentChain(
+		TreeItem item,
+		out string systemName
+	)
+	{
+		systemName = "";
+		TreeItem current = item?.GetParent();
+
+		while (current != null)
+		{
+			string metadata = current.GetMetadata(0).AsString();
+
+			if (metadata.StartsWith("system::", StringComparison.Ordinal))
+			{
+				systemName = GetSystemNameFromMetadata(metadata);
+				return !string.IsNullOrWhiteSpace(systemName);
+			}
+
+			current = current.GetParent();
+		}
+
+		return false;
+	}
+
+	private static TreeItem FindTreeItemByMetadataWithinSubtree(TreeItem root, string metadata)
+	{
+		if (root == null)
+			return null;
+
+		if (string.Equals(root.GetMetadata(0).AsString(), metadata, StringComparison.Ordinal))
+			return root;
+
+		TreeItem child = root.GetFirstChild();
+
+		while (child != null)
+		{
+			TreeItem found = FindTreeItemByMetadataWithinSubtree(child, metadata);
+
+			if (found != null)
+				return found;
+
+			child = child.GetNext();
+		}
+
+		return null;
+	}
+
+	private static void ExpandParentsForTreeItem(TreeItem item)
+	{
+		TreeItem parent = item?.GetParent();
+
+		while (parent != null)
+		{
+			parent.Collapsed = false;
+			parent = parent.GetParent();
+		}
+	}
+
 	#endregion
 
 	#region Tree Collapse Helpers
@@ -482,6 +551,8 @@ public partial class SystemExplorerPlugin
 		_expandedItems.Clear();
 		_forcedExpandedItems.Clear();
 		_expandedItemsBeforeScriptFilter.Clear();
+		_persistentTreeSelection = null;
+		QueuePersistentTreeStateSave();
 
 		if (_tree == null)
 			return;
@@ -500,7 +571,6 @@ public partial class SystemExplorerPlugin
 
 		CollapseTreeItemsRecursive(firstVisibleItem);
 		_tree.DeselectAll();
-		QueuePersistentTreeExpansionSave();
 	}
 
 	private static void CollapseTreeItemsRecursive(TreeItem item)

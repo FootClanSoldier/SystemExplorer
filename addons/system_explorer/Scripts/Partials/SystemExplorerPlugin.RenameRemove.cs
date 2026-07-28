@@ -4463,29 +4463,6 @@ public partial class SystemExplorerPlugin
 		return _tree.GetSelected() == targetItem;
 	}
 
-	private static TreeItem FindTreeItemByMetadataWithinSubtree(TreeItem root, string metadata)
-	{
-		if (root == null)
-			return null;
-
-		if (root.GetMetadata(0).AsString() == metadata)
-			return root;
-
-		TreeItem child = root.GetFirstChild();
-
-		while (child != null)
-		{
-			TreeItem found = FindTreeItemByMetadataWithinSubtree(child, metadata);
-
-			if (found != null)
-				return found;
-
-			child = child.GetNext();
-		}
-
-		return null;
-	}
-
 	private bool TryGetMatchingOpenScriptResources(
 		string scriptPath,
 		out EditorInterface editorInterface,

@@ -69,8 +69,14 @@ internal sealed class EditorOperationLease : IDisposable
 	internal void MarkExecutionCompleted()
 	{
 		if (Interlocked.Exchange(ref _executionCompleted, 1) != 0) return;
-		_completion.TrySetResult(true);
-		_owner.Complete(this);
+		try
+		{
+			_owner.Complete(this);
+		}
+		finally
+		{
+			_completion.TrySetResult(true);
+		}
 	}
 
 	public void Dispose()

@@ -14,7 +14,13 @@ public partial class SystemExplorerPlugin
 	private const string TreeStateTemporaryPath = TreeStatePath + ".tmp";
 	private const int TreeStateFormatVersion = 1;
 
-	private bool _isRestoringOrRebuildingPersistentTreeExpansion;
+	private readonly record struct PersistentTreeSelection(
+		string SystemName,
+		string Metadata
+	);
+
+	private PersistentTreeSelection? _persistentTreeSelection;
+	private bool _isRestoringOrRebuildingPersistentTreeState;
 	private bool _treeStateSaveDirty;
 	private bool _treeStateSaveQueued;
 	private bool _treeStateSaveWaitingForNextProcessFrame;
@@ -22,9 +28,10 @@ public partial class SystemExplorerPlugin
 	private string _lastTreeStateLoadFailure = "";
 	private string _lastTreeStateSaveFailure = "";
 
-	private void LoadPersistentTreeExpansionStateBestEffort(string reason)
+	private void LoadPersistentTreeStateBestEffort(string reason)
 	{
 		_expandedItems.Clear();
+		_persistentTreeSelection = null;
 
 		try
 		{
@@ -88,26 +95,93 @@ public partial class SystemExplorerPlugin
 			foreach (string metadata in normalizedExpandedItems)
 				_expandedItems.Add(metadata);
 
+			if (
+				TryReadPersistentTreeSelection(
+					root,
+					out PersistentTreeSelection? loadedSelection,
+					out string selectionFailureDetail
+				)
+			)
+			{
+				_persistentTreeSelection = loadedSelection;
+			}
+			else
+			{
+				_persistentTreeSelection = null;
+				LogPersistentTreeSelectionRestoreIgnored(
+					reason,
+					$"Stage='Load', Detail='{selectionFailureDetail}'"
+				);
+			}
+
 			_lastTreeStateLoadFailure = "";
 			DebugLogger.LogOperation(
-				"Persistent tree expansion loaded",
-				$"Reason='{reason}', ExpandedItems={_expandedItems.Count}"
+				"Persistent tree view state loaded",
+				BuildPersistentTreeStateLogDetail(reason, _expandedItems.Count, _persistentTreeSelection)
 			);
 		}
 		catch (Exception exception)
 		{
 			_expandedItems.Clear();
+			_persistentTreeSelection = null;
 			LogTreeStateLoadFailureOnce(reason, exception.Message);
 		}
 	}
 
-	private void QueuePersistentTreeExpansionSave()
+	private bool TryReadPersistentTreeSelection(
+		JsonElement root,
+		out PersistentTreeSelection? selection,
+		out string failureDetail
+	)
+	{
+		selection = null;
+		failureDetail = "";
+
+		if (!root.TryGetProperty("selected_item", out JsonElement selectedItemElement))
+			return true;
+
+		if (selectedItemElement.ValueKind == JsonValueKind.Null)
+			return true;
+
+		if (selectedItemElement.ValueKind != JsonValueKind.Object)
+		{
+			failureDetail = "Tree-state selected_item must be an object or null.";
+			return false;
+		}
+
+		if (
+			!selectedItemElement.TryGetProperty("system_name", out JsonElement systemNameElement)
+			|| systemNameElement.ValueKind != JsonValueKind.String
+			|| !selectedItemElement.TryGetProperty("metadata", out JsonElement metadataElement)
+			|| metadataElement.ValueKind != JsonValueKind.String
+		)
+		{
+			failureDetail = "Tree-state selected_item must contain string system_name and metadata values.";
+			return false;
+		}
+
+		var candidate = new PersistentTreeSelection(
+			systemNameElement.GetString() ?? "",
+			metadataElement.GetString() ?? ""
+		);
+
+		if (!IsPersistentTreeSelectionIdentityWellFormed(candidate, out failureDetail))
+			return false;
+
+		if (!IsPersistentTreeSelectionStillValid(candidate, out failureDetail))
+			return false;
+
+		selection = candidate;
+		return true;
+	}
+
+	private void QueuePersistentTreeStateSave()
 	{
 		if (_treeStatePersistenceShutdown)
 			return;
 
 		_treeStateSaveDirty = true;
-		if (_isRestoringOrRebuildingPersistentTreeExpansion)
+		if (_isRestoringOrRebuildingPersistentTreeState)
 			return;
 
 		if (!_treeStateSaveQueued)
@@ -122,14 +196,14 @@ public partial class SystemExplorerPlugin
 	private bool HasPendingPersistentTreeStateProcessWork() =>
 		!_treeStatePersistenceShutdown && _treeStateSaveQueued;
 
-	private void ProcessPendingPersistentTreeExpansionSave()
+	private void ProcessPendingPersistentTreeStateSave()
 	{
 		if (!_treeStateSaveQueued)
 			return;
 
 		if (_treeStatePersistenceShutdown)
 		{
-			ClearPendingPersistentTreeExpansionSave();
+			ClearPendingPersistentTreeStateSave();
 			return;
 		}
 
@@ -140,12 +214,12 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (_isRestoringOrRebuildingPersistentTreeExpansion)
+		if (_isRestoringOrRebuildingPersistentTreeState)
 			return;
 
 		if (!IsValidGodotObject(this))
 		{
-			ClearPendingPersistentTreeExpansionSave();
+			ClearPendingPersistentTreeStateSave();
 			return;
 		}
 
@@ -153,13 +227,13 @@ public partial class SystemExplorerPlugin
 		{
 			if (!IsInsideTree())
 			{
-				ClearPendingPersistentTreeExpansionSave();
+				ClearPendingPersistentTreeStateSave();
 				return;
 			}
 		}
 		catch
 		{
-			ClearPendingPersistentTreeExpansionSave();
+			ClearPendingPersistentTreeStateSave();
 			return;
 		}
 
@@ -172,17 +246,17 @@ public partial class SystemExplorerPlugin
 		_treeStateSaveWaitingForNextProcessFrame = false;
 
 		if (shouldSave)
-			SavePersistentTreeExpansionStateBestEffort("Frame-pumped tree expansion change");
+			SavePersistentTreeStateBestEffort("Frame-pumped tree view state change");
 	}
 
-	private void ClearPendingPersistentTreeExpansionSave()
+	private void ClearPendingPersistentTreeStateSave()
 	{
 		_treeStateSaveDirty = false;
 		_treeStateSaveQueued = false;
 		_treeStateSaveWaitingForNextProcessFrame = false;
 	}
 
-	private void SavePersistentTreeExpansionStateBestEffort(string reason)
+	private void SavePersistentTreeStateBestEffort(string reason)
 	{
 		try
 		{
@@ -190,6 +264,23 @@ public partial class SystemExplorerPlugin
 			List<string> orderedExpandedItems = expansionSource
 				.OrderBy(metadata => metadata, StringComparer.OrdinalIgnoreCase)
 				.ToList();
+			PersistentTreeSelection? selectedItem = _persistentTreeSelection;
+
+			if (
+				selectedItem.HasValue
+				&& !IsPersistentTreeSelectionStillValid(
+					selectedItem.Value,
+					out string selectionFailureDetail
+				)
+			)
+			{
+				_persistentTreeSelection = null;
+				selectedItem = null;
+				LogPersistentTreeSelectionRestoreIgnored(
+					reason,
+					$"Stage='Save', Detail='Selected item is no longer valid: {selectionFailureDetail}'"
+				);
+			}
 
 			using var stream = new System.IO.MemoryStream();
 			using (
@@ -211,6 +302,20 @@ public partial class SystemExplorerPlugin
 					writer.WriteStringValue(metadata);
 
 				writer.WriteEndArray();
+				writer.WritePropertyName("selected_item");
+
+				if (selectedItem.HasValue)
+				{
+					writer.WriteStartObject();
+					writer.WriteString("system_name", selectedItem.Value.SystemName);
+					writer.WriteString("metadata", selectedItem.Value.Metadata);
+					writer.WriteEndObject();
+				}
+				else
+				{
+					writer.WriteNullValue();
+				}
+
 				writer.WriteEndObject();
 				writer.Flush();
 			}
@@ -248,14 +353,390 @@ public partial class SystemExplorerPlugin
 
 			_lastTreeStateSaveFailure = "";
 			DebugLogger.LogOperation(
-				"Persistent tree expansion saved",
-				$"Reason='{reason}', ExpandedItems={orderedExpandedItems.Count}"
+				"Persistent tree view state saved",
+				BuildPersistentTreeStateLogDetail(reason, orderedExpandedItems.Count, selectedItem)
 			);
 		}
 		catch (Exception exception)
 		{
 			LogTreeStateSaveFailureOnce(reason, exception.Message);
 		}
+	}
+
+	private void UpdatePersistentTreeSelectionFromTreeItem(TreeItem item)
+	{
+		if (!TryCreatePersistentTreeSelection(item, out PersistentTreeSelection selection))
+			return;
+
+		if (_persistentTreeSelection.HasValue && IsSamePersistentTreeSelection(
+			_persistentTreeSelection.Value,
+			selection
+		))
+		{
+			return;
+		}
+
+		_persistentTreeSelection = selection;
+		QueuePersistentTreeStateSave();
+	}
+
+	private bool TryCreatePersistentTreeSelection(
+		TreeItem item,
+		out PersistentTreeSelection selection
+	)
+	{
+		selection = default;
+
+		if (item == null || !GodotObject.IsInstanceValid(item))
+			return false;
+
+		string metadata = item.GetMetadata(0).AsString();
+		if (!IsSupportedPersistentTreeSelectionMetadata(metadata))
+			return false;
+
+		string systemName;
+
+		if (
+			metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal)
+		)
+		{
+			systemName = GetSystemNameFromMetadata(metadata);
+		}
+		else if (IsScriptFilterActive())
+		{
+			if (!TryGetScriptFilterResultForTreeItem(item, out ScriptFilterResult result))
+				return false;
+
+			bool metadataRepresentsScene = metadata.StartsWith(
+				"sceneLink::",
+				StringComparison.Ordinal
+			);
+
+			if (
+				metadataRepresentsScene != IsSceneEntry(result.Entry)
+				|| !string.Equals(
+					metadata,
+					metadataRepresentsScene
+						? $"sceneLink::{result.Entry}"
+						: $"script::{result.Entry}",
+					StringComparison.Ordinal
+				)
+			)
+			{
+				return false;
+			}
+
+			systemName = result.SystemName;
+			metadata = metadataRepresentsScene
+				? $"sceneLink::{result.Entry}"
+				: $"script::{result.Entry}";
+		}
+		else if (!TryGetSystemNameFromTreeItemParentChain(item, out systemName))
+		{
+			return false;
+		}
+
+		var candidate = new PersistentTreeSelection(systemName, metadata);
+		if (!IsPersistentTreeSelectionIdentityWellFormed(candidate, out _))
+			return false;
+
+		if (!IsPersistentTreeSelectionStillValid(candidate, out _))
+			return false;
+
+		selection = candidate;
+		return true;
+	}
+
+	private void RestorePersistentTreeSelectionBestEffort(string reason)
+	{
+		if (!_persistentTreeSelection.HasValue)
+		{
+			LogPersistentTreeSelectionRestoreIgnored(reason, "Detail='No selected item was persisted.'");
+			return;
+		}
+
+		PersistentTreeSelection selection = _persistentTreeSelection.Value;
+
+		if (!IsPersistentTreeSelectionStillValid(selection, out string validityFailureDetail))
+		{
+			_persistentTreeSelection = null;
+			LogPersistentTreeSelectionRestoreIgnored(
+				reason,
+				$"Detail='Persisted selection is no longer valid: {validityFailureDetail}'"
+			);
+			return;
+		}
+
+		if (!IsValidGodotObject(_tree))
+		{
+			LogPersistentTreeSelectionRestoreIgnored(reason, "Detail='Tree is unavailable.'");
+			return;
+		}
+
+		TreeItem root = _tree.GetRoot();
+		if (root == null)
+		{
+			LogPersistentTreeSelectionRestoreIgnored(reason, "Detail='Tree root is unavailable.'");
+			return;
+		}
+
+		TreeItem targetItem;
+
+		if (IsScriptFilterActive())
+		{
+			if (!IsScriptOrScenePersistentTreeSelection(selection))
+			{
+				LogPersistentTreeSelectionRestoreIgnored(
+					reason,
+					"Detail='The selected system or folder is temporarily unavailable in the flat filter tree.'"
+				);
+				return;
+			}
+
+			string entry = GetEntryFromMetadata(selection.Metadata);
+			bool isSceneEntry = selection.Metadata.StartsWith(
+				"sceneLink::",
+				StringComparison.Ordinal
+			);
+
+			if (!TryFindScriptFilterTreeItemByIdentity(
+				selection.SystemName,
+				entry,
+				isSceneEntry,
+				out targetItem
+			))
+			{
+				LogPersistentTreeSelectionRestoreIgnored(
+					reason,
+					"Detail='The selected item is valid but does not occur in the current filter result.'"
+				);
+				return;
+			}
+		}
+		else
+		{
+			TreeItem systemItem = FindDirectSystemTreeItem(root, selection.SystemName);
+			targetItem = systemItem == null
+				? null
+				: FindTreeItemByMetadataWithinSubtree(systemItem, selection.Metadata);
+
+			if (targetItem == null)
+			{
+				_persistentTreeSelection = null;
+				QueuePersistentTreeStateSave();
+				LogPersistentTreeSelectionRestoreIgnored(
+					reason,
+					"Detail='The exact selected item was not found in its owning system subtree.'"
+				);
+				return;
+			}
+		}
+
+		bool previousSuppression = _isRestoringOrRebuildingPersistentTreeState;
+		_isRestoringOrRebuildingPersistentTreeState = true;
+		bool restored = false;
+
+		try
+		{
+			ExpandParentsForTreeItem(targetItem);
+
+			if (_tree.GetSelected() != targetItem)
+				targetItem.Select(0);
+
+			_tree.ScrollToItem(targetItem);
+			UpdateTreeLockIconVisibility();
+			restored = _tree.GetSelected() == targetItem;
+		}
+		catch (Exception exception)
+		{
+			LogPersistentTreeSelectionRestoreIgnored(
+				reason,
+				$"Detail='Selection application failed: {exception.Message}'"
+			);
+		}
+		finally
+		{
+			_isRestoringOrRebuildingPersistentTreeState = previousSuppression;
+			if (!previousSuppression && _treeStateSaveDirty)
+				QueuePersistentTreeStateSave();
+		}
+
+		if (!restored)
+		{
+			LogPersistentTreeSelectionRestoreIgnored(
+				reason,
+				"Detail='Tree selection verification did not match the intended item.'"
+			);
+			return;
+		}
+
+		DebugLogger.LogOperation(
+			"Persistent tree selection restored",
+			BuildPersistentTreeSelectionLogDetail(reason, selection)
+		);
+	}
+
+	private static TreeItem FindDirectSystemTreeItem(TreeItem root, string systemName)
+	{
+		if (root == null || string.IsNullOrWhiteSpace(systemName))
+			return null;
+
+		string expectedMetadata = $"system::{systemName}";
+		TreeItem current = root.GetFirstChild();
+
+		while (current != null)
+		{
+			if (
+				string.Equals(
+					current.GetMetadata(0).AsString(),
+					expectedMetadata,
+					StringComparison.Ordinal
+				)
+			)
+			{
+				return current;
+			}
+
+			current = current.GetNext();
+		}
+
+		return null;
+	}
+
+	private bool IsPersistentTreeSelectionStillValid(
+		PersistentTreeSelection selection,
+		out string failureDetail
+	)
+	{
+		failureDetail = "";
+
+		if (!IsPersistentTreeSelectionIdentityWellFormed(selection, out failureDetail))
+			return false;
+
+		if (!_systems.TryGetValue(selection.SystemName, out List<string> entries))
+		{
+			failureDetail = $"System '{selection.SystemName}' does not exist.";
+			return false;
+		}
+
+		if (selection.Metadata.StartsWith("system::", StringComparison.Ordinal))
+			return true;
+
+		if (selection.Metadata.StartsWith("folder::", StringComparison.Ordinal))
+		{
+			string folderPath = GetFolderPathFromMetadata(selection.Metadata);
+			bool folderExists = entries.Any(entry =>
+				entry.StartsWith("folder::", StringComparison.Ordinal)
+				&& string.Equals(
+					GetFolderPathFromFolderEntry(entry),
+					folderPath,
+					StringComparison.Ordinal
+				)
+			);
+
+			if (!folderExists)
+				failureDetail = $"Folder '{folderPath}' does not exist in system '{selection.SystemName}'.";
+
+			return folderExists;
+		}
+
+		string selectedEntry = GetEntryFromMetadata(selection.Metadata);
+		bool expectsScene = selection.Metadata.StartsWith(
+			"sceneLink::",
+			StringComparison.Ordinal
+		);
+
+		bool entryExists = entries.Any(entry =>
+			string.Equals(entry, selectedEntry, StringComparison.Ordinal)
+			&& IsSceneEntry(entry) == expectsScene
+		);
+
+		if (!entryExists)
+			failureDetail = $"Entry '{selectedEntry}' does not exist with the expected type in system '{selection.SystemName}'.";
+
+		return entryExists;
+	}
+
+	private static bool IsPersistentTreeSelectionIdentityWellFormed(
+		PersistentTreeSelection selection,
+		out string failureDetail
+	)
+	{
+		failureDetail = "";
+
+		if (string.IsNullOrWhiteSpace(selection.SystemName))
+		{
+			failureDetail = "Selected system name is empty.";
+			return false;
+		}
+
+		if (!IsSupportedPersistentTreeSelectionMetadata(selection.Metadata))
+		{
+			failureDetail = $"Unsupported selected metadata '{selection.Metadata}'.";
+			return false;
+		}
+
+		if (
+			selection.Metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| selection.Metadata.StartsWith("folder::", StringComparison.Ordinal)
+		)
+		{
+			string metadataSystemName = GetSystemNameFromMetadata(selection.Metadata);
+			if (!string.Equals(metadataSystemName, selection.SystemName, StringComparison.Ordinal))
+			{
+				failureDetail = "Selected metadata does not match its stored system name.";
+				return false;
+			}
+		}
+
+		if (
+			selection.Metadata.StartsWith("folder::", StringComparison.Ordinal)
+			&& string.IsNullOrWhiteSpace(GetFolderPathFromMetadata(selection.Metadata))
+		)
+		{
+			failureDetail = "Selected folder metadata has no folder path.";
+			return false;
+		}
+
+		if (
+			IsScriptOrScenePersistentTreeSelection(selection)
+			&& string.IsNullOrWhiteSpace(GetEntryFromMetadata(selection.Metadata))
+		)
+		{
+			failureDetail = "Selected script or scene metadata has no entry.";
+			return false;
+		}
+
+		return true;
+	}
+
+	private static bool IsSupportedPersistentTreeSelectionMetadata(string metadata)
+	{
+		if (string.IsNullOrWhiteSpace(metadata))
+			return false;
+
+		return metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal)
+			|| metadata.StartsWith("script::", StringComparison.Ordinal)
+			|| metadata.StartsWith("sceneLink::", StringComparison.Ordinal);
+	}
+
+	private static bool IsScriptOrScenePersistentTreeSelection(
+		PersistentTreeSelection selection
+	)
+	{
+		return selection.Metadata.StartsWith("script::", StringComparison.Ordinal)
+			|| selection.Metadata.StartsWith("sceneLink::", StringComparison.Ordinal);
+	}
+
+	private static bool IsSamePersistentTreeSelection(
+		PersistentTreeSelection left,
+		PersistentTreeSelection right
+	)
+	{
+		return string.Equals(left.SystemName, right.SystemName, StringComparison.Ordinal)
+			&& string.Equals(left.Metadata, right.Metadata, StringComparison.Ordinal);
 	}
 
 	private HashSet<string> CaptureNormalTreeExpansionForPersistence()
@@ -310,21 +791,54 @@ public partial class SystemExplorerPlugin
 
 	private void PrepareTreeStatePersistenceForManagedAssemblyRecovery()
 	{
-		ClearPendingPersistentTreeExpansionSave();
+		ClearPendingPersistentTreeStateSave();
 		_treeStatePersistenceShutdown = false;
-		_isRestoringOrRebuildingPersistentTreeExpansion = false;
+		_isRestoringOrRebuildingPersistentTreeState = false;
 		RefreshEditorPluginProcessingState();
 	}
 
 	private void FlushAndShutdownTreeStatePersistence()
 	{
 		if (!_treeStatePersistenceShutdown && IsValidGodotObject(_tree))
-			SavePersistentTreeExpansionStateBestEffort("Plugin Exit");
+			SavePersistentTreeStateBestEffort("Plugin Exit");
 
 		_treeStatePersistenceShutdown = true;
-		_isRestoringOrRebuildingPersistentTreeExpansion = false;
-		ClearPendingPersistentTreeExpansionSave();
+		_isRestoringOrRebuildingPersistentTreeState = false;
+		ClearPendingPersistentTreeStateSave();
 		RefreshEditorPluginProcessingState();
+	}
+
+	private static string BuildPersistentTreeStateLogDetail(
+		string reason,
+		int expandedItemCount,
+		PersistentTreeSelection? selection
+	)
+	{
+		string selectionDetail = selection.HasValue
+			? $"SelectedSystem='{selection.Value.SystemName}', SelectedMetadata='{selection.Value.Metadata}'"
+			: "SelectedSystem='<null>', SelectedMetadata='<null>'";
+
+		return $"Reason='{reason}', ExpandedItems={expandedItemCount}, {selectionDetail}";
+	}
+
+	private static string BuildPersistentTreeSelectionLogDetail(
+		string reason,
+		PersistentTreeSelection selection
+	)
+	{
+		return $"Reason='{reason}', SelectedSystem='{selection.SystemName}', SelectedMetadata='{selection.Metadata}'";
+	}
+
+	private void LogPersistentTreeSelectionRestoreIgnored(string reason, string detail)
+	{
+		string selectionDetail = _persistentTreeSelection.HasValue
+			? $", SelectedSystem='{_persistentTreeSelection.Value.SystemName}', SelectedMetadata='{_persistentTreeSelection.Value.Metadata}'"
+			: ", SelectedSystem='<null>', SelectedMetadata='<null>'";
+
+		DebugLogger.LogOperation(
+			"Persistent tree selection restore ignored",
+			$"Reason='{reason}', {detail}{selectionDetail}"
+		);
 	}
 
 	private void LogTreeStateLoadFailureOnce(string reason, string detail)
@@ -334,7 +848,7 @@ public partial class SystemExplorerPlugin
 			return;
 
 		_lastTreeStateLoadFailure = failure;
-		DebugLogger.LogOperation("Persistent tree expansion load ignored", failure);
+		DebugLogger.LogOperation("Persistent tree view state load ignored", failure);
 	}
 
 	private void LogTreeStateSaveFailureOnce(string reason, string detail)
@@ -344,7 +858,7 @@ public partial class SystemExplorerPlugin
 			return;
 
 		_lastTreeStateSaveFailure = failure;
-		DebugLogger.LogOperation("Persistent tree expansion save ignored", failure);
+		DebugLogger.LogOperation("Persistent tree view state save ignored", failure);
 	}
 	#endregion
 }

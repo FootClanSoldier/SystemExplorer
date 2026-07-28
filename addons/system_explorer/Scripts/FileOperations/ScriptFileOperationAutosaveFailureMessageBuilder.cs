@@ -14,10 +14,14 @@ internal static class ScriptFileOperationAutosaveFailureMessageBuilder
 
 		return autosaveResult.Failure switch
 		{
+			ScriptEditorBufferAutosaveFailure.DiskReadFailed =>
+				$"{operationName} cancelled: System Explorer could not read '{scriptPath}' from disk before continuing.",
 			ScriptEditorBufferAutosaveFailure.SavedBufferDiskMismatch =>
 				$"{operationName} cancelled: the open editor buffer for '{scriptPath}' does not match the file on disk before the operation. Save/reopen it and try again.",
 			ScriptEditorBufferAutosaveFailure.WriteFailed =>
 				$"{operationName} cancelled: could not autosave the open script buffer before continuing '{scriptPath}'.",
+			ScriptEditorBufferAutosaveFailure.AutosaveVerificationReadFailed =>
+				$"{operationName} cancelled: the editor buffer for '{scriptPath}' was autosaved, but System Explorer could not verify the saved file. The requested operation was not applied.",
 			ScriptEditorBufferAutosaveFailure.AutosaveVerificationMismatch =>
 				$"{operationName} cancelled: autosaved text for '{scriptPath}' did not match the open editor buffer. The operation was not applied.",
 			ScriptEditorBufferAutosaveFailure.UnsafeOpenBufferGroupState =>

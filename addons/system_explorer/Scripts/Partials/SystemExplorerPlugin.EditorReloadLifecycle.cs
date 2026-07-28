@@ -139,6 +139,7 @@ public partial class SystemExplorerPlugin
 		_managedAssemblyRecoveryReason = "";
 		ClearManagedAssemblyRecoveryFailure();
 		BuildTree(keepCurrentExpansionState: true);
+		RestorePersistentTreeSelectionBestEffort(reason);
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));
 		DebugLogger.LogOperation("Managed assembly recovery completed", $"Reason='{reason}', Strategy='{strategy}'");
 		return true;
@@ -283,7 +284,7 @@ public partial class SystemExplorerPlugin
 			validatedSystems,
 			folderBindingsReadResult.FolderBindings
 		);
-		LoadPersistentTreeExpansionStateBestEffort(reason);
+		LoadPersistentTreeStateBestEffort(reason);
 
 		DebugLogger.LogOperation(
 			"Persistent tree state loaded",

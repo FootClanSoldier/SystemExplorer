@@ -335,20 +335,30 @@ public partial class SystemExplorerPlugin
 				$"{operationName} skipped non-C# file '{normalizedScriptPath}'."
 			);
 
-		if (!FileAccess.FileExists(normalizedScriptPath))
-			return BeautifyScriptSkipped(
-				normalizedScriptPath,
-				$"{operationName} skipped missing script '{normalizedScriptPath}'."
-			);
-
-		string globalScriptPathForDebug = ProjectSettings.GlobalizePath(normalizedScriptPath);
-		DebugPrintBeautify(
-			$"{operationName} item path check: resExists={FileAccess.FileExists(normalizedScriptPath)}, globalPath='{globalScriptPathForDebug}', globalExists={System.IO.File.Exists(globalScriptPathForDebug)}"
+		ScriptTextFileReadResult initialReadResult = ScriptTextFileService.TryReadText(
+			normalizedScriptPath
 		);
 
-		string diskTextBeforeSync = ScriptTextFileService.ReadText(normalizedScriptPath);
+		if (!initialReadResult.IsSuccess)
+		{
+			DebugPrintBeautify(
+				$"{operationName} item initial disk read failed: path='{normalizedScriptPath}', status={initialReadResult.Status}, failureDetail='{GetDebugTextPreview(initialReadResult.FailureDetail)}'"
+			);
+
+			return initialReadResult.Status == ScriptTextFileReadStatus.MissingFile
+				? BeautifyScriptSkipped(
+					normalizedScriptPath,
+					$"{operationName} skipped missing script '{normalizedScriptPath}'."
+				)
+				: BeautifyScriptFailed(
+					normalizedScriptPath,
+					$"{operationName} failed: '{normalizedScriptPath}' could not be read. The file was left unchanged."
+				);
+		}
+
+		string diskTextBeforeSync = initialReadResult.Text;
 		DebugPrintBeautify(
-			$"{operationName} item disk read: path='{normalizedScriptPath}', originalLength={GetDebugLength(diskTextBeforeSync)}"
+			$"{operationName} item disk read: path='{normalizedScriptPath}', status={initialReadResult.Status}, originalLength={GetDebugLength(diskTextBeforeSync)}"
 		);
 
 		Dictionary<string, string> originalTextsByPath = new(StringComparer.OrdinalIgnoreCase)
@@ -390,16 +400,18 @@ public partial class SystemExplorerPlugin
 				openEditorsByPath,
 				out string originalText,
 				out didAutosaveOpenEditor,
+				out BeautifyEditorAutosaveFailure autosaveFailure,
 				out string autosaveFailureMessage
 			)
 		)
 		{
-			return BeautifyScriptSkipped(
-				normalizedScriptPath,
-				string.IsNullOrWhiteSpace(autosaveFailureMessage)
-					? $"{operationName} skipped '{normalizedScriptPath}' because the open editor buffer could not be autosaved safely."
-					: autosaveFailureMessage
-			);
+			string resolvedAutosaveFailureMessage = string.IsNullOrWhiteSpace(autosaveFailureMessage)
+				? $"{operationName} skipped '{normalizedScriptPath}' because the open editor buffer could not be autosaved safely."
+				: autosaveFailureMessage;
+
+			return autosaveFailure == BeautifyEditorAutosaveFailure.AutosaveVerificationReadFailed
+				? BeautifyScriptFailed(normalizedScriptPath, resolvedAutosaveFailureMessage)
+				: BeautifyScriptSkipped(normalizedScriptPath, resolvedAutosaveFailureMessage);
 		}
 
 		DebugPrintBeautify(
@@ -455,7 +467,22 @@ public partial class SystemExplorerPlugin
 				$"{operationName} failed: CSharpier produced empty formatted text for non-empty script '{normalizedScriptPath}'. The file was left unchanged."
 			);
 
-		string currentText = ScriptTextFileService.ReadText(normalizedScriptPath);
+		ScriptTextFileReadResult currentReadResult = ScriptTextFileService.TryReadText(
+			normalizedScriptPath
+		);
+
+		if (!currentReadResult.IsSuccess)
+		{
+			DebugPrintBeautify(
+				$"{operationName} item verification read failed after CSharpier: path='{normalizedScriptPath}', status={currentReadResult.Status}, failureDetail='{GetDebugTextPreview(currentReadResult.FailureDetail)}'"
+			);
+			return BeautifyScriptFailed(
+				normalizedScriptPath,
+				$"{operationName} failed: System Explorer could not read '{normalizedScriptPath}' to verify its current contents. The formatted text was not written."
+			);
+		}
+
+		string currentText = currentReadResult.Text;
 
 		if (currentText != originalText)
 			return BeautifyScriptFailed(

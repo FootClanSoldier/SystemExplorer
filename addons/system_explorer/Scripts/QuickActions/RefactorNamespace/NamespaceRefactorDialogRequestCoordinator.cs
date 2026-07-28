@@ -12,6 +12,7 @@ internal sealed class NamespaceRefactorDialogRequestCoordinator
 	private readonly Func<string, string> _getEntryFromMetadata;
 	private readonly Func<string, string> _getScriptPathFromEntry;
 	private readonly Action<string> _debugLog;
+	private readonly Action<string> _showWarning;
 
 	internal NamespaceRefactorDialogRequestCoordinator(
 		NamespaceRefactorProjectScopeCoordinator projectScopeCoordinator,
@@ -19,7 +20,8 @@ internal sealed class NamespaceRefactorDialogRequestCoordinator
 		Func<string, bool> ensureSystemsLoadedForTreeOperation,
 		Func<string, string> getEntryFromMetadata,
 		Func<string, string> getScriptPathFromEntry,
-		Action<string> debugLog
+		Action<string> debugLog,
+		Action<string> showWarning
 	)
 	{
 		_projectScopeCoordinator =
@@ -37,6 +39,7 @@ internal sealed class NamespaceRefactorDialogRequestCoordinator
 			getScriptPathFromEntry
 			?? throw new ArgumentNullException(nameof(getScriptPathFromEntry));
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
+		_showWarning = showWarning ?? throw new ArgumentNullException(nameof(showWarning));
 	}
 
 	internal void Open(string metadata)
@@ -56,7 +59,11 @@ internal sealed class NamespaceRefactorDialogRequestCoordinator
 		string scriptEntry = _getEntryFromMetadata(metadata);
 		string scriptPath = _getScriptPathFromEntry(scriptEntry);
 
-		_dialogOpeningCoordinator.OpenSingle(metadata, scriptPath);
+		NamespaceRefactorDialogOpenResult openResult =
+			_dialogOpeningCoordinator.OpenSingle(metadata, scriptPath);
+
+		if (!openResult.Success && !string.IsNullOrWhiteSpace(openResult.FailureMessage))
+			_showWarning(openResult.FailureMessage);
 	}
 
 	private void OpenBatch(string metadata)

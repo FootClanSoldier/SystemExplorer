@@ -585,7 +585,7 @@ public partial class SystemExplorerPlugin
 	private void OnTreeItemCollapsedSignal(TreeItem item)
 	{
 		if (EnsureManagedAssemblyStateCurrent("Tree Item Expansion Changed"))
-			QueuePersistentTreeExpansionSave();
+			QueuePersistentTreeStateSave();
 	}
 
 	private void OnTreeGuiInputSignal(InputEvent inputEvent)

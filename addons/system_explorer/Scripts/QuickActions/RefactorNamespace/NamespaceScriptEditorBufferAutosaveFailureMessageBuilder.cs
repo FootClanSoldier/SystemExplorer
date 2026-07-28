@@ -11,10 +11,14 @@ internal static class NamespaceScriptEditorBufferAutosaveFailureMessageBuilder
 
 		return autosaveResult.Failure switch
 		{
+			ScriptEditorBufferAutosaveFailure.DiskReadFailed =>
+				$"Refactor Namespace cancelled: System Explorer could not read '{scriptPath}' from disk before continuing.",
 			ScriptEditorBufferAutosaveFailure.SavedBufferDiskMismatch =>
 				$"Refactor Namespace cancelled: the open editor buffer for '{scriptPath}' does not match the file on disk before scanning namespace usages. Save/reopen it before refactoring.",
 			ScriptEditorBufferAutosaveFailure.WriteFailed =>
 				$"Refactor Namespace cancelled: could not autosave affected script before refactoring '{scriptPath}'. Some script buffers may already have been saved.",
+			ScriptEditorBufferAutosaveFailure.AutosaveVerificationReadFailed =>
+				$"Refactor Namespace cancelled: the editor buffer for '{scriptPath}' was autosaved, but System Explorer could not verify the saved file. The namespace refactor was not applied.",
 			ScriptEditorBufferAutosaveFailure.AutosaveVerificationMismatch =>
 				$"Refactor Namespace cancelled: autosaved text for '{scriptPath}' did not match the open editor buffer. The namespace refactor was not applied.",
 			ScriptEditorBufferAutosaveFailure.UnsafeOpenBufferGroupState =>

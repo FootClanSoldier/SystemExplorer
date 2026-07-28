@@ -130,7 +130,7 @@ internal sealed class NamespaceRefactorPluginHost
 			startForegroundEditorOperation,
 			beginBatchScriptEditorContextPreservation,
 			endBatchScriptEditorContextPreservation,
-			ReadNamespaceFromScript,
+			ScriptTextFileService.TryReadText,
 			ShowConfiguredDialog,
 			ScheduleDeferredBufferRefresh,
 			syncSelectionAfterOperation,
@@ -188,15 +188,6 @@ internal sealed class NamespaceRefactorPluginHost
 		Callable.From(() => _incompleteWriteReportDialog.PopupCentered()).CallDeferred();
 	}
 
-	private static string ReadNamespaceFromScript(string scriptPath)
-	{
-		if (!FileAccess.FileExists(scriptPath))
-			return "";
-
-		return NamespaceTextRewriter.GetNamespaceFromText(
-			ScriptTextFileService.ReadText(scriptPath)
-		);
-	}
 
 	private void ShowConfiguredDialog(bool selectAllNewNamespace)
 	{

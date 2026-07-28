@@ -1,5 +1,6 @@
 #if TOOLS
 using Godot;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -249,6 +250,90 @@ public partial class SystemExplorerPlugin
 			.ToList();
 	}
 
+	private List<ScriptFilterResult> GetCurrentScriptFilterResults()
+	{
+		return GetFilteredScriptResults(
+			(_scriptFilterInput?.Text ?? "").Trim().ToLowerInvariant()
+		);
+	}
+
+	private bool TryGetScriptFilterResultForTreeItem(
+		TreeItem item,
+		out ScriptFilterResult matchingResult
+	)
+	{
+		matchingResult = default;
+
+		if (!IsScriptFilterActive() || _tree == null || item == null)
+			return false;
+
+		TreeItem current = _tree.GetRoot()?.GetFirstChild();
+		List<ScriptFilterResult> results = GetCurrentScriptFilterResults();
+
+		for (int index = 0; current != null && index < results.Count; index++)
+		{
+			if (current == item)
+			{
+				matchingResult = results[index];
+				return true;
+			}
+
+			current = current.GetNext();
+		}
+
+		return false;
+	}
+
+	private bool TryFindScriptFilterTreeItemByIdentity(
+		string systemName,
+		string entry,
+		bool isSceneEntry,
+		out TreeItem item
+	)
+	{
+		item = null;
+
+		if (
+			!IsScriptFilterActive()
+			|| _tree == null
+			|| string.IsNullOrWhiteSpace(systemName)
+			|| string.IsNullOrWhiteSpace(entry)
+		)
+		{
+			return false;
+		}
+
+		string expectedMetadata = isSceneEntry
+			? $"sceneLink::{entry}"
+			: $"script::{entry}";
+		TreeItem current = _tree.GetRoot()?.GetFirstChild();
+		List<ScriptFilterResult> results = GetCurrentScriptFilterResults();
+
+		for (int index = 0; current != null && index < results.Count; index++)
+		{
+			ScriptFilterResult result = results[index];
+
+			if (
+				string.Equals(result.SystemName, systemName, StringComparison.Ordinal)
+				&& string.Equals(result.Entry, entry, StringComparison.Ordinal)
+				&& IsSceneEntry(result.Entry) == isSceneEntry
+				&& string.Equals(
+					current.GetMetadata(0).AsString(),
+					expectedMetadata,
+					StringComparison.Ordinal
+				)
+			)
+			{
+				item = current;
+				return true;
+			}
+
+			current = current.GetNext();
+		}
+
+		return false;
+	}
+
 	private Texture2D GetFilterResultIcon(string entry)
 	{
 		if (IsSceneEntry(entry))
@@ -261,6 +346,30 @@ public partial class SystemExplorerPlugin
 
 	private void ExitScriptFilterMode()
 	{
+		PersistentTreeSelection? selectionToRestore = _persistentTreeSelection;
+
+		if (
+			TryCreatePersistentTreeSelection(
+				_tree?.GetSelected(),
+				out PersistentTreeSelection selectedFilterItem
+			)
+		)
+		{
+			selectionToRestore = selectedFilterItem;
+
+			if (
+				!_persistentTreeSelection.HasValue
+				|| !IsSamePersistentTreeSelection(
+					_persistentTreeSelection.Value,
+					selectedFilterItem
+				)
+			)
+			{
+				_persistentTreeSelection = selectedFilterItem;
+				QueuePersistentTreeStateSave();
+			}
+		}
+
 		_isFilteringScripts = false;
 		EnsureSystemsLoadedForScriptFilter("Script Filter Exited");
 		_expandedItems.Clear();
@@ -268,26 +377,30 @@ public partial class SystemExplorerPlugin
 		foreach (string metadata in _expandedItemsBeforeScriptFilter)
 			_expandedItems.Add(metadata);
 
-		RevealScriptAfterFilter(_selectedScriptEntryFromFilter);
+		RevealPersistentSelectionAfterFilter(selectionToRestore);
 		BuildTree(true);
 
-		if (!string.IsNullOrWhiteSpace(_selectedScriptEntryFromFilter))
-			SelectTreeItemByMetadata(
-				IsSceneEntry(_selectedScriptEntryFromFilter)
-					? $"sceneLink::{_selectedScriptEntryFromFilter}"
-					: $"script::{_selectedScriptEntryFromFilter}"
-			);
+		if (selectionToRestore.HasValue)
+			RestorePersistentTreeSelectionBestEffort("Script Filter Exit");
 	}
 
-	private void RevealScriptAfterFilter(string entry)
+	private void RevealPersistentSelectionAfterFilter(
+		PersistentTreeSelection? exactSelection
+	)
 	{
-		if (string.IsNullOrWhiteSpace(entry))
+		if (
+			!exactSelection.HasValue
+			|| !IsScriptOrScenePersistentTreeSelection(exactSelection.Value)
+		)
+		{
 			return;
+		}
 
-		string systemName = FindSystemNameForEntry(entry);
+		string entry = GetEntryFromMetadata(exactSelection.Value.Metadata);
+		string systemName = exactSelection.Value.SystemName;
 		string folderPath = GetFolderPathFromEntry(entry);
 
-		if (string.IsNullOrWhiteSpace(systemName))
+		if (string.IsNullOrWhiteSpace(entry) || string.IsNullOrWhiteSpace(systemName))
 			return;
 
 		if (string.IsNullOrWhiteSpace(folderPath))

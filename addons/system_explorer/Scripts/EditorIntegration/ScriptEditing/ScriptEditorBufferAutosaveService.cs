@@ -8,8 +8,10 @@ namespace SystemExplorer.EditorIntegration.ScriptEditing;
 internal enum ScriptEditorBufferAutosaveFailure
 {
 	None,
+	DiskReadFailed,
 	SavedBufferDiskMismatch,
 	WriteFailed,
+	AutosaveVerificationReadFailed,
 	AutosaveVerificationMismatch,
 	UnsafeOpenBufferGroupState,
 }
@@ -25,8 +27,10 @@ internal enum ScriptEditorBufferAutosaveDiagnosticReason
 	UnsavedMemberIsNotCurrent,
 	SavedMemberBecameUnsaved,
 	SavedMemberDiskMismatch,
+	DiskReadFailed,
 	SavedBufferDiskMismatch,
 	WriteFailed,
+	AutosaveVerificationReadFailed,
 	AutosaveVerificationMismatch,
 }
 
@@ -53,18 +57,19 @@ internal readonly record struct ScriptEditorBufferAutosaveResult(
 		string scriptPath,
 		ScriptEditorBufferAutosaveFailure failure,
 		ScriptEditorBufferAutosaveDiagnosticReason diagnosticReason =
-			ScriptEditorBufferAutosaveDiagnosticReason.None
-	) => new(false, false, scriptPath ?? "", failure, diagnosticReason);
+			ScriptEditorBufferAutosaveDiagnosticReason.None,
+		bool didAutosave = false
+	) => new(false, didAutosave, scriptPath ?? "", failure, diagnosticReason);
 }
 
 internal sealed class ScriptEditorBufferAutosaveService
 {
-	private readonly Func<string, string> _readTextFile;
+	private readonly Func<string, ScriptTextFileReadResult> _readTextFile;
 	private readonly Func<string, string, bool> _writeTextFile;
 	private readonly Func<string, string, bool> _textsMatchForDiskVerification;
 
 	internal ScriptEditorBufferAutosaveService(
-		Func<string, string> readTextFile,
+		Func<string, ScriptTextFileReadResult> readTextFile,
 		Func<string, string, bool> writeTextFile,
 		Func<string, string, bool> textsMatchForDiskVerification
 	)
@@ -173,7 +178,23 @@ internal sealed class ScriptEditorBufferAutosaveService
 			);
 		}
 
-		string diskText = _readTextFile(openEditorGroup.Path);
+		ScriptTextFileReadResult diskReadResult = ReadTextSafely(openEditorGroup.Path);
+
+		if (!diskReadResult.IsSuccess)
+		{
+			diagnostics?.Log(
+				"Autosave",
+				() =>
+					$"Group verification failed before write; Path='{openEditorGroup.Path}'; Failure={ScriptEditorBufferAutosaveFailure.DiskReadFailed}; Reason={ScriptEditorBufferAutosaveDiagnosticReason.DiskReadFailed}; ReadStatus={diskReadResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(diskReadResult.FailureDetail)}'"
+			);
+			return ScriptEditorBufferAutosaveResult.Failed(
+				openEditorGroup.Path,
+				ScriptEditorBufferAutosaveFailure.DiskReadFailed,
+				ScriptEditorBufferAutosaveDiagnosticReason.DiskReadFailed
+			);
+		}
+
+		string diskText = diskReadResult.Text;
 		memberNumber = 0;
 
 		foreach (OpenScriptEditorBuffer member in openEditorGroup.Buffers)
@@ -237,7 +258,24 @@ internal sealed class ScriptEditorBufferAutosaveService
 		if (!autosaveResult.Success)
 			return autosaveResult;
 
-		string committedText = _readTextFile(openEditorGroup.Path);
+		ScriptTextFileReadResult committedReadResult = ReadTextSafely(openEditorGroup.Path);
+
+		if (!committedReadResult.IsSuccess)
+		{
+			diagnostics?.Log(
+				"Autosave",
+				() =>
+					$"Group committed-text read failed after autosave; Path='{openEditorGroup.Path}'; Failure={ScriptEditorBufferAutosaveFailure.AutosaveVerificationReadFailed}; Reason={ScriptEditorBufferAutosaveDiagnosticReason.AutosaveVerificationReadFailed}; ReadStatus={committedReadResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(committedReadResult.FailureDetail)}'"
+			);
+			return ScriptEditorBufferAutosaveResult.Failed(
+				openEditorGroup.Path,
+				ScriptEditorBufferAutosaveFailure.AutosaveVerificationReadFailed,
+				ScriptEditorBufferAutosaveDiagnosticReason.AutosaveVerificationReadFailed,
+				didAutosave: autosaveResult.DidAutosave
+			);
+		}
+
+		string committedText = committedReadResult.Text;
 
 		foreach (OpenScriptEditorBuffer member in openEditorGroup.Buffers)
 		{
@@ -280,9 +318,28 @@ internal sealed class ScriptEditorBufferAutosaveService
 
 		if (!ScriptEditorBufferStateService.IsUnsaved(textEditor))
 		{
-			string diskText = _readTextFile(scriptPath);
+			ScriptTextFileReadResult diskReadResult = ReadTextSafely(scriptPath);
 
-			if (failOnSavedDiskMismatch && !_textsMatchForDiskVerification(editorText, diskText))
+			if (!diskReadResult.IsSuccess)
+			{
+				diagnostics?.Log(
+					"Autosave",
+					() =>
+						$"Single buffer verification failed before write; Path='{scriptPath}'; Failure={ScriptEditorBufferAutosaveFailure.DiskReadFailed}; Reason={ScriptEditorBufferAutosaveDiagnosticReason.DiskReadFailed}; ReadStatus={diskReadResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(diskReadResult.FailureDetail)}'"
+				);
+				return ScriptEditorBufferAutosaveResult.Failed(
+					scriptPath,
+					ScriptEditorBufferAutosaveFailure.DiskReadFailed,
+					ScriptEditorBufferAutosaveDiagnosticReason.DiskReadFailed
+				);
+			}
+
+			string diskText = diskReadResult.Text;
+
+			if (
+				failOnSavedDiskMismatch
+				&& !_textsMatchForDiskVerification(editorText, diskText)
+			)
 			{
 				diagnostics?.Log(
 					"Autosave",
@@ -304,6 +361,22 @@ internal sealed class ScriptEditorBufferAutosaveService
 			return ScriptEditorBufferAutosaveResult.Succeeded(scriptPath);
 		}
 
+		ScriptTextFileReadResult preAutosaveReadResult = ReadTextSafely(scriptPath);
+
+		if (!preAutosaveReadResult.IsSuccess)
+		{
+			diagnostics?.Log(
+				"Autosave",
+				() =>
+					$"Single buffer disk read failed before autosave; Path='{scriptPath}'; Failure={ScriptEditorBufferAutosaveFailure.DiskReadFailed}; Reason={ScriptEditorBufferAutosaveDiagnosticReason.DiskReadFailed}; ReadStatus={preAutosaveReadResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(preAutosaveReadResult.FailureDetail)}'"
+			);
+			return ScriptEditorBufferAutosaveResult.Failed(
+				scriptPath,
+				ScriptEditorBufferAutosaveFailure.DiskReadFailed,
+				ScriptEditorBufferAutosaveDiagnosticReason.DiskReadFailed
+			);
+		}
+
 		if (!_writeTextFile(scriptPath, editorText))
 		{
 			diagnostics?.Log(
@@ -318,7 +391,24 @@ internal sealed class ScriptEditorBufferAutosaveService
 			);
 		}
 
-		string savedEditorText = _readTextFile(scriptPath);
+		ScriptTextFileReadResult savedEditorReadResult = ReadTextSafely(scriptPath);
+
+		if (!savedEditorReadResult.IsSuccess)
+		{
+			diagnostics?.Log(
+				"Autosave",
+				() =>
+					$"Single buffer autosave read-back failed; Path='{scriptPath}'; Failure={ScriptEditorBufferAutosaveFailure.AutosaveVerificationReadFailed}; Reason={ScriptEditorBufferAutosaveDiagnosticReason.AutosaveVerificationReadFailed}; ReadStatus={savedEditorReadResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(savedEditorReadResult.FailureDetail)}'"
+			);
+			return ScriptEditorBufferAutosaveResult.Failed(
+				scriptPath,
+				ScriptEditorBufferAutosaveFailure.AutosaveVerificationReadFailed,
+				ScriptEditorBufferAutosaveDiagnosticReason.AutosaveVerificationReadFailed,
+				didAutosave: true
+			);
+		}
+
+		string savedEditorText = savedEditorReadResult.Text;
 
 		if (!_textsMatchForDiskVerification(savedEditorText, editorText))
 		{
@@ -330,7 +420,8 @@ internal sealed class ScriptEditorBufferAutosaveService
 			return ScriptEditorBufferAutosaveResult.Failed(
 				scriptPath,
 				ScriptEditorBufferAutosaveFailure.AutosaveVerificationMismatch,
-				ScriptEditorBufferAutosaveDiagnosticReason.AutosaveVerificationMismatch
+				ScriptEditorBufferAutosaveDiagnosticReason.AutosaveVerificationMismatch,
+				didAutosave: true
 			);
 		}
 
@@ -341,6 +432,28 @@ internal sealed class ScriptEditorBufferAutosaveService
 				$"Single buffer autosave succeeded; Path='{scriptPath}'; BufferText={diagnostics.DescribeText(editorText)}"
 		);
 		return ScriptEditorBufferAutosaveResult.Succeeded(scriptPath, didAutosave: true);
+	}
+
+	private ScriptTextFileReadResult ReadTextSafely(string scriptPath)
+	{
+		try
+		{
+			return _readTextFile(scriptPath);
+		}
+		catch (Exception exception)
+		{
+			return ScriptTextFileReadResult.Failed(
+				ScriptTextFileReadStatus.ReadFailed,
+				$"Read delegate threw {exception.GetType().Name}: {NormalizeDiagnosticDetail(exception.Message)}"
+			);
+		}
+	}
+
+	private static string NormalizeDiagnosticDetail(string detail)
+	{
+		return string.IsNullOrWhiteSpace(detail)
+			? ""
+			: detail.Replace('\r', ' ').Replace('\n', ' ').Trim();
 	}
 
 	private static ScriptEditorBufferAutosaveResult FailUnsafeGroup(

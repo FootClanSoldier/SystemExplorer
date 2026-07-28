@@ -6,6 +6,15 @@ using SystemExplorer.EditorIntegration.ScriptEditing;
 
 namespace SystemExplorer.QuickActions.Beautify;
 
+internal enum BeautifyEditorAutosaveFailure
+{
+	None,
+	SavedBufferDiskMismatch,
+	WriteFailed,
+	AutosaveVerificationReadFailed,
+	AutosaveVerificationMismatch,
+}
+
 internal sealed class BeautifyEditorStateService
 {
 	private readonly Action<string> _debugLog;
@@ -26,11 +35,13 @@ internal sealed class BeautifyEditorStateService
 		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath,
 		out string originalText,
 		out bool didAutosaveOpenEditor,
+		out BeautifyEditorAutosaveFailure failure,
 		out string failureMessage
 	)
 	{
 		originalText = diskText ?? "";
 		didAutosaveOpenEditor = false;
+		failure = BeautifyEditorAutosaveFailure.None;
 		failureMessage = "";
 
 		if (
@@ -49,6 +60,7 @@ internal sealed class BeautifyEditorStateService
 		{
 			if (textEditor.Text != originalText)
 			{
+				failure = BeautifyEditorAutosaveFailure.SavedBufferDiskMismatch;
 				failureMessage =
 					$"Beautify Script cancelled: the open editor buffer for '{scriptPath}' does not match the file on disk. Reload/save the script before formatting.";
 				return false;
@@ -61,15 +73,34 @@ internal sealed class BeautifyEditorStateService
 
 		if (!ScriptTextFileService.WriteText(scriptPath, editorText))
 		{
+			failure = BeautifyEditorAutosaveFailure.WriteFailed;
 			failureMessage =
 				$"Beautify Script cancelled: could not autosave the selected script before formatting '{scriptPath}'.";
 			return false;
 		}
 
-		string savedEditorText = ScriptTextFileService.ReadText(scriptPath);
+		didAutosaveOpenEditor = true;
+
+		ScriptTextFileReadResult savedEditorReadResult = ScriptTextFileService.TryReadText(
+			scriptPath
+		);
+
+		if (!savedEditorReadResult.IsSuccess)
+		{
+			failure = BeautifyEditorAutosaveFailure.AutosaveVerificationReadFailed;
+			_debugLog(
+				$"Beautify Script autosave read-back failed for '{scriptPath}': Status={savedEditorReadResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(savedEditorReadResult.FailureDetail)}'"
+			);
+			failureMessage =
+				$"Beautify Script cancelled: the editor buffer for '{scriptPath}' was autosaved, but System Explorer could not verify the saved file. The script was not formatted.";
+			return false;
+		}
+
+		string savedEditorText = savedEditorReadResult.Text;
 
 		if (savedEditorText != editorText)
 		{
+			failure = BeautifyEditorAutosaveFailure.AutosaveVerificationMismatch;
 			failureMessage =
 				$"Beautify Script cancelled: autosaved text for '{scriptPath}' did not match the open editor buffer. The script was not formatted.";
 			return false;
@@ -77,7 +108,6 @@ internal sealed class BeautifyEditorStateService
 
 		ScriptEditorBufferStateService.MarkCurrentVersionSaved(textEditor);
 		originalText = savedEditorText;
-		didAutosaveOpenEditor = true;
 		return true;
 	}
 
@@ -236,6 +266,13 @@ internal sealed class BeautifyEditorStateService
 	{
 		_pendingEditorViewStates.Clear();
 		_pendingEditorViewStateRestorePasses = 0;
+	}
+
+	private static string NormalizeDiagnosticDetail(string detail)
+	{
+		return string.IsNullOrWhiteSpace(detail)
+			? ""
+			: detail.Replace('\r', ' ').Replace('\n', ' ').Trim();
 	}
 
 	private void RestorePendingEditorViewStates()

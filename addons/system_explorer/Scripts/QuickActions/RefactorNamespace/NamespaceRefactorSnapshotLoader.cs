@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 namespace SystemExplorer.QuickActions.RefactorNamespace;
 
@@ -45,17 +46,14 @@ internal sealed class NamespaceSnapshotLoadResult
 internal sealed class NamespaceRefactorSnapshotLoader
 {
 	private readonly Func<string, string> _normalizePath;
-	private readonly Func<string, bool> _fileExists;
-	private readonly Func<string, string> _readText;
+	private readonly Func<string, ScriptTextFileReadResult> _readText;
 
 	internal NamespaceRefactorSnapshotLoader(
 		Func<string, string> normalizePath,
-		Func<string, bool> fileExists,
-		Func<string, string> readText
+		Func<string, ScriptTextFileReadResult> readText
 	)
 	{
 		_normalizePath = normalizePath ?? throw new ArgumentNullException(nameof(normalizePath));
-		_fileExists = fileExists ?? throw new ArgumentNullException(nameof(fileExists));
 		_readText = readText ?? throw new ArgumentNullException(nameof(readText));
 	}
 
@@ -122,7 +120,18 @@ internal sealed class NamespaceRefactorSnapshotLoader
 		{
 			foreach (string sourcePath in scriptPaths)
 			{
-				string scriptPath = _normalizePath(sourcePath ?? "");
+				string scriptPath;
+
+				try
+				{
+					scriptPath = _normalizePath(sourcePath ?? "");
+				}
+				catch
+				{
+					if (!string.IsNullOrWhiteSpace(sourcePath))
+						failedPaths.Add(sourcePath);
+					continue;
+				}
 
 				if (
 					string.IsNullOrWhiteSpace(scriptPath)
@@ -139,11 +148,11 @@ internal sealed class NamespaceRefactorSnapshotLoader
 					continue;
 				}
 
-				bool exists;
+				ScriptTextFileReadResult readResult;
 
 				try
 				{
-					exists = _fileExists(scriptPath);
+					readResult = _readText(scriptPath);
 				}
 				catch
 				{
@@ -151,22 +160,18 @@ internal sealed class NamespaceRefactorSnapshotLoader
 					continue;
 				}
 
-				if (!exists)
+				if (readResult.IsSuccess)
 				{
-					missingPaths.Add(scriptPath);
-					continue;
-				}
-
-				try
-				{
-					NamespaceScriptSnapshot snapshot = new(scriptPath, _readText(scriptPath));
+					NamespaceScriptSnapshot snapshot = new(scriptPath, readResult.Text);
 					snapshotsByPath[scriptPath] = snapshot;
 					snapshotsInRequestOrder.Add(snapshot);
+					continue;
 				}
-				catch
-				{
+
+				if (readResult.Status == ScriptTextFileReadStatus.MissingFile)
+					missingPaths.Add(scriptPath);
+				else
 					failedPaths.Add(scriptPath);
-				}
 			}
 		}
 

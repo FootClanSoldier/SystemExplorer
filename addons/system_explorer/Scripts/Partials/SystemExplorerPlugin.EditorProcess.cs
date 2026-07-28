@@ -7,11 +7,11 @@ public partial class SystemExplorerPlugin
 	{
 		try
 		{
-			ProcessPendingPersistentTreeExpansionSave();
+			ProcessPendingPersistentTreeStateSave();
 		}
 		catch
 		{
-			ClearPendingPersistentTreeExpansionSave();
+			ClearPendingPersistentTreeStateSave();
 		}
 
 		bool shouldReapplyBusyCursor = false;

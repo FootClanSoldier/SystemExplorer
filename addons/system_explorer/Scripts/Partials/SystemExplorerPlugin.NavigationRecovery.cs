@@ -18,6 +18,11 @@ public partial class SystemExplorerPlugin
 
 		UpdateTreeLockIconVisibility();
 
+		if (_isRestoringOrRebuildingPersistentTreeState)
+			return;
+
+		UpdatePersistentTreeSelectionFromTreeItem(selectedItem);
+
 		if (
 			_isSyncingTreeSelectionToActiveScript || _suppressNextTreeNavigationFromScriptEditorSync
 		)
