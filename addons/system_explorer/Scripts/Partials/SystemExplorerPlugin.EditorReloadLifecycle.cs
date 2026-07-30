@@ -138,6 +138,7 @@ public partial class SystemExplorerPlugin
 		_managedAssemblyRecoveryDeferredAttempts = 0;
 		_managedAssemblyRecoveryReason = "";
 		ClearManagedAssemblyRecoveryFailure();
+		EnsureEditorShortcutsRegistered();
 		BuildTree(keepCurrentExpansionState: true);
 		RestorePersistentTreeSelectionBestEffort(reason);
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));
@@ -436,7 +437,8 @@ public partial class SystemExplorerPlugin
 		_pendingBeautifyAfterCSharpierInstallMetadata = "";
 		_pendingBeautifyAfterCSharpierInstallScriptPaths = Array.Empty<string>();
 		_pendingBeautifyAfterCSharpierInstallIsBatch = false;
-		_pendingBeautifyAfterCSharpierInstallReleaseTreeFocusAfterNavigation = true;
+		_pendingBeautifyAfterCSharpierInstallInvocationOrigin =
+			BeautifyScriptInvocationOrigin.SystemExplorer;
 		_pendingMissingScriptEntry = "";
 		_pendingMissingScriptPath = "";
 		_pendingSceneLinkEntry = "";

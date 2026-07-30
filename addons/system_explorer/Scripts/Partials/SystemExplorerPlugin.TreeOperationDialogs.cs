@@ -49,6 +49,26 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
+	private sealed class DeferredTreeOperationDialogPresentation
+	{
+		internal string Title { get; }
+		internal string UserMessage { get; }
+		internal string PersistentDeduplicationKey { get; }
+
+		internal DeferredTreeOperationDialogPresentation(
+			string title,
+			string userMessage,
+			string persistentDeduplicationKey
+		)
+		{
+			Title = string.IsNullOrWhiteSpace(title) ? "Operation Failed" : title.Trim();
+			UserMessage = string.IsNullOrWhiteSpace(userMessage)
+				? "System Explorer could not complete the operation."
+				: userMessage.Trim();
+			PersistentDeduplicationKey = persistentDeduplicationKey?.Trim() ?? "";
+		}
+	}
+
 	private sealed class TreeOperationDialogScope : IDisposable
 	{
 		private SystemExplorerPlugin _owner;
@@ -390,6 +410,25 @@ public partial class SystemExplorerPlugin
 	private string GetActiveTreeOperationFailureUserMessage()
 	{
 		return _activeTreeOperationDialogContext?.Failure?.UserMessage ?? "";
+	}
+
+	private bool TryDeferActiveTreeOperationDialogPresentation(
+		out DeferredTreeOperationDialogPresentation presentation
+	)
+	{
+		presentation = null;
+		TreeOperationDialogContext context = _activeTreeOperationDialogContext;
+
+		if (context == null || !context.HasFailure)
+			return false;
+
+		presentation = new DeferredTreeOperationDialogPresentation(
+			ResolveTreeOperationDialogTitle(context.Title, context.Failure.Severity),
+			context.Failure.UserMessage,
+			context.PersistentDeduplicationKey
+		);
+		context.SuppressPresentation = true;
+		return true;
 	}
 
 	private void SuppressActiveTreeOperationDialogPresentation()

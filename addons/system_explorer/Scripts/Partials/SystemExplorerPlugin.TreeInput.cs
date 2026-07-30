@@ -170,15 +170,13 @@ public partial class SystemExplorerPlugin
 
 			string filteredScriptMetadata = item.GetMetadata(0).AsString();
 			_selectedScriptEntryFromFilter = GetEntryFromMetadata(filteredScriptMetadata);
-			OpenContextMenuForMetadata(filteredScriptMetadata);
+			OpenContextMenuForTreeItem(item);
 			_tree.AcceptEvent();
 			return;
 		}
 
 		item.Select(0);
-
-		string rightClickMetadata = item.GetMetadata(0).AsString();
-		OpenContextMenuForMetadata(rightClickMetadata);
+		OpenContextMenuForTreeItem(item);
 	}
 
 	private void OnTreeMouseExited()
@@ -212,18 +210,22 @@ public partial class SystemExplorerPlugin
 		if (!keyEvent.Pressed || keyEvent.Echo)
 			return;
 
-		if (IsCtrlLockCommand(keyEvent))
+		if (
+			IsEditorShortcut(BeautifyEditorShortcutPath, keyEvent)
+			&& TryHandleBeautifyShortcutForSelectedItem()
+		)
 		{
-			ToggleSelectedItemLock();
 			_tree.AcceptEvent();
 			return;
 		}
 
-		if (IsCtrlBeautifyCommand(keyEvent))
+		if (
+			!_isFilteringScripts
+			&& IsEditorShortcut(RemoveSelectedItemEditorShortcutPath, keyEvent)
+			&& TryOpenRemoveDialogForSelectedItem()
+		)
 		{
-			if (TryHandleBeautifyShortcutForSelectedItem())
-				_tree.AcceptEvent();
-
+			_tree.AcceptEvent();
 			return;
 		}
 
@@ -239,6 +241,7 @@ public partial class SystemExplorerPlugin
 			BuildTree(keepCurrentExpansionState: true);
 
 		CollapseEntireTree();
+		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
 		_tree.AcceptEvent();
 	}
 

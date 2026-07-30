@@ -1,5 +1,6 @@
 #if TOOLS
 using Godot;
+using System;
 
 public partial class SystemExplorerPlugin
 {
@@ -18,15 +19,42 @@ public partial class SystemExplorerPlugin
 	private const int ContextBeautifyScripts = 11;
 	private const int ContextBindFolder = 12;
 	private const int ContextUnbindFolder = 13;
+	private const string BeautifyUnavailableTooltip = "Beautify is busy.";
+	private const string RefactorNamespaceBeautifyRunningTooltip =
+		"Beautify is running.";
+	private const string QuickActionsNoScriptsTooltip = "No scripts found";
 
 	private Texture2D _contextHiddenSubmenuIcon;
+	private bool _pendingQuickActionsNoScriptsFound;
 	#endregion
 
 	#region Context Menu
-	private void OpenContextMenuForMetadata(string metadata)
+	private void OpenContextMenuForTreeItem(TreeItem item)
 	{
-		if (string.IsNullOrWhiteSpace(metadata))
+		if (item == null || !GodotObject.IsInstanceValid(item))
 			return;
+
+		string metadata = item.GetMetadata(0).AsString();
+
+		_pendingQuickActionsNoScriptsFound = false;
+
+		if (CanShowQuickActionsForMetadata(metadata))
+		{
+			bool isScript = metadata.StartsWith("script::", StringComparison.Ordinal);
+
+			if (!isScript)
+			{
+				bool isBatchQuickActionsTarget =
+					metadata.StartsWith("system::", StringComparison.Ordinal)
+					|| metadata.StartsWith("folder::", StringComparison.Ordinal);
+
+				if (isBatchQuickActionsTarget)
+				{
+					_pendingQuickActionsNoScriptsFound =
+						!TreeItemSubtreeContainsScript(item);
+				}
+			}
+		}
 
 		_pendingRemoveMetadata = metadata;
 		CapturePendingRemoveScriptOccurrence();
@@ -43,6 +71,47 @@ public partial class SystemExplorerPlugin
 
 		_contextMenu.Position = DisplayServer.MouseGetPosition();
 		_contextMenu.Popup();
+	}
+
+	private bool CanShowQuickActionsForMetadata(string metadata)
+	{
+		if (!EnableQuickActions || string.IsNullOrWhiteSpace(metadata))
+			return false;
+
+		return metadata.StartsWith("script::", StringComparison.Ordinal)
+			|| metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal);
+	}
+
+	private static bool TreeItemSubtreeContainsScript(TreeItem parent)
+	{
+		if (parent == null)
+			return false;
+
+		TreeItem child = parent.GetFirstChild();
+
+		while (child != null)
+		{
+			if (IsScriptTreeItem(child))
+				return true;
+
+			if (TreeItemSubtreeContainsScript(child))
+				return true;
+
+			child = child.GetNext();
+		}
+
+		return false;
+	}
+
+	private static bool IsScriptTreeItem(TreeItem item)
+	{
+		if (item == null)
+			return false;
+
+		string metadata = item.GetMetadata(0).AsString();
+
+		return metadata.StartsWith("script::", StringComparison.Ordinal);
 	}
 
 	private string GetAddFolderTargetMetadata(string metadata)
@@ -68,6 +137,9 @@ public partial class SystemExplorerPlugin
 
 		if (ShouldUseReversedContextSubmenuIcons())
 			BuildContextMenuForMetadata(metadata, useReversedSubmenuIcons: true);
+
+		if (CanShowQuickActionsForMetadata(metadata))
+			UpdateQuickActionsContextMenuAvailability();
 	}
 
 	private void BuildContextMenuForMetadata(string metadata, bool useReversedSubmenuIcons)
@@ -82,7 +154,7 @@ public partial class SystemExplorerPlugin
 		bool isScript = metadata.StartsWith("script::");
 		bool isScene = metadata.StartsWith("sceneLink::");
 		bool canShowNewAndAdd = !_isFilteringScripts;
-		bool canShowQuickActions = EnableQuickActions && (isScript || isSystem || isFolder);
+		bool canShowQuickActions = CanShowQuickActionsForMetadata(metadata);
 
 		UpdateContextSubmenuDirectionIcons(useReversedSubmenuIcons);
 
@@ -120,36 +192,22 @@ public partial class SystemExplorerPlugin
 				GetContextQuickActionsSubmenuItemIcon(useReversedSubmenuIcons)
 			);
 
-			if (isScript)
-			{
-				AddContextSubmenuIconItem(
-					_contextQuickActionsSubmenu,
-					"Beautify Script",
-					ContextBeautifyScript,
-					_contextBeautifyScriptIcon
-				);
-				AddContextSubmenuIconItem(
-					_contextQuickActionsSubmenu,
-					"Refactor Namespace",
-					ContextRefactorNamespace,
-					_contextRefactorNamespaceIcon
-				);
-			}
-			else if (isSystem || isFolder)
-			{
-				AddContextSubmenuIconItem(
-					_contextQuickActionsSubmenu,
-					"Beautify Scripts",
-					ContextBeautifyScripts,
-					_contextBeautifyScriptIcon
-				);
-				AddContextSubmenuIconItem(
-					_contextQuickActionsSubmenu,
-					"Refactor Namespace",
-					ContextRefactorNamespace,
-					_contextRefactorNamespaceIcon
-				);
-			}
+			int beautifyContextId = isScript
+				? ContextBeautifyScript
+				: ContextBeautifyScripts;
+
+			AddContextSubmenuIconItem(
+				_contextQuickActionsSubmenu,
+				"Beautify",
+				beautifyContextId,
+				_contextBeautifyScriptIcon
+			);
+			AddContextSubmenuIconItem(
+				_contextQuickActionsSubmenu,
+				"Refactor Namespace",
+				ContextRefactorNamespace,
+				_contextRefactorNamespaceIcon
+			);
 		}
 
 		if (isFolder)
@@ -427,6 +485,99 @@ public partial class SystemExplorerPlugin
 		_contextMenu.SetItemDisabled(index, disabled);
 	}
 
+	private void UpdateQuickActionsContextMenuAvailability()
+	{
+		if (!CanShowQuickActionsForMetadata(_pendingBeautifyScriptMetadata))
+			return;
+
+		UpdateBeautifyContextMenuAvailability(_pendingQuickActionsNoScriptsFound);
+		UpdateRefactorNamespaceContextMenuAvailability(
+			_pendingQuickActionsNoScriptsFound
+		);
+	}
+
+	private bool IsQuickActionsContextMenuHierarchyVisible()
+	{
+		try
+		{
+			bool mainMenuVisible = _contextMenu != null
+				&& GodotObject.IsInstanceValid(_contextMenu)
+				&& _contextMenu.Visible;
+			bool quickActionsSubmenuVisible = _contextQuickActionsSubmenu != null
+				&& GodotObject.IsInstanceValid(_contextQuickActionsSubmenu)
+				&& _contextQuickActionsSubmenu.Visible;
+
+			return mainMenuVisible || quickActionsSubmenuVisible;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	private void UpdateBeautifyContextMenuAvailability(bool noScriptsFound)
+	{
+		bool disabled = noScriptsFound || _isBeautifyingScript;
+		string tooltip = noScriptsFound
+			? QuickActionsNoScriptsTooltip
+			: _isBeautifyingScript
+				? BeautifyUnavailableTooltip
+				: string.Empty;
+
+		UpdateQuickActionContextMenuItemAvailability(
+			ContextBeautifyScript,
+			disabled,
+			tooltip
+		);
+		UpdateQuickActionContextMenuItemAvailability(
+			ContextBeautifyScripts,
+			disabled,
+			tooltip
+		);
+	}
+
+	private void UpdateQuickActionContextMenuItemAvailability(
+		int id,
+		bool disabled,
+		string tooltip
+	)
+	{
+		if (
+			_contextQuickActionsSubmenu == null
+			|| !GodotObject.IsInstanceValid(_contextQuickActionsSubmenu)
+		)
+		{
+			return;
+		}
+
+		int index = _contextQuickActionsSubmenu.GetItemIndex(id);
+
+		if (index < 0)
+			return;
+
+		if (_contextQuickActionsSubmenu.IsItemDisabled(index) != disabled)
+			_contextQuickActionsSubmenu.SetItemDisabled(index, disabled);
+
+		if (_contextQuickActionsSubmenu.GetItemTooltip(index) != tooltip)
+			_contextQuickActionsSubmenu.SetItemTooltip(index, tooltip);
+	}
+
+	private void UpdateRefactorNamespaceContextMenuAvailability(bool noScriptsFound)
+	{
+		bool disabled = noScriptsFound || _isBeautifyingScript;
+		string tooltip = noScriptsFound
+			? QuickActionsNoScriptsTooltip
+			: _isBeautifyingScript
+				? RefactorNamespaceBeautifyRunningTooltip
+				: string.Empty;
+
+		UpdateQuickActionContextMenuItemAvailability(
+			ContextRefactorNamespace,
+			disabled,
+			tooltip
+		);
+	}
+
 	private void OnContextMenuIdPressed(long id)
 	{
 		switch (id)
@@ -477,14 +628,33 @@ public partial class SystemExplorerPlugin
 				break;
 
 			case ContextRefactorNamespace:
+				if (
+					_isBeautifyingScript
+					|| _pendingQuickActionsNoScriptsFound
+				)
+				{
+					return;
+				}
+
 				OpenNamespaceRefactorDialog(_pendingRenameMetadata);
 				break;
 
 			case ContextBeautifyScript:
+				if (_isBeautifyingScript)
+					return;
+
 				OpenBeautifyScriptCSharpierCheckDialog();
 				break;
 
 			case ContextBeautifyScripts:
+				if (
+					_isBeautifyingScript
+					|| _pendingQuickActionsNoScriptsFound
+				)
+				{
+					return;
+				}
+
 				OpenBeautifyScriptsCSharpierCheckDialog();
 				break;
 		}

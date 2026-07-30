@@ -38,6 +38,111 @@ internal sealed class ScriptEditorBufferLocator
 			?? throw new ArgumentNullException(nameof(scriptTextsMatchForDiskVerification));
 	}
 
+	internal bool TryLocateCapturedEditorWithoutActivation(
+		ScriptEditor scriptEditor,
+		string scriptPath,
+		string capturedScriptPath,
+		Script capturedScript,
+		ScriptEditorBase capturedScriptEditorBase,
+		TextEdit capturedTextEditor,
+		out ScriptEditorBufferLookupResult result
+	)
+	{
+		result = new ScriptEditorBufferLookupResult(
+			new Dictionary<string, OpenScriptEditorBuffer>(StringComparer.OrdinalIgnoreCase)
+		);
+
+		try
+		{
+			string normalizedScriptPath = _normalizePath(scriptPath);
+			string normalizedCapturedPath = _normalizePath(capturedScriptPath);
+
+			if (
+				string.IsNullOrWhiteSpace(normalizedScriptPath)
+				|| !normalizedScriptPath.Equals(
+					normalizedCapturedPath,
+					StringComparison.OrdinalIgnoreCase
+				)
+				|| scriptEditor == null
+				|| !GodotObject.IsInstanceValid(scriptEditor)
+				|| capturedScript == null
+				|| !GodotObject.IsInstanceValid(capturedScript)
+				|| capturedScriptEditorBase == null
+				|| !GodotObject.IsInstanceValid(capturedScriptEditorBase)
+				|| capturedTextEditor == null
+				|| !GodotObject.IsInstanceValid(capturedTextEditor)
+				|| capturedTextEditor.IsQueuedForDeletion()
+			)
+			{
+				return false;
+			}
+
+			Control currentBaseEditor = capturedScriptEditorBase.GetBaseEditor();
+			if (
+				currentBaseEditor is not TextEdit currentTextEditor
+				|| !GodotObject.IsInstanceValid(currentTextEditor)
+				|| currentTextEditor.IsQueuedForDeletion()
+				|| currentTextEditor.GetInstanceId() != capturedTextEditor.GetInstanceId()
+			)
+			{
+				return false;
+			}
+
+			string currentCapturedScriptPath = _normalizePath(capturedScript.ResourcePath);
+			if (
+				!normalizedScriptPath.Equals(
+					currentCapturedScriptPath,
+					StringComparison.OrdinalIgnoreCase
+				)
+			)
+			{
+				return false;
+			}
+
+			HashSet<Script> matchingScriptInstances = new();
+			foreach (Script openScript in scriptEditor.GetOpenScripts())
+			{
+				if (
+					openScript == null
+					|| !GodotObject.IsInstanceValid(openScript)
+					|| !normalizedScriptPath.Equals(
+						_normalizePath(openScript.ResourcePath),
+						StringComparison.OrdinalIgnoreCase
+					)
+				)
+				{
+					continue;
+				}
+
+				matchingScriptInstances.Add(openScript);
+			}
+
+			if (
+				matchingScriptInstances.Count != 1
+				|| !matchingScriptInstances.Contains(capturedScript)
+			)
+			{
+				return false;
+			}
+
+			Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath = new(
+				StringComparer.OrdinalIgnoreCase
+			)
+			{
+				[normalizedScriptPath] = new OpenScriptEditorBuffer(
+					normalizedScriptPath,
+					capturedTextEditor
+				),
+			};
+			result = new ScriptEditorBufferLookupResult(openEditorsByPath);
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
 	// Compatibility surface for Beautify. Refactor Namespace uses the group-oriented methods.
 	internal ScriptEditorBufferLookupResult LocateByScriptTextsWithoutActivation(
 		ScriptEditor scriptEditor,

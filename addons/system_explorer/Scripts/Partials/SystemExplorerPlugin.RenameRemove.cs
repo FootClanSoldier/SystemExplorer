@@ -2450,6 +2450,11 @@ public partial class SystemExplorerPlugin
 		public bool IsCompleting { get; set; }
 		public bool EndSyncSuppression { get; init; }
 		public ScriptRenameEditorRestoreMode Mode { get; init; }
+		public DeferredTreeOperationDialogPresentation DeferredFailurePresentation
+		{
+			get;
+			set;
+		}
 		public bool IsValid =>
 			!string.IsNullOrWhiteSpace(TargetScriptPath)
 			&& !string.IsNullOrWhiteSpace(CanonicalOldScriptPath)
@@ -2898,7 +2903,10 @@ public partial class SystemExplorerPlugin
 					DebugLogger.LogOperation("Rename Script failed: close reactivation", closeFailureMessage);
 
 					if (recoveryRestoreQueued)
+					{
+						TryAttachActiveRenameFailureToPendingEditorRestore();
 						syncSuppressionQueuedForDeferredEnd = true;
+					}
 					else
 					{
 						QueueScriptRenameTreeRestore(treeState, entry, endSyncSuppression: true);
@@ -2938,7 +2946,10 @@ public partial class SystemExplorerPlugin
 					DebugLogger.LogOperation("Rename Script failed: close tab group", closeFailureMessage);
 
 					if (recoveryRestoreQueued)
+					{
+						TryAttachActiveRenameFailureToPendingEditorRestore();
 						syncSuppressionQueuedForDeferredEnd = true;
+					}
 					else
 					{
 						QueueScriptRenameTreeRestore(treeState, entry, endSyncSuppression: true);
@@ -2984,7 +2995,10 @@ public partial class SystemExplorerPlugin
 				);
 
 				if (recoveryRestoreQueued)
+				{
+					TryAttachActiveRenameFailureToPendingEditorRestore();
 					syncSuppressionQueuedForDeferredEnd = true;
+				}
 				else
 				{
 					QueueScriptRenameTreeRestore(treeState, entry, endSyncSuppression: true);
@@ -4242,7 +4256,32 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
+		TryAttachActiveRenameFailureToPendingEditorRestore();
+
 		return true;
+	}
+
+	private void TryAttachActiveRenameFailureToPendingEditorRestore()
+	{
+		PendingScriptRenameEditorRestore pendingRestore =
+			_pendingScriptRenameEditorRestore;
+
+		if (
+			pendingRestore == null
+			|| pendingRestore.DeferredFailurePresentation != null
+		)
+		{
+			return;
+		}
+
+		if (
+			TryDeferActiveTreeOperationDialogPresentation(
+				out DeferredTreeOperationDialogPresentation presentation
+			)
+		)
+		{
+			pendingRestore.DeferredFailurePresentation = presentation;
+		}
 	}
 
 	private void VerifyPendingScriptRenameEditorRestoreDeferred()
@@ -4675,45 +4714,79 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
+			DeferredTreeOperationDialogPresentation deferredFailurePresentation =
+				pendingRestore.DeferredFailurePresentation;
+			string technicalFailureDetails =
+				$"Mode='{pendingRestore.Mode}', Attempts={pendingRestore.DeferredAttemptCount}, {failureMessage}";
+
 			if (!succeeded)
 			{
-				string dialogTitle;
-				string userMessage;
+				if (deferredFailurePresentation != null)
+				{
+					string restoreUserMessage = pendingRestore.Mode
+						== ScriptRenameEditorRestoreMode.SuccessfulRename
+						? "Godot's Script Editor could not fully restore the renamed script tab. The filesystem and System Explorer metadata remain in the state described above."
+						: "Godot's Script Editor could not fully restore the original script tab. The filesystem and System Explorer metadata remain in the state described above.";
+					string combinedUserMessage =
+						$"{deferredFailurePresentation.UserMessage}\n\n{restoreUserMessage}";
 
-				if (pendingRestore.Mode == ScriptRenameEditorRestoreMode.SuccessfulRename)
-				{
-					dialogTitle = "Rename Incomplete";
-					userMessage =
-						$"The script was renamed successfully, but Godot's Script Editor could not be fully restored.\n\nFinal path:\n{pendingRestore.TargetScriptPath}\n\nThe filesystem and System Explorer metadata remain on the new path.";
-				}
-				else if (
-					pendingRestore.Mode
-					== ScriptRenameEditorRestoreMode.RestoreOriginalAfterCloseFailure
-				)
-				{
-					dialogTitle = "Rename Incomplete";
-					userMessage =
-						$"The rename was cancelled before the filesystem changed, but Godot's Script Editor could not fully restore the original tab.\n\nOriginal path:\n{pendingRestore.TargetScriptPath}";
+					QueueStandaloneTreeOperationDialog(
+						deferredFailurePresentation.Title,
+						combinedUserMessage,
+						technicalFailureDetails,
+						deferredFailurePresentation.PersistentDeduplicationKey
+					);
 				}
 				else
 				{
-					dialogTitle = "Rename Failed";
-					userMessage =
-						$"The filesystem rename failed, and Godot's Script Editor could not fully restore the original tab.\n\nOriginal path:\n{pendingRestore.TargetScriptPath}\n\nSystem Explorer metadata remains unchanged.";
+					string dialogTitle;
+					string userMessage;
+
+					if (pendingRestore.Mode == ScriptRenameEditorRestoreMode.SuccessfulRename)
+					{
+						dialogTitle = "Rename Incomplete";
+						userMessage =
+							$"The script was renamed successfully, but Godot's Script Editor could not be fully restored.\n\nFinal path:\n{pendingRestore.TargetScriptPath}\n\nThe filesystem and System Explorer metadata remain on the new path.";
+					}
+					else if (
+						pendingRestore.Mode
+						== ScriptRenameEditorRestoreMode.RestoreOriginalAfterCloseFailure
+					)
+					{
+						dialogTitle = "Rename Incomplete";
+						userMessage =
+							$"The rename was cancelled before the filesystem changed, but Godot's Script Editor could not fully restore the original tab.\n\nOriginal path:\n{pendingRestore.TargetScriptPath}";
+					}
+					else
+					{
+						dialogTitle = "Rename Failed";
+						userMessage =
+							$"The filesystem rename failed, and Godot's Script Editor could not fully restore the original tab.\n\nOriginal path:\n{pendingRestore.TargetScriptPath}\n\nSystem Explorer metadata remains unchanged.";
+					}
+
+					QueueStandaloneTreeOperationDialog(
+						dialogTitle,
+						userMessage,
+						technicalFailureDetails
+					);
 				}
 
-				QueueStandaloneTreeOperationDialog(
-					dialogTitle,
-					userMessage,
-					$"Mode='{pendingRestore.Mode}', Attempts={pendingRestore.DeferredAttemptCount}, {failureMessage}"
-				);
 				DebugLogger.LogOperation(
 					"Rename Script deferred editor restore failed",
-					$"Mode='{pendingRestore.Mode}', Attempts={pendingRestore.DeferredAttemptCount}, {failureMessage}"
+					technicalFailureDetails
 				);
 			}
 			else
 			{
+				if (deferredFailurePresentation != null)
+				{
+					QueueTreeOperationDialogPresentation(
+						deferredFailurePresentation.Title,
+						deferredFailurePresentation.UserMessage,
+						deferredFailurePresentation.PersistentDeduplicationKey
+					);
+				}
+
 				DebugLogger.LogOperation(
 					"Rename Script deferred editor restore completed",
 					$"mode={pendingRestore.Mode}, target='{pendingRestore.TargetScriptPath}', attempts={pendingRestore.DeferredAttemptCount}"

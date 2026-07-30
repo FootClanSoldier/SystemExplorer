@@ -111,9 +111,16 @@ public partial class SystemExplorerPlugin
 
 	private void ReleaseTreeFocusAfterNavigation()
 	{
-		if (_focusReleaseTarget == null)
+		if (
+			_focusReleaseTarget == null
+			|| !GodotObject.IsInstanceValid(_focusReleaseTarget)
+			|| !_focusReleaseTarget.IsInsideTree()
+		)
+		{
 			return;
+		}
 
+		// Preserve System Explorer's shortcut context without giving the tree a visual focus frame.
 		_focusReleaseTarget.GrabFocus();
 	}
 

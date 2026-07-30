@@ -181,6 +181,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		TryLogEditorOperation("Enter Tree");
 
 		EnsureProjectSettings();
+		EnsureEditorShortcutsRegistered();
 		LoadEditorIcons();
 		EnsureScriptTemplateExists();
 		BuildDock();

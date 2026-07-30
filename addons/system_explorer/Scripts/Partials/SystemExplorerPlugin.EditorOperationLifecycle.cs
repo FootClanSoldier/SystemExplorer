@@ -7,6 +7,12 @@ using SystemExplorer.EditorIntegration.Operations;
 
 public partial class SystemExplorerPlugin
 {
+	private enum EditorOperationCursorPolicy
+	{
+		Busy,
+		PreserveCurrent,
+	}
+
 	private EditorOperationLifetime _editorOperationLifetime;
 	private bool _editorOperationShutdownStarted;
 
@@ -91,12 +97,27 @@ public partial class SystemExplorerPlugin
 		return GodotObject.IsInstanceValid(this) && IsInsideTree();
 	}
 
-	private void StartObservedEditorOperation(string operationName, Func<EditorOperationLease, Task> operation, bool backgroundOperation = false)
+	private void StartObservedEditorOperation(
+		string operationName,
+		Func<EditorOperationLease, Task> operation,
+		bool backgroundOperation = false,
+		EditorOperationCursorPolicy cursorPolicy = EditorOperationCursorPolicy.Busy
+	)
 	{
-		_ = RunProtectedEditorOperationAsync(operationName, operation, backgroundOperation);
+		_ = RunProtectedEditorOperationAsync(
+			operationName,
+			operation,
+			backgroundOperation,
+			cursorPolicy
+		);
 	}
 
-	private async Task RunProtectedEditorOperationAsync(string operationName, Func<EditorOperationLease, Task> operation, bool backgroundOperation)
+	private async Task RunProtectedEditorOperationAsync(
+		string operationName,
+		Func<EditorOperationLease, Task> operation,
+		bool backgroundOperation,
+		EditorOperationCursorPolicy cursorPolicy = EditorOperationCursorPolicy.Busy
+	)
 	{
 		if (operation == null) throw new ArgumentNullException(nameof(operation));
 		if (_editorOperationShutdownStarted) return;
@@ -178,7 +199,8 @@ public partial class SystemExplorerPlugin
 		try
 		{
 			TryLogEditorOperation("Editor Operation Started", operationName);
-			TryEnterEditorOperationBusyCursor(lease, backgroundOperation);
+			if (cursorPolicy == EditorOperationCursorPolicy.Busy)
+				TryEnterEditorOperationBusyCursor(lease, backgroundOperation);
 
 			await operation(lease);
 			if (lease.IsCurrent)
@@ -198,7 +220,8 @@ public partial class SystemExplorerPlugin
 		{
 			try
 			{
-				ExitEditorOperationBusyCursor(lease);
+				if (cursorPolicy == EditorOperationCursorPolicy.Busy)
+					ExitEditorOperationBusyCursor(lease);
 			}
 			finally
 			{

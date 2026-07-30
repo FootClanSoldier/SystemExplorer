@@ -7,11 +7,6 @@ using System.Text.Json;
 public partial class SystemExplorerPlugin
 {
 	#region Item Locking
-	private void ToggleSelectedItemLock()
-	{
-		ToggleItemLock(_tree.GetSelected());
-	}
-
 	private void ToggleItemLock(TreeItem item, bool selectToggledItemAfterBuild = true)
 	{
 		if (item == null)
