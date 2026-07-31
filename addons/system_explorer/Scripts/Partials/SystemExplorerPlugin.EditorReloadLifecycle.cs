@@ -151,6 +151,9 @@ public partial class SystemExplorerPlugin
 		failureDetail = "";
 		if (!ValidateManagedAssemblyUiReferences(out failureDetail))
 			return false;
+
+		ConfigureTreeDirectionalFocusFallback();
+
 		if (!EnsureManagedAssemblySignalIntegrationsCurrent(out failureDetail))
 			return false;
 		if (!VerifyCriticalManagedAssemblySignals())

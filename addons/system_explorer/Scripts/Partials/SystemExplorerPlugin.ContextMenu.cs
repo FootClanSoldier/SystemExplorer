@@ -165,7 +165,8 @@ public partial class SystemExplorerPlugin
 				_contextNewSubmenu,
 				"Script",
 				ContextNewScript,
-				_contextNewScriptIcon
+				_contextNewScriptIcon,
+				NewScriptEditorShortcutPath
 			);
 			AddContextSubmenuIconItem(
 				_contextNewSubmenu,
@@ -200,7 +201,8 @@ public partial class SystemExplorerPlugin
 				_contextQuickActionsSubmenu,
 				"Beautify",
 				beautifyContextId,
-				_contextBeautifyScriptIcon
+				_contextBeautifyScriptIcon,
+				BeautifyEditorShortcutPath
 			);
 			AddContextSubmenuIconItem(
 				_contextQuickActionsSubmenu,
@@ -464,15 +466,21 @@ public partial class SystemExplorerPlugin
 		return dockRect.GetCenter().X > editorRect.GetCenter().X;
 	}
 
-	private void AddContextSubmenuIconItem(PopupMenu submenu, string label, int id, Texture2D icon)
+	private void AddContextSubmenuIconItem(
+		PopupMenu submenu,
+		string label,
+		int id,
+		Texture2D icon,
+		string editorShortcutPath = ""
+	)
 	{
-		if (!EnableContextMenuIcons || icon == null)
-		{
-			submenu.AddItem(label, id);
-			return;
-		}
-
-		submenu.AddIconItem(icon, label, id);
+		AddContextPopupMenuItem(
+			submenu,
+			label,
+			id,
+			icon,
+			editorShortcutPath
+		);
 	}
 
 	private void SetContextMenuItemDisabled(int id, bool disabled)
@@ -595,8 +603,7 @@ public partial class SystemExplorerPlugin
 				break;
 
 			case ContextNewScript:
-				_createScriptDialog.CurrentFile = "";
-				_createScriptDialog.PopupCenteredRatio(0.8f);
+				TryOpenCreateScriptDialogForSelectedItem();
 				break;
 
 			case ContextRename:

@@ -120,7 +120,8 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		// Preserve System Explorer's shortcut context without giving the tree a visual focus frame.
+		// Preserve System Explorer's shortcut and keyboard-navigation context
+		// without giving the tree a visual focus frame.
 		_focusReleaseTarget.GrabFocus();
 	}
 

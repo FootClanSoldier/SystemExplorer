@@ -578,6 +578,44 @@ public partial class SystemExplorerPlugin
 	#endregion
 
 	#region Script Creation
+	private bool TryOpenCreateScriptDialogForSelectedItem()
+	{
+		if (
+			_isFilteringScripts
+			|| _tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _createScriptDialog == null
+			|| !GodotObject.IsInstanceValid(_createScriptDialog)
+		)
+		{
+			return false;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (selectedItem == null || !GodotObject.IsInstanceValid(selectedItem))
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+		bool isSupportedTarget =
+			metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal)
+			|| metadata.StartsWith("script::", StringComparison.Ordinal)
+			|| metadata.StartsWith("sceneLink::", StringComparison.Ordinal);
+
+		if (
+			!isSupportedTarget
+			|| string.IsNullOrWhiteSpace(GetSelectedSystemName())
+		)
+		{
+			return false;
+		}
+
+		_createScriptDialog.CurrentFile = "";
+		_createScriptDialog.PopupCenteredRatio(0.8f);
+		return true;
+	}
+
 	private void OnCreateScriptFileSelected(string path)
 	{
 		DebugLogger.LogOperation("Create Script Selected", path);

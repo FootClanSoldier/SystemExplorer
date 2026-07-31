@@ -18,6 +18,10 @@ public partial class SystemExplorerPlugin
 		"system_explorer/beautify";
 	private const string BeautifyEditorShortcutDisplayName =
 		"Beautify";
+	private const string NewScriptEditorShortcutPath =
+		"system_explorer/new_script";
+	private const string NewScriptEditorShortcutDisplayName =
+		"New Script";
 	private const string RemoveSelectedItemEditorShortcutPath =
 		"system_explorer/remove_selected_item";
 	private const string RemoveSelectedItemEditorShortcutDisplayName =
@@ -103,6 +107,7 @@ public partial class SystemExplorerPlugin
 			}
 
 			bool beautifyExists = editorSettings.HasShortcut(BeautifyEditorShortcutPath);
+			bool newScriptExists = editorSettings.HasShortcut(NewScriptEditorShortcutPath);
 			bool removeExists = editorSettings.HasShortcut(
 				RemoveSelectedItemEditorShortcutPath
 			);
@@ -114,6 +119,7 @@ public partial class SystemExplorerPlugin
 					StringComparison.Ordinal
 				)
 				&& beautifyExists
+				&& newScriptExists
 				&& removeExists
 			)
 			{
@@ -122,46 +128,77 @@ public partial class SystemExplorerPlugin
 					BeautifyEditorShortcutPath,
 					BeautifyEditorShortcutDisplayName
 				);
+				bool newScriptDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					NewScriptEditorShortcutPath,
+					NewScriptEditorShortcutDisplayName
+				);
 				bool removeDisplayNameReady = EnsureEditorShortcutDisplayName(
 					editorSettings,
 					RemoveSelectedItemEditorShortcutPath,
 					RemoveSelectedItemEditorShortcutDisplayName
 				);
 
-				if (beautifyDisplayNameReady && removeDisplayNameReady)
+				if (
+					beautifyDisplayNameReady
+					&& newScriptDisplayNameReady
+					&& removeDisplayNameReady
+				)
+				{
 					return true;
+				}
 
 				DebugLogger.LogOperation(
 					"Editor shortcut display-name verification failed",
-					$"Beautify={beautifyDisplayNameReady}, RemoveSelectedItem={removeDisplayNameReady}"
+					$"Beautify={beautifyDisplayNameReady}, NewScript={newScriptDisplayNameReady}, RemoveSelectedItem={removeDisplayNameReady}"
 				);
 				return false;
 			}
 
-			editorSettings.AddShortcut(
-				BeautifyEditorShortcutPath,
-				CreateEditorKeyShortcut(
-					BeautifyEditorShortcutDisplayName,
-					Key.B,
-					ctrlPressed: true
-				)
-			);
-			editorSettings.AddShortcut(
-				RemoveSelectedItemEditorShortcutPath,
-				CreateEditorKeyShortcut(
-					RemoveSelectedItemEditorShortcutDisplayName,
-					Key.Delete
-				)
-			);
+			if (!beautifyExists)
+			{
+				editorSettings.AddShortcut(
+					BeautifyEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						BeautifyEditorShortcutDisplayName,
+						Key.B,
+						ctrlPressed: true
+					)
+				);
+			}
+
+			if (!newScriptExists)
+			{
+				editorSettings.AddShortcut(
+					NewScriptEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						NewScriptEditorShortcutDisplayName,
+						Key.S,
+						ctrlPressed: true
+					)
+				);
+			}
+
+			if (!removeExists)
+			{
+				editorSettings.AddShortcut(
+					RemoveSelectedItemEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						RemoveSelectedItemEditorShortcutDisplayName,
+						Key.Delete
+					)
+				);
+			}
 
 			beautifyExists = editorSettings.HasShortcut(BeautifyEditorShortcutPath);
+			newScriptExists = editorSettings.HasShortcut(NewScriptEditorShortcutPath);
 			removeExists = editorSettings.HasShortcut(RemoveSelectedItemEditorShortcutPath);
 
-			if (!beautifyExists || !removeExists)
+			if (!beautifyExists || !newScriptExists || !removeExists)
 			{
 				DebugLogger.LogOperation(
 					"Editor shortcut registration incomplete",
-					$"Beautify={beautifyExists}, RemoveSelectedItem={removeExists}"
+					$"Beautify={beautifyExists}, NewScript={newScriptExists}, RemoveSelectedItem={removeExists}"
 				);
 				return false;
 			}
@@ -171,17 +208,26 @@ public partial class SystemExplorerPlugin
 				BeautifyEditorShortcutPath,
 				BeautifyEditorShortcutDisplayName
 			);
+			bool newScriptDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				NewScriptEditorShortcutPath,
+				NewScriptEditorShortcutDisplayName
+			);
 			bool removeDisplayNameRegistered = EnsureEditorShortcutDisplayName(
 				editorSettings,
 				RemoveSelectedItemEditorShortcutPath,
 				RemoveSelectedItemEditorShortcutDisplayName
 			);
 
-			if (!beautifyDisplayNameRegistered || !removeDisplayNameRegistered)
+			if (
+				!beautifyDisplayNameRegistered
+				|| !newScriptDisplayNameRegistered
+				|| !removeDisplayNameRegistered
+			)
 			{
 				DebugLogger.LogOperation(
 					"Editor shortcut display-name registration incomplete",
-					$"Beautify={beautifyDisplayNameRegistered}, RemoveSelectedItem={removeDisplayNameRegistered}"
+					$"Beautify={beautifyDisplayNameRegistered}, NewScript={newScriptDisplayNameRegistered}, RemoveSelectedItem={removeDisplayNameRegistered}"
 				);
 				return false;
 			}
@@ -194,6 +240,57 @@ public partial class SystemExplorerPlugin
 			DebugLogger.LogOperation(
 				"Editor shortcut registration failed",
 				exception.ToString()
+			);
+			return false;
+		}
+	}
+
+	private bool TryGetCurrentEditorShortcut(
+		string shortcutPath,
+		out Shortcut shortcut
+	)
+	{
+		shortcut = null;
+
+		if (string.IsNullOrWhiteSpace(shortcutPath))
+			return false;
+
+		try
+		{
+			EditorSettings editorSettings = EditorInterface.Singleton?.GetEditorSettings();
+
+			if (editorSettings == null)
+				return false;
+
+			if (!editorSettings.HasShortcut(shortcutPath))
+			{
+				if (!EnsureEditorShortcutsRegistered())
+					return false;
+
+				editorSettings = EditorInterface.Singleton?.GetEditorSettings();
+
+				if (
+					editorSettings == null
+					|| !editorSettings.HasShortcut(shortcutPath)
+				)
+				{
+					return false;
+				}
+			}
+
+			Shortcut currentShortcut = editorSettings.GetShortcut(shortcutPath);
+
+			if (currentShortcut == null || !currentShortcut.HasValidEvent())
+				return false;
+
+			shortcut = currentShortcut;
+			return true;
+		}
+		catch (Exception exception)
+		{
+			DebugLogger.LogOperation(
+				"Editor shortcut lookup failed",
+				$"Path='{shortcutPath}', Exception='{exception}'"
 			);
 			return false;
 		}
@@ -234,7 +331,13 @@ public partial class SystemExplorerPlugin
 		if (HandleGlobalBeautifyShortcut(inputEvent))
 			return;
 
-		HandleGlobalRemoveSelectedShortcut(inputEvent);
+		if (HandleGlobalNewScriptShortcut(inputEvent))
+			return;
+
+		if (HandleGlobalRemoveSelectedShortcut(inputEvent))
+			return;
+
+		HandleGlobalTreeKeyboardNavigation(inputEvent);
 	}
 
 	private bool HandleGlobalBeautifyShortcut(InputEvent inputEvent)
@@ -280,6 +383,35 @@ public partial class SystemExplorerPlugin
 		return true;
 	}
 
+	private bool HandleGlobalNewScriptShortcut(InputEvent inputEvent)
+	{
+		if (inputEvent is not InputEventKey keyEvent)
+			return false;
+
+		if (
+			!keyEvent.Pressed
+			|| keyEvent.Echo
+			|| !IsEditorShortcut(NewScriptEditorShortcutPath, keyEvent)
+		)
+		{
+			return false;
+		}
+
+		if (_isFilteringScripts)
+			return false;
+
+		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
+
+		if (!IsSystemExplorerFocusReleaseTarget(focusedControl))
+			return false;
+
+		if (!TryOpenCreateScriptDialogForSelectedItem())
+			return false;
+
+		GetViewport().SetInputAsHandled();
+		return true;
+	}
+
 	private bool HandleGlobalRemoveSelectedShortcut(InputEvent inputEvent)
 	{
 		if (inputEvent is not InputEventKey keyEvent)
@@ -299,7 +431,7 @@ public partial class SystemExplorerPlugin
 
 		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
 
-		if (!IsSystemExplorerShortcutFocusTarget(focusedControl))
+		if (!IsSystemExplorerFocusReleaseTarget(focusedControl))
 			return false;
 
 		if (!TryOpenRemoveDialogForSelectedItem())
@@ -307,15 +439,6 @@ public partial class SystemExplorerPlugin
 
 		GetViewport().SetInputAsHandled();
 		return true;
-	}
-
-	private bool IsSystemExplorerShortcutFocusTarget(Control focusedControl)
-	{
-		return focusedControl != null
-			&& _focusReleaseTarget != null
-			&& GodotObject.IsInstanceValid(_focusReleaseTarget)
-			&& _focusReleaseTarget.IsInsideTree()
-			&& focusedControl == _focusReleaseTarget;
 	}
 
 	private static bool IsUnmodifiedTextEntryEvent(InputEventKey keyEvent)

@@ -32,6 +32,8 @@ public partial class SystemExplorerPlugin
 			SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
 		};
 
+		ConfigureTreeDirectionalFocusFallback();
+
 		_fileDialog = new EditorFileDialog
 		{
 			FileMode = EditorFileDialog.FileModeEnum.OpenFiles,
@@ -714,6 +716,26 @@ public partial class SystemExplorerPlugin
 
 		_tree.Columns = 1;
 		_tree.SetColumnExpand(0, true);
+	}
+
+	private void ConfigureTreeDirectionalFocusFallback()
+	{
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _focusReleaseTarget == null
+			|| !GodotObject.IsInstanceValid(_focusReleaseTarget)
+		)
+		{
+			return;
+		}
+
+		NodePath focusReleaseTargetPath = new NodePath("../Focus Release Target");
+
+		_tree.FocusNeighborTop = focusReleaseTargetPath;
+		_tree.FocusNeighborBottom = focusReleaseTargetPath;
+		_tree.FocusNeighborLeft = focusReleaseTargetPath;
+		_tree.FocusNeighborRight = focusReleaseTargetPath;
 	}
 
 	private void OnSystemNameTextChanged(string text)

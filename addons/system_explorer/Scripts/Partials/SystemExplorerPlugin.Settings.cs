@@ -51,15 +51,73 @@ public partial class SystemExplorerPlugin
 		ProjectSettings.SetAsBasic(settingPath, true);
 	}
 
-	private void AddContextMenuIconItem(string label, int id, Texture2D icon)
+	private void AddContextPopupMenuItem(
+		PopupMenu menu,
+		string label,
+		int id,
+		Texture2D icon,
+		string editorShortcutPath = ""
+	)
 	{
+		if (menu == null || !GodotObject.IsInstanceValid(menu))
+			return;
+
 		if (!EnableContextMenuIcons || icon == null)
+			menu.AddItem(label, id);
+		else
+			menu.AddIconItem(icon, label, id);
+
+		ApplyContextPopupMenuItemShortcut(menu, id, editorShortcutPath);
+	}
+
+	private void ApplyContextPopupMenuItemShortcut(
+		PopupMenu menu,
+		int id,
+		string editorShortcutPath
+	)
+	{
+		if (
+			menu == null
+			|| !GodotObject.IsInstanceValid(menu)
+			|| string.IsNullOrWhiteSpace(editorShortcutPath)
+		)
 		{
-			_contextMenu.AddItem(label, id);
 			return;
 		}
 
-		_contextMenu.AddIconItem(icon, label, id);
+		int index = menu.GetItemIndex(id);
+
+		if (index < 0)
+			return;
+
+		if (
+			!TryGetCurrentEditorShortcut(
+				editorShortcutPath,
+				out Shortcut shortcut
+			)
+		)
+		{
+			return;
+		}
+
+		menu.SetItemShortcut(index, shortcut, global: false);
+		menu.SetItemShortcutDisabled(index, true);
+	}
+
+	private void AddContextMenuIconItem(
+		string label,
+		int id,
+		Texture2D icon,
+		string editorShortcutPath = ""
+	)
+	{
+		AddContextPopupMenuItem(
+			_contextMenu,
+			label,
+			id,
+			icon,
+			editorShortcutPath
+		);
 	}
 
 	#endregion

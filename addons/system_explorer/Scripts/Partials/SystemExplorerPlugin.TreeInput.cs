@@ -221,6 +221,16 @@ public partial class SystemExplorerPlugin
 
 		if (
 			!_isFilteringScripts
+			&& IsEditorShortcut(NewScriptEditorShortcutPath, keyEvent)
+			&& TryOpenCreateScriptDialogForSelectedItem()
+		)
+		{
+			_tree.AcceptEvent();
+			return;
+		}
+
+		if (
+			!_isFilteringScripts
 			&& IsEditorShortcut(RemoveSelectedItemEditorShortcutPath, keyEvent)
 			&& TryOpenRemoveDialogForSelectedItem()
 		)
