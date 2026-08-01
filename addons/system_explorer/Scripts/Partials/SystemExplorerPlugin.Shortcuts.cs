@@ -283,125 +283,95 @@ public partial class SystemExplorerPlugin
 				return false;
 			}
 
-			if (!beautifyExists)
-			{
-				editorSettings.AddShortcut(
-					BeautifyEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						BeautifyEditorShortcutDisplayName,
-						Key.B,
-						ctrlPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				BeautifyEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					BeautifyEditorShortcutDisplayName,
+					Key.B,
+					ctrlPressed: true
+				)
+			);
 
-			if (!newScriptExists)
-			{
-				editorSettings.AddShortcut(
-					NewScriptEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						NewScriptEditorShortcutDisplayName,
-						Key.S,
-						ctrlPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				NewScriptEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					NewScriptEditorShortcutDisplayName,
+					Key.S,
+					ctrlPressed: true
+				)
+			);
 
-			if (!removeExists)
-			{
-				editorSettings.AddShortcut(
-					RemoveSelectedItemEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						RemoveSelectedItemEditorShortcutDisplayName,
-						Key.Delete
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				RemoveSelectedItemEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					RemoveSelectedItemEditorShortcutDisplayName,
+					Key.Delete
+				)
+			);
 
-			if (!toggleFocusExists)
-			{
-				editorSettings.AddShortcut(
-					ToggleTreeScriptEditorFocusShortcutPath,
-					CreateEditorPhysicalKeyShortcut(
-						ToggleTreeScriptEditorFocusShortcutDisplayName,
-						Key.Quoteleft
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				ToggleTreeScriptEditorFocusShortcutPath,
+				CreateEditorPhysicalKeyShortcut(
+					ToggleTreeScriptEditorFocusShortcutDisplayName,
+					Key.Quoteleft
+				)
+			);
 
-			if (!collapseTreeExists)
-			{
-				editorSettings.AddShortcut(
-					CollapseTreeEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						CollapseTreeEditorShortcutDisplayName,
-						Key.T,
-						ctrlPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				CollapseTreeEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					CollapseTreeEditorShortcutDisplayName,
+					Key.T,
+					ctrlPressed: true
+				)
+			);
 
-			if (!renameSelectedItemExists)
-			{
-				editorSettings.AddShortcut(
-					RenameSelectedItemEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						RenameSelectedItemEditorShortcutDisplayName,
-						Key.R,
-						ctrlPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				RenameSelectedItemEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					RenameSelectedItemEditorShortcutDisplayName,
+					Key.R,
+					ctrlPressed: true
+				)
+			);
 
-			if (!newFolderExists)
-			{
-				editorSettings.AddShortcut(
-					NewFolderEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						NewFolderEditorShortcutDisplayName,
-						Key.F,
-						ctrlPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				NewFolderEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					NewFolderEditorShortcutDisplayName,
+					Key.F,
+					ctrlPressed: true
+				)
+			);
 
-			if (!addExistingScriptsExists)
-			{
-				editorSettings.AddShortcut(
-					AddExistingScriptsEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						AddExistingScriptsEditorShortcutDisplayName,
-						Key.S,
-						ctrlPressed: true,
-						altPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				AddExistingScriptsEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					AddExistingScriptsEditorShortcutDisplayName,
+					Key.S,
+					ctrlPressed: true,
+					altPressed: true
+				)
+			);
 
-			if (!addExistingScenesExists)
-			{
-				editorSettings.AddShortcut(
-					AddExistingScenesEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						AddExistingScenesEditorShortcutDisplayName,
-						Key.A,
-						ctrlPressed: true,
-						altPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				AddExistingScenesEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					AddExistingScenesEditorShortcutDisplayName,
+					Key.A,
+					ctrlPressed: true,
+					altPressed: true
+				)
+			);
 
-			if (!refactorNamespaceExists)
-			{
-				editorSettings.AddShortcut(
-					RefactorNamespaceEditorShortcutPath,
-					CreateEditorKeyShortcut(
-						RefactorNamespaceEditorShortcutDisplayName,
-						Key.N,
-						ctrlPressed: true
-					)
-				);
-			}
+			editorSettings.AddShortcut(
+				RefactorNamespaceEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					RefactorNamespaceEditorShortcutDisplayName,
+					Key.N,
+					ctrlPressed: true
+				)
+			);
 
 			beautifyExists = editorSettings.HasShortcut(BeautifyEditorShortcutPath);
 			newScriptExists = editorSettings.HasShortcut(NewScriptEditorShortcutPath);
