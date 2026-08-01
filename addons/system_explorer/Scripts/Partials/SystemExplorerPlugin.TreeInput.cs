@@ -207,52 +207,16 @@ public partial class SystemExplorerPlugin
 
 	private void HandleTreeKeyboardInput(InputEventKey keyEvent)
 	{
-		if (!keyEvent.Pressed || keyEvent.Echo)
-			return;
-
-		if (
-			IsEditorShortcut(BeautifyEditorShortcutPath, keyEvent)
-			&& TryHandleBeautifyShortcutForSelectedItem()
-		)
+		if (TryApplyTreeKeyboardNavigation(keyEvent))
 		{
 			_tree.AcceptEvent();
 			return;
 		}
 
-		if (
-			!_isFilteringScripts
-			&& IsEditorShortcut(NewScriptEditorShortcutPath, keyEvent)
-			&& TryOpenCreateScriptDialogForSelectedItem()
-		)
-		{
-			_tree.AcceptEvent();
-			return;
-		}
-
-		if (
-			!_isFilteringScripts
-			&& IsEditorShortcut(RemoveSelectedItemEditorShortcutPath, keyEvent)
-			&& TryOpenRemoveDialogForSelectedItem()
-		)
-		{
-			_tree.AcceptEvent();
-			return;
-		}
-
-		if (!IsCtrlShiftCollapseCommand(keyEvent))
-			return;
-
-		bool hadSystemsLoaded = _systems.Count > 0;
-
-		if (!EnsureSystemsLoadedForTreeOperation("Collapse Entire Tree"))
-			return;
-
-		if (!hadSystemsLoaded)
-			BuildTree(keepCurrentExpansionState: true);
-
-		CollapseEntireTree();
-		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
-		_tree.AcceptEvent();
+		TryDispatchTreeShortcut(
+			keyEvent,
+			TreeShortcutInputRoute.TreeGuiInput
+		);
 	}
 
 	private static bool IsShiftPressed(InputEventMouseButton mouseButton)

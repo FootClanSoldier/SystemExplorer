@@ -546,6 +546,31 @@ public partial class SystemExplorerPlugin
 	#endregion
 
 	#region Tree Collapse Helpers
+	private bool TryCollapseEntireTreeFromShortcut()
+	{
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| !_tree.IsInsideTree()
+			|| _isFilteringScripts
+		)
+		{
+			return false;
+		}
+
+		bool hadSystemsLoaded = _systems.Count > 0;
+
+		if (!EnsureSystemsLoadedForTreeOperation("Collapse Entire Tree"))
+			return false;
+
+		if (!hadSystemsLoaded)
+			BuildTree(keepCurrentExpansionState: true);
+
+		CollapseEntireTree();
+		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		return true;
+	}
+
 	private void CollapseEntireTree()
 	{
 		_expandedItems.Clear();

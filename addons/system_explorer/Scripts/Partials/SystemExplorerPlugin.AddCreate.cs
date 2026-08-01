@@ -67,14 +67,124 @@ public partial class SystemExplorerPlugin
 		BuildTree();
 	}
 
-	private void OpenAddFolderDialog()
+	private bool TryOpenAddFolderDialogForSelectedItem()
 	{
-		if (string.IsNullOrWhiteSpace(_pendingAddFolderMetadata))
-			return;
+		if (
+			_isFilteringScripts
+			|| _tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _addFolderDialog == null
+			|| !GodotObject.IsInstanceValid(_addFolderDialog)
+			|| _addFolderInput == null
+			|| !GodotObject.IsInstanceValid(_addFolderInput)
+		)
+		{
+			return false;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (
+			selectedItem == null
+			|| !GodotObject.IsInstanceValid(selectedItem)
+			|| !TryResolveAddFolderTargetMetadata(
+				selectedItem,
+				out string targetMetadata
+			)
+		)
+		{
+			return false;
+		}
+
+		_pendingAddFolderMetadata = targetMetadata;
+
+		if (OpenAddFolderDialog())
+			return true;
+
+		_pendingAddFolderMetadata = "";
+		return false;
+	}
+
+	private bool TryResolveAddFolderTargetMetadata(
+		TreeItem selectedItem,
+		out string targetMetadata
+	)
+	{
+		targetMetadata = "";
+
+		if (selectedItem == null || !GodotObject.IsInstanceValid(selectedItem))
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+		bool isSystem = metadata.StartsWith("system::", StringComparison.Ordinal);
+		bool isFolder = metadata.StartsWith("folder::", StringComparison.Ordinal);
+		bool isScript = metadata.StartsWith("script::", StringComparison.Ordinal);
+		bool isScene = metadata.StartsWith("sceneLink::", StringComparison.Ordinal);
+
+		if (!isSystem && !isFolder && !isScript && !isScene)
+			return false;
+
+		string systemName = GetSystemNameFromTreeItem(selectedItem);
+
+		if (string.IsNullOrWhiteSpace(systemName))
+			return false;
+
+		if (isSystem)
+		{
+			targetMetadata = $"system::{systemName}";
+			return true;
+		}
+
+		string folderPath = GetFolderPathFromTreeItem(selectedItem);
+
+		if (isFolder && string.IsNullOrWhiteSpace(folderPath))
+			return false;
+
+		targetMetadata = string.IsNullOrWhiteSpace(folderPath)
+			? $"system::{systemName}"
+			: $"folder::{systemName}::{folderPath}";
+		return true;
+	}
+
+	private bool OpenAddFolderDialog()
+	{
+		if (
+			string.IsNullOrWhiteSpace(_pendingAddFolderMetadata)
+			|| (
+				!_pendingAddFolderMetadata.StartsWith(
+					"system::",
+					StringComparison.Ordinal
+				)
+				&& !_pendingAddFolderMetadata.StartsWith(
+					"folder::",
+					StringComparison.Ordinal
+				)
+			)
+			|| string.IsNullOrWhiteSpace(
+				GetSystemNameFromMetadata(_pendingAddFolderMetadata)
+			)
+			|| (
+				_pendingAddFolderMetadata.StartsWith(
+					"folder::",
+					StringComparison.Ordinal
+				)
+				&& string.IsNullOrWhiteSpace(
+					GetFolderPathFromMetadata(_pendingAddFolderMetadata)
+				)
+			)
+			|| _addFolderDialog == null
+			|| !GodotObject.IsInstanceValid(_addFolderDialog)
+			|| _addFolderInput == null
+			|| !GodotObject.IsInstanceValid(_addFolderInput)
+		)
+		{
+			return false;
+		}
 
 		_addFolderInput.Text = "";
 		_addFolderDialog.PopupCentered();
 		_addFolderInput.Edit(true);
+		return true;
 	}
 
 	private void OnAddFolderConfirmed()
@@ -208,17 +318,43 @@ public partial class SystemExplorerPlugin
 		return FolderMutationResult.Success;
 	}
 
-	private void OnAddScriptPressed()
+	private bool TryOpenAddExistingScriptsDialogForSelectedItem()
 	{
-		string systemName = GetSelectedSystemName();
-
-		if (string.IsNullOrWhiteSpace(systemName))
+		if (
+			_isFilteringScripts
+			|| _tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _tree.IsQueuedForDeletion()
+		)
 		{
-			GD.PushWarning("Select a system or folder before adding a script.");
-			return;
+			return false;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (selectedItem == null || !GodotObject.IsInstanceValid(selectedItem))
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+		bool isSupportedTarget =
+			metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal)
+			|| metadata.StartsWith("script::", StringComparison.Ordinal)
+			|| metadata.StartsWith("sceneLink::", StringComparison.Ordinal);
+
+		if (
+			!isSupportedTarget
+			|| string.IsNullOrWhiteSpace(GetSelectedSystemName())
+			|| _fileDialog == null
+			|| !GodotObject.IsInstanceValid(_fileDialog)
+			|| _fileDialog.IsQueuedForDeletion()
+		)
+		{
+			return false;
 		}
 
 		_fileDialog.PopupCenteredRatio(0.8f);
+		return true;
 	}
 
 	private void OnScriptFilesSelected(string[] paths)
@@ -392,17 +528,43 @@ public partial class SystemExplorerPlugin
 		return AddTreeMutationResult.Success;
 	}
 
-	private void OnAddScenePressed()
+	private bool TryOpenAddExistingScenesDialogForSelectedItem()
 	{
-		string systemName = GetSelectedSystemName();
-
-		if (string.IsNullOrWhiteSpace(systemName))
+		if (
+			_isFilteringScripts
+			|| _tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _tree.IsQueuedForDeletion()
+		)
 		{
-			GD.PushWarning("Select a system or folder before adding a scene.");
-			return;
+			return false;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (selectedItem == null || !GodotObject.IsInstanceValid(selectedItem))
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+		bool isSupportedTarget =
+			metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal)
+			|| metadata.StartsWith("script::", StringComparison.Ordinal)
+			|| metadata.StartsWith("sceneLink::", StringComparison.Ordinal);
+
+		if (
+			!isSupportedTarget
+			|| string.IsNullOrWhiteSpace(GetSelectedSystemName())
+			|| _addSceneDialog == null
+			|| !GodotObject.IsInstanceValid(_addSceneDialog)
+			|| _addSceneDialog.IsQueuedForDeletion()
+		)
+		{
+			return false;
 		}
 
 		_addSceneDialog.PopupCenteredRatio(0.8f);
+		return true;
 	}
 
 	private void OnSceneFilesSelected(string[] paths)

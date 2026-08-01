@@ -26,6 +26,34 @@ public partial class SystemExplorerPlugin
 		"system_explorer/remove_selected_item";
 	private const string RemoveSelectedItemEditorShortcutDisplayName =
 		"Remove Selected Item";
+	private const string ToggleTreeScriptEditorFocusShortcutPath =
+		"system_explorer/toggle_tree_script_editor_focus";
+	private const string ToggleTreeScriptEditorFocusShortcutDisplayName =
+		"Toggle Tree / Script Editor Focus";
+	private const string CollapseTreeEditorShortcutPath =
+		"system_explorer/collapse_tree";
+	private const string CollapseTreeEditorShortcutDisplayName =
+		"Collapse Tree";
+	private const string RenameSelectedItemEditorShortcutPath =
+		"system_explorer/rename_selected_item";
+	private const string RenameSelectedItemEditorShortcutDisplayName =
+		"Rename";
+	private const string NewFolderEditorShortcutPath =
+		"system_explorer/new_folder";
+	private const string NewFolderEditorShortcutDisplayName =
+		"New Folder";
+	private const string AddExistingScriptsEditorShortcutPath =
+		"system_explorer/add_existing_scripts";
+	private const string AddExistingScriptsEditorShortcutDisplayName =
+		"Add Scripts";
+	private const string AddExistingScenesEditorShortcutPath =
+		"system_explorer/add_existing_scenes";
+	private const string AddExistingScenesEditorShortcutDisplayName =
+		"Add Scenes";
+	private const string RefactorNamespaceEditorShortcutPath =
+		"system_explorer/refactor_namespace";
+	private const string RefactorNamespaceEditorShortcutDisplayName =
+		"Refactor Namespace";
 
 	private string _editorShortcutsRegisteredGeneration = "";
 
@@ -41,6 +69,36 @@ public partial class SystemExplorerPlugin
 		InputEventKey keyEvent = new()
 		{
 			Keycode = keycode,
+			CtrlPressed = ctrlPressed,
+			ShiftPressed = shiftPressed,
+			AltPressed = altPressed,
+			MetaPressed = metaPressed,
+		};
+
+		Godot.Collections.Array events = new()
+		{
+			keyEvent,
+		};
+
+		return new Shortcut
+		{
+			ResourceName = displayName,
+			Events = events,
+		};
+	}
+
+	private static Shortcut CreateEditorPhysicalKeyShortcut(
+		string displayName,
+		Key physicalKeycode,
+		bool ctrlPressed = false,
+		bool shiftPressed = false,
+		bool altPressed = false,
+		bool metaPressed = false
+	)
+	{
+		InputEventKey keyEvent = new()
+		{
+			PhysicalKeycode = physicalKeycode,
 			CtrlPressed = ctrlPressed,
 			ShiftPressed = shiftPressed,
 			AltPressed = altPressed,
@@ -111,6 +169,27 @@ public partial class SystemExplorerPlugin
 			bool removeExists = editorSettings.HasShortcut(
 				RemoveSelectedItemEditorShortcutPath
 			);
+			bool toggleFocusExists = editorSettings.HasShortcut(
+				ToggleTreeScriptEditorFocusShortcutPath
+			);
+			bool collapseTreeExists = editorSettings.HasShortcut(
+				CollapseTreeEditorShortcutPath
+			);
+			bool renameSelectedItemExists = editorSettings.HasShortcut(
+				RenameSelectedItemEditorShortcutPath
+			);
+			bool newFolderExists = editorSettings.HasShortcut(
+				NewFolderEditorShortcutPath
+			);
+			bool addExistingScriptsExists = editorSettings.HasShortcut(
+				AddExistingScriptsEditorShortcutPath
+			);
+			bool addExistingScenesExists = editorSettings.HasShortcut(
+				AddExistingScenesEditorShortcutPath
+			);
+			bool refactorNamespaceExists = editorSettings.HasShortcut(
+				RefactorNamespaceEditorShortcutPath
+			);
 
 			if (
 				string.Equals(
@@ -121,6 +200,13 @@ public partial class SystemExplorerPlugin
 				&& beautifyExists
 				&& newScriptExists
 				&& removeExists
+				&& toggleFocusExists
+				&& collapseTreeExists
+				&& renameSelectedItemExists
+				&& newFolderExists
+				&& addExistingScriptsExists
+				&& addExistingScenesExists
+				&& refactorNamespaceExists
 			)
 			{
 				bool beautifyDisplayNameReady = EnsureEditorShortcutDisplayName(
@@ -138,11 +224,53 @@ public partial class SystemExplorerPlugin
 					RemoveSelectedItemEditorShortcutPath,
 					RemoveSelectedItemEditorShortcutDisplayName
 				);
+				bool toggleFocusDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					ToggleTreeScriptEditorFocusShortcutPath,
+					ToggleTreeScriptEditorFocusShortcutDisplayName
+				);
+				bool collapseTreeDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					CollapseTreeEditorShortcutPath,
+					CollapseTreeEditorShortcutDisplayName
+				);
+				bool renameSelectedItemDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					RenameSelectedItemEditorShortcutPath,
+					RenameSelectedItemEditorShortcutDisplayName
+				);
+				bool newFolderDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					NewFolderEditorShortcutPath,
+					NewFolderEditorShortcutDisplayName
+				);
+				bool addExistingScriptsDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					AddExistingScriptsEditorShortcutPath,
+					AddExistingScriptsEditorShortcutDisplayName
+				);
+				bool addExistingScenesDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					AddExistingScenesEditorShortcutPath,
+					AddExistingScenesEditorShortcutDisplayName
+				);
+				bool refactorNamespaceDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					RefactorNamespaceEditorShortcutPath,
+					RefactorNamespaceEditorShortcutDisplayName
+				);
 
 				if (
 					beautifyDisplayNameReady
 					&& newScriptDisplayNameReady
 					&& removeDisplayNameReady
+					&& toggleFocusDisplayNameReady
+					&& collapseTreeDisplayNameReady
+					&& renameSelectedItemDisplayNameReady
+					&& newFolderDisplayNameReady
+					&& addExistingScriptsDisplayNameReady
+					&& addExistingScenesDisplayNameReady
+					&& refactorNamespaceDisplayNameReady
 				)
 				{
 					return true;
@@ -150,7 +278,7 @@ public partial class SystemExplorerPlugin
 
 				DebugLogger.LogOperation(
 					"Editor shortcut display-name verification failed",
-					$"Beautify={beautifyDisplayNameReady}, NewScript={newScriptDisplayNameReady}, RemoveSelectedItem={removeDisplayNameReady}"
+					$"Beautify={beautifyDisplayNameReady}, NewScript={newScriptDisplayNameReady}, RemoveSelectedItem={removeDisplayNameReady}, ToggleTreeScriptEditorFocus={toggleFocusDisplayNameReady}, CollapseTree={collapseTreeDisplayNameReady}, RenameSelectedItem={renameSelectedItemDisplayNameReady}, NewFolder={newFolderDisplayNameReady}, AddExistingScripts={addExistingScriptsDisplayNameReady}, AddExistingScenes={addExistingScenesDisplayNameReady}, RefactorNamespace={refactorNamespaceDisplayNameReady}"
 				);
 				return false;
 			}
@@ -190,15 +318,132 @@ public partial class SystemExplorerPlugin
 				);
 			}
 
+			if (!toggleFocusExists)
+			{
+				editorSettings.AddShortcut(
+					ToggleTreeScriptEditorFocusShortcutPath,
+					CreateEditorPhysicalKeyShortcut(
+						ToggleTreeScriptEditorFocusShortcutDisplayName,
+						Key.Quoteleft
+					)
+				);
+			}
+
+			if (!collapseTreeExists)
+			{
+				editorSettings.AddShortcut(
+					CollapseTreeEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						CollapseTreeEditorShortcutDisplayName,
+						Key.T,
+						ctrlPressed: true
+					)
+				);
+			}
+
+			if (!renameSelectedItemExists)
+			{
+				editorSettings.AddShortcut(
+					RenameSelectedItemEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						RenameSelectedItemEditorShortcutDisplayName,
+						Key.R,
+						ctrlPressed: true
+					)
+				);
+			}
+
+			if (!newFolderExists)
+			{
+				editorSettings.AddShortcut(
+					NewFolderEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						NewFolderEditorShortcutDisplayName,
+						Key.F,
+						ctrlPressed: true
+					)
+				);
+			}
+
+			if (!addExistingScriptsExists)
+			{
+				editorSettings.AddShortcut(
+					AddExistingScriptsEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						AddExistingScriptsEditorShortcutDisplayName,
+						Key.S,
+						ctrlPressed: true,
+						altPressed: true
+					)
+				);
+			}
+
+			if (!addExistingScenesExists)
+			{
+				editorSettings.AddShortcut(
+					AddExistingScenesEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						AddExistingScenesEditorShortcutDisplayName,
+						Key.A,
+						ctrlPressed: true,
+						altPressed: true
+					)
+				);
+			}
+
+			if (!refactorNamespaceExists)
+			{
+				editorSettings.AddShortcut(
+					RefactorNamespaceEditorShortcutPath,
+					CreateEditorKeyShortcut(
+						RefactorNamespaceEditorShortcutDisplayName,
+						Key.N,
+						ctrlPressed: true
+					)
+				);
+			}
+
 			beautifyExists = editorSettings.HasShortcut(BeautifyEditorShortcutPath);
 			newScriptExists = editorSettings.HasShortcut(NewScriptEditorShortcutPath);
 			removeExists = editorSettings.HasShortcut(RemoveSelectedItemEditorShortcutPath);
+			toggleFocusExists = editorSettings.HasShortcut(
+				ToggleTreeScriptEditorFocusShortcutPath
+			);
+			collapseTreeExists = editorSettings.HasShortcut(
+				CollapseTreeEditorShortcutPath
+			);
+			renameSelectedItemExists = editorSettings.HasShortcut(
+				RenameSelectedItemEditorShortcutPath
+			);
+			newFolderExists = editorSettings.HasShortcut(
+				NewFolderEditorShortcutPath
+			);
+			addExistingScriptsExists = editorSettings.HasShortcut(
+				AddExistingScriptsEditorShortcutPath
+			);
+			addExistingScenesExists = editorSettings.HasShortcut(
+				AddExistingScenesEditorShortcutPath
+			);
+			refactorNamespaceExists = editorSettings.HasShortcut(
+				RefactorNamespaceEditorShortcutPath
+			);
 
-			if (!beautifyExists || !newScriptExists || !removeExists)
+			if (
+				!beautifyExists
+				|| !newScriptExists
+				|| !removeExists
+				|| !toggleFocusExists
+				|| !collapseTreeExists
+				|| !renameSelectedItemExists
+				|| !newFolderExists
+				|| !addExistingScriptsExists
+				|| !addExistingScenesExists
+				|| !refactorNamespaceExists
+			)
 			{
 				DebugLogger.LogOperation(
 					"Editor shortcut registration incomplete",
-					$"Beautify={beautifyExists}, NewScript={newScriptExists}, RemoveSelectedItem={removeExists}"
+					$"Beautify={beautifyExists}, NewScript={newScriptExists}, RemoveSelectedItem={removeExists}, ToggleTreeScriptEditorFocus={toggleFocusExists}, CollapseTree={collapseTreeExists}, RenameSelectedItem={renameSelectedItemExists}, NewFolder={newFolderExists}, AddExistingScripts={addExistingScriptsExists}, AddExistingScenes={addExistingScenesExists}, RefactorNamespace={refactorNamespaceExists}"
 				);
 				return false;
 			}
@@ -218,16 +463,58 @@ public partial class SystemExplorerPlugin
 				RemoveSelectedItemEditorShortcutPath,
 				RemoveSelectedItemEditorShortcutDisplayName
 			);
+			bool toggleFocusDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				ToggleTreeScriptEditorFocusShortcutPath,
+				ToggleTreeScriptEditorFocusShortcutDisplayName
+			);
+			bool collapseTreeDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				CollapseTreeEditorShortcutPath,
+				CollapseTreeEditorShortcutDisplayName
+			);
+			bool renameSelectedItemDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				RenameSelectedItemEditorShortcutPath,
+				RenameSelectedItemEditorShortcutDisplayName
+			);
+			bool newFolderDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				NewFolderEditorShortcutPath,
+				NewFolderEditorShortcutDisplayName
+			);
+			bool addExistingScriptsDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				AddExistingScriptsEditorShortcutPath,
+				AddExistingScriptsEditorShortcutDisplayName
+			);
+			bool addExistingScenesDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				AddExistingScenesEditorShortcutPath,
+				AddExistingScenesEditorShortcutDisplayName
+			);
+			bool refactorNamespaceDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				RefactorNamespaceEditorShortcutPath,
+				RefactorNamespaceEditorShortcutDisplayName
+			);
 
 			if (
 				!beautifyDisplayNameRegistered
 				|| !newScriptDisplayNameRegistered
 				|| !removeDisplayNameRegistered
+				|| !toggleFocusDisplayNameRegistered
+				|| !collapseTreeDisplayNameRegistered
+				|| !renameSelectedItemDisplayNameRegistered
+				|| !newFolderDisplayNameRegistered
+				|| !addExistingScriptsDisplayNameRegistered
+				|| !addExistingScenesDisplayNameRegistered
+				|| !refactorNamespaceDisplayNameRegistered
 			)
 			{
 				DebugLogger.LogOperation(
 					"Editor shortcut display-name registration incomplete",
-					$"Beautify={beautifyDisplayNameRegistered}, NewScript={newScriptDisplayNameRegistered}, RemoveSelectedItem={removeDisplayNameRegistered}"
+					$"Beautify={beautifyDisplayNameRegistered}, NewScript={newScriptDisplayNameRegistered}, RemoveSelectedItem={removeDisplayNameRegistered}, ToggleTreeScriptEditorFocus={toggleFocusDisplayNameRegistered}, CollapseTree={collapseTreeDisplayNameRegistered}, RenameSelectedItem={renameSelectedItemDisplayNameRegistered}, NewFolder={newFolderDisplayNameRegistered}, AddExistingScripts={addExistingScriptsDisplayNameRegistered}, AddExistingScenes={addExistingScenesDisplayNameRegistered}, RefactorNamespace={refactorNamespaceDisplayNameRegistered}"
 				);
 				return false;
 			}
@@ -331,13 +618,13 @@ public partial class SystemExplorerPlugin
 		if (HandleGlobalBeautifyShortcut(inputEvent))
 			return;
 
-		if (HandleGlobalNewScriptShortcut(inputEvent))
+		if (HandleGlobalToggleTreeScriptEditorFocusShortcut(inputEvent))
 			return;
 
-		if (HandleGlobalRemoveSelectedShortcut(inputEvent))
+		if (HandleGlobalTreeKeyboardNavigation(inputEvent))
 			return;
 
-		HandleGlobalTreeKeyboardNavigation(inputEvent);
+		HandleGlobalTreeShortcutDispatch(inputEvent);
 	}
 
 	private bool HandleGlobalBeautifyShortcut(InputEvent inputEvent)
@@ -360,30 +647,22 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		if (
-			TryHandleBeautifyShortcutForFocusedScriptEditor(
+			!TryHandleBeautifyShortcutForFocusedScriptEditor(
 				focusedControl,
-				out bool focusWasInScriptEditor
+				out _
 			)
 		)
 		{
-			GetViewport().SetInputAsHandled();
-			return true;
+			return false;
 		}
-
-		if (focusWasInScriptEditor || IsTextInputFocused(focusedControl))
-			return false;
-
-		if (_tree == null || _tree.GetSelected() == null)
-			return false;
-
-		if (!TryHandleBeautifyShortcutForSelectedItem())
-			return false;
 
 		GetViewport().SetInputAsHandled();
 		return true;
 	}
 
-	private bool HandleGlobalNewScriptShortcut(InputEvent inputEvent)
+	private bool HandleGlobalToggleTreeScriptEditorFocusShortcut(
+		InputEvent inputEvent
+	)
 	{
 		if (inputEvent is not InputEventKey keyEvent)
 			return false;
@@ -391,50 +670,21 @@ public partial class SystemExplorerPlugin
 		if (
 			!keyEvent.Pressed
 			|| keyEvent.Echo
-			|| !IsEditorShortcut(NewScriptEditorShortcutPath, keyEvent)
+			|| !IsEditorShortcut(
+				ToggleTreeScriptEditorFocusShortcutPath,
+				keyEvent
+			)
 		)
 		{
 			return false;
 		}
 
-		if (_isFilteringScripts)
-			return false;
-
 		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
 
-		if (!IsSystemExplorerFocusReleaseTarget(focusedControl))
+		if (!IsCurrentScriptEditorTextEditorFocused(focusedControl))
 			return false;
 
-		if (!TryOpenCreateScriptDialogForSelectedItem())
-			return false;
-
-		GetViewport().SetInputAsHandled();
-		return true;
-	}
-
-	private bool HandleGlobalRemoveSelectedShortcut(InputEvent inputEvent)
-	{
-		if (inputEvent is not InputEventKey keyEvent)
-			return false;
-
-		if (
-			!keyEvent.Pressed
-			|| keyEvent.Echo
-			|| !IsEditorShortcut(RemoveSelectedItemEditorShortcutPath, keyEvent)
-		)
-		{
-			return false;
-		}
-
-		if (_isFilteringScripts)
-			return false;
-
-		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
-
-		if (!IsSystemExplorerFocusReleaseTarget(focusedControl))
-			return false;
-
-		if (!TryOpenRemoveDialogForSelectedItem())
+		if (!TryFocusSystemExplorerHiddenTreeContext(revealDock: true))
 			return false;
 
 		GetViewport().SetInputAsHandled();
@@ -472,12 +722,66 @@ public partial class SystemExplorerPlugin
 		return false;
 	}
 
-	private static bool IsCtrlShiftCollapseCommand(InputEventKey keyEvent)
+	private static bool TryGetCurrentScriptEditorTextEditor(
+		out TextEdit textEditor
+	)
 	{
-		bool isCtrlKey = keyEvent.Keycode == Key.Ctrl || keyEvent.PhysicalKeycode == Key.Ctrl;
-		bool isShiftKey = keyEvent.Keycode == Key.Shift || keyEvent.PhysicalKeycode == Key.Shift;
+		textEditor = null;
 
-		return (isCtrlKey && keyEvent.ShiftPressed) || (isShiftKey && keyEvent.CtrlPressed);
+		EditorInterface editorInterface = EditorInterface.Singleton;
+
+		if (editorInterface == null || !GodotObject.IsInstanceValid(editorInterface))
+			return false;
+
+		ScriptEditor scriptEditor = editorInterface.GetScriptEditor();
+
+		if (scriptEditor == null || !GodotObject.IsInstanceValid(scriptEditor))
+			return false;
+
+		Script currentScript = scriptEditor.GetCurrentScript();
+
+		if (currentScript == null || !GodotObject.IsInstanceValid(currentScript))
+			return false;
+
+		ScriptEditorBase currentEditor = scriptEditor.GetCurrentEditor();
+
+		if (currentEditor == null || !GodotObject.IsInstanceValid(currentEditor))
+			return false;
+
+		Control baseEditor = currentEditor.GetBaseEditor();
+
+		if (baseEditor is not TextEdit currentTextEditor)
+			return false;
+
+		if (
+			!GodotObject.IsInstanceValid(currentTextEditor)
+			|| currentTextEditor.IsQueuedForDeletion()
+			|| !currentTextEditor.IsInsideTree()
+			|| !currentTextEditor.IsVisibleInTree()
+		)
+		{
+			return false;
+		}
+
+		textEditor = currentTextEditor;
+		return true;
+	}
+
+	private static bool IsCurrentScriptEditorTextEditorFocused(
+		Control focusedControl
+	)
+	{
+		return TryGetCurrentScriptEditorTextEditor(out TextEdit textEditor)
+			&& ControlContainsFocusedControl(textEditor, focusedControl);
+	}
+
+	private static bool TryFocusCurrentScriptEditorCursor()
+	{
+		if (!TryGetCurrentScriptEditorTextEditor(out TextEdit textEditor))
+			return false;
+
+		textEditor.GrabFocus();
+		return true;
 	}
 
 	private bool TryHandleBeautifyShortcutForFocusedScriptEditor(

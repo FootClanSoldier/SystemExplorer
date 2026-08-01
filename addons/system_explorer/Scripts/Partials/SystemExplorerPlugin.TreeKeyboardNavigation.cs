@@ -3,7 +3,7 @@ using Godot;
 
 public partial class SystemExplorerPlugin
 {
-	#region Hidden-Focus Tree Keyboard Navigation
+	#region Tree Keyboard Navigation
 	private enum TreeKeyboardNavigationCommand
 	{
 		None,
@@ -23,26 +23,9 @@ public partial class SystemExplorerPlugin
 		if (!IsSystemExplorerFocusReleaseTarget(focusedControl))
 			return false;
 
-		if (
-			!TryGetTreeKeyboardNavigationCommand(
-				keyEvent,
-				out TreeKeyboardNavigationCommand command
-			)
-		)
-		{
+		if (!TryApplyTreeKeyboardNavigation(keyEvent))
 			return false;
-		}
 
-		if (
-			_tree == null
-			|| !GodotObject.IsInstanceValid(_tree)
-			|| !_tree.IsInsideTree()
-		)
-		{
-			return false;
-		}
-
-		ApplyHiddenFocusTreeKeyboardNavigation(command);
 		GetViewport().SetInputAsHandled();
 		return true;
 	}
@@ -87,7 +70,32 @@ public partial class SystemExplorerPlugin
 		return command != TreeKeyboardNavigationCommand.None;
 	}
 
-	private void ApplyHiddenFocusTreeKeyboardNavigation(
+	private bool TryApplyTreeKeyboardNavigation(InputEventKey keyEvent)
+	{
+		if (
+			!TryGetTreeKeyboardNavigationCommand(
+				keyEvent,
+				out TreeKeyboardNavigationCommand command
+			)
+		)
+		{
+			return false;
+		}
+
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| !_tree.IsInsideTree()
+		)
+		{
+			return false;
+		}
+
+		ApplyTreeKeyboardNavigation(command);
+		return true;
+	}
+
+	private void ApplyTreeKeyboardNavigation(
 		TreeKeyboardNavigationCommand command
 	)
 	{
@@ -114,11 +122,11 @@ public partial class SystemExplorerPlugin
 				break;
 
 			case TreeKeyboardNavigationCommand.Left:
-				ApplyHiddenFocusTreeKeyboardNavigationLeft(selectedItem);
+				ApplyTreeKeyboardNavigationLeft(selectedItem);
 				break;
 
 			case TreeKeyboardNavigationCommand.Right:
-				ApplyHiddenFocusTreeKeyboardNavigationRight(selectedItem);
+				ApplyTreeKeyboardNavigationRight(selectedItem);
 				break;
 		}
 	}
@@ -153,7 +161,7 @@ public partial class SystemExplorerPlugin
 		SelectTreeItemFromKeyboardNavigation(lastVisibleItem);
 	}
 
-	private void ApplyHiddenFocusTreeKeyboardNavigationLeft(TreeItem selectedItem)
+	private void ApplyTreeKeyboardNavigationLeft(TreeItem selectedItem)
 	{
 		TreeItem firstChild = selectedItem.GetFirstChild();
 
@@ -168,7 +176,7 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private void ApplyHiddenFocusTreeKeyboardNavigationRight(TreeItem selectedItem)
+	private void ApplyTreeKeyboardNavigationRight(TreeItem selectedItem)
 	{
 		TreeItem firstChild = selectedItem.GetFirstChild();
 

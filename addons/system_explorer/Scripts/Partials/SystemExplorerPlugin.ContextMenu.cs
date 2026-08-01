@@ -62,7 +62,12 @@ public partial class SystemExplorerPlugin
 		_pendingScriptRenameTreeState = metadata.StartsWith("script::")
 			? CaptureScriptRenameTreeState(GetEntryFromMetadata(metadata))
 			: null;
-		_pendingAddFolderMetadata = GetAddFolderTargetMetadata(metadata);
+		_pendingAddFolderMetadata = TryResolveAddFolderTargetMetadata(
+			item,
+			out string addFolderTargetMetadata
+		)
+			? addFolderTargetMetadata
+			: "";
 		_pendingShowInFileManagerMetadata = metadata;
 		_pendingBeautifyScriptMetadata = metadata;
 		_pendingFolderBindingMetadata = metadata.StartsWith("folder::") ? metadata : "";
@@ -114,23 +119,6 @@ public partial class SystemExplorerPlugin
 		return metadata.StartsWith("script::", StringComparison.Ordinal);
 	}
 
-	private string GetAddFolderTargetMetadata(string metadata)
-	{
-		if (string.IsNullOrWhiteSpace(metadata) || !metadata.StartsWith("script::"))
-			return metadata;
-
-		string entry = GetEntryFromMetadata(metadata);
-		string systemName = FindSystemNameForEntry(entry);
-
-		if (string.IsNullOrWhiteSpace(systemName))
-			return metadata;
-
-		string folderPath = GetFolderPathFromEntry(entry);
-		return string.IsNullOrWhiteSpace(folderPath)
-			? $"system::{systemName}"
-			: $"folder::{systemName}::{folderPath}";
-	}
-
 	private void BuildContextMenuForMetadata(string metadata)
 	{
 		BuildContextMenuForMetadata(metadata, useReversedSubmenuIcons: false);
@@ -172,16 +160,24 @@ public partial class SystemExplorerPlugin
 				_contextNewSubmenu,
 				"Folder",
 				ContextAddFolder,
-				_contextFolderIcon
+				_contextFolderIcon,
+				NewFolderEditorShortcutPath
 			);
 			AddContextSubmenuItem("Add", _contextAddSubmenu, useReversedSubmenuIcons);
 			AddContextSubmenuIconItem(
 				_contextAddSubmenu,
 				"Scripts",
 				ContextAddScript,
-				_contextAddScriptIcon
+				_contextAddScriptIcon,
+				AddExistingScriptsEditorShortcutPath
 			);
-			AddContextSubmenuIconItem(_contextAddSubmenu, "Scenes", ContextAddScene, _sceneIcon);
+			AddContextSubmenuIconItem(
+				_contextAddSubmenu,
+				"Scenes",
+				ContextAddScene,
+				_sceneIcon,
+				AddExistingScenesEditorShortcutPath
+			);
 		}
 
 		if (canShowQuickActions)
@@ -208,7 +204,8 @@ public partial class SystemExplorerPlugin
 				_contextQuickActionsSubmenu,
 				"Refactor Namespace",
 				ContextRefactorNamespace,
-				_contextRefactorNamespaceIcon
+				_contextRefactorNamespaceIcon,
+				RefactorNamespaceEditorShortcutPath
 			);
 		}
 
@@ -267,7 +264,11 @@ public partial class SystemExplorerPlugin
 				_contextMenu.AddSeparator();
 		}
 
-		AddContextMenuIconItem("Rename", ContextRename, _contextRenameIcon);
+		AddContextMenuIconItem(
+			"Rename",
+			ContextRename,
+			_contextRenameIcon
+		);
 		AddContextMenuIconItem("Remove", ContextRemove, _contextRemoveIcon);
 
 		bool canShowFileManagerAction = isScript || isScene || HasFolderFileManagerTarget(metadata);
@@ -595,11 +596,11 @@ public partial class SystemExplorerPlugin
 				break;
 
 			case ContextAddScript:
-				OnAddScriptPressed();
+				TryOpenAddExistingScriptsDialogForSelectedItem();
 				break;
 
 			case ContextAddScene:
-				OnAddScenePressed();
+				TryOpenAddExistingScenesDialogForSelectedItem();
 				break;
 
 			case ContextNewScript:
@@ -635,15 +636,10 @@ public partial class SystemExplorerPlugin
 				break;
 
 			case ContextRefactorNamespace:
-				if (
-					_isBeautifyingScript
-					|| _pendingQuickActionsNoScriptsFound
-				)
-				{
+				if (_pendingQuickActionsNoScriptsFound)
 					return;
-				}
 
-				OpenNamespaceRefactorDialog(_pendingRenameMetadata);
+				TryOpenNamespaceRefactorDialog(_pendingRenameMetadata);
 				break;
 
 			case ContextBeautifyScript:

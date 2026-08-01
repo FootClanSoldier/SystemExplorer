@@ -379,15 +379,63 @@ public partial class SystemExplorerPlugin
 			invalidComponents.Add($"{componentName}=invalid");
 	}
 
-	private void OpenNamespaceRefactorDialog(string metadata)
+	private bool TryOpenNamespaceRefactorDialog(string metadata)
 	{
+		if (
+			string.IsNullOrWhiteSpace(metadata)
+			|| !EnableQuickActions
+			|| _isBeautifyingScript
+		)
+		{
+			return false;
+		}
+
+		bool isSupportedTarget =
+			metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal)
+			|| metadata.StartsWith("script::", StringComparison.Ordinal);
+
+		if (!isSupportedTarget)
+			return false;
+
 		if (!EnsureManagedAssemblyStateCurrent("Open Refactor Namespace"))
-			return;
+			return false;
 
 		if (!TryEnsureNamespaceRefactorHost(out NamespaceRefactorPluginHost host))
-			return;
+			return false;
 
 		host.Open(metadata);
+		return true;
+	}
+
+	private bool TryOpenNamespaceRefactorDialogForSelectedItem()
+	{
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _tree.IsQueuedForDeletion()
+		)
+		{
+			return false;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (selectedItem == null || !GodotObject.IsInstanceValid(selectedItem))
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+		bool isSystem = metadata.StartsWith("system::", StringComparison.Ordinal);
+		bool isFolder = metadata.StartsWith("folder::", StringComparison.Ordinal);
+		bool isScript = metadata.StartsWith("script::", StringComparison.Ordinal);
+
+		if (!isSystem && !isFolder && !isScript)
+			return false;
+
+		if ((isSystem || isFolder) && !TreeItemSubtreeContainsScript(selectedItem))
+			return false;
+
+		return TryOpenNamespaceRefactorDialog(metadata);
 	}
 
 	private void OnNamespaceRefactorConfirmed()

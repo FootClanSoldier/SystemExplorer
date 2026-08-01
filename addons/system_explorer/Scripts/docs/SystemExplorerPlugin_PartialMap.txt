@@ -2,7 +2,7 @@ System Explorer partial class map:
 
 SystemExplorerPlugin.cs (Core file)
 - Constants, shared fields, editor lifecycle, icon loading, template bootstrap, dock registration/removal, and core setup/teardown flow.
-- Declares the folder-bindings resource path, shared folder-binding dialog field, and normal/bound folder colors, and coordinates dock creation, atomic persistent-state initialization, startup-only folder synchronization, reload-safe editor integrations, and idempotent teardown in the core plugin order.
+- Declares the folder-bindings resource path, shared folder-binding dialog field, shared Shortcut Conflict dialog field, and normal/bound folder colors, and coordinates dock creation, atomic persistent-state initialization, startup-only folder synchronization, reload-safe editor integrations, and idempotent teardown in the core plugin order.
 - Acts as the composition root for the shared ScriptEditorBufferLocator, ScriptEditorBufferAutosaveService, ScriptEditorBufferBatchService, and ScriptEditorBufferAutosaveCoordinator instances used across plugin partials and feature hosts.
 - Owns one lazy plugin-instance SystemExplorerDebugLogger and supplies it with the dynamic () => DebugState provider, so the current Project Settings value is read when each log method runs rather than cached during logger construction.
 - Keeps locator construction behind a lazy holder so lazy Refactor Namespace preflight composition always receives a fully constructed non-null locator.
@@ -24,7 +24,7 @@ Diagnostics/SystemExplorerDebugLogger.cs
 
 Partials/SystemExplorerPlugin.DockUi.cs
 - Builds the dock UI controls, toolbar/input layout, feature-specific dialogs, tree control, context menu nodes, and their plugin-owned reload-safe signal wiring, including the reusable Physical Remove terminal-result dialog whose title and message are selected by RenameRemove.cs.
-- Creates and mounts the single shared technical tree-operation result dialog through TreeOperationDialogs.cs without owning its presentation policy or operation context.
+- Creates and mounts the single shared technical tree-operation result dialog through TreeOperationDialogs.cs without owning its presentation policy or operation context, and mounts the reusable Shortcut Conflict dialog created by TreeShortcutDispatcher.cs without adding signal ownership or a separate teardown path.
 - Creates exactly one reusable Resources-access EditorFileDialog for folder binding, configured for OpenDir and connected through DirSelected.
 - Invokes the dedicated Refactor Namespace partial to create its plugin-owned dialogs and controls, delegates their idempotent named-callable wiring to that partial, mounts both dialogs directly under _dock as siblings after _createScriptDialog and before the CSharpier dialogs, and creates the initial managed host through the same centralized composition method used by recovery.
 - Owns validation, idempotent Connect/IsConnected/Disconnect coordination, named signal adapters, teardown reference clearing, and the named first-run-note margin callback for dock-owned controls.
@@ -34,7 +34,7 @@ Partials/SystemExplorerPlugin.EditorReloadLifecycle.cs
 - Owns bounded managed-generation recovery that first reconnects valid existing UI and otherwise tears down and rebuilds the plugin-owned dock integration, reloads architecture metadata plus best-effort persistent tree view state, recreates managed integrations/lifetime state, rebuilds the tree, restores the exact persisted selection without navigation, restores any native busy-cursor marker left by a protected foreground operation, and verifies critical tree/context-menu signals against the current plugin instance before accepting recovery.
 - Owns the per-assembly generation token, initialized-generation marker, reentrancy guard, and deduplicated user-facing failure path used to detect and recover a managed C# assembly reload without interpreting legitimately empty metadata as lost state.
 - Reads systems.json first and folder_bindings.json second into local validated models, then replaces _systems and _folderBindings together only after both read paths succeed; the recovery path is read-only and never invokes save, rollback, or startup folder synchronization.
-- Resets reload-unsafe queued and pending managed operation state, validates the surviving dock/dialog objects, and restores dock, TreeOperationDialog, Refactor Namespace, EditorFileSystem, ScriptEditor, and polling-timer integrations idempotently.
+- Resets reload-unsafe queued and pending managed operation state, validates the surviving dock/dialog objects including the Shortcut Conflict dialog, hides that dialog during managed reload, and restores dock, TreeOperationDialog, Refactor Namespace, EditorFileSystem, ScriptEditor, and polling-timer integrations idempotently.
 - Provides the shared named-method Callable helpers that use Godot's actual IsConnected state for defensive Connect and Disconnect behavior across plugin partials.
 
 Partials/SystemExplorerPlugin.TreeOperationDialogs.cs
@@ -50,6 +50,8 @@ Partials/SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
 - Owns the only NamespaceRefactorPluginHost constructor call, injecting the current plugin-owned UI plus the unchanged shared services, providers, metadata helpers, logging callbacks, editor-context callbacks, and the narrow plugin-facing foreground-operation starter.
 - Owns the adapter between validated NamespaceRefactor confirmations and the shared foreground editor-operation runner: admission and Busy activation occur through StartObservedEditorOperation(...), then the adapter checks cancellation and plugin/Godot access before and after one SceneTree.ProcessFrame wait before invoking the unchanged synchronous NamespaceRefactor operation body.
 - Provides the centralized host ensure/recovery path: validates all required Godot objects, reuses a host bound to the current dialogs, or rebuilds only the managed host/view/feature/service graph around the existing UI without creating nodes, adding children, reconnecting signals, searching the dock tree, or rebuilding the dock.
+- Provides the bool-returning central Refactor Namespace host wrapper used by both context-menu and dispatcher routing; it validates Quick Actions availability, Beautify exclusion, and supported system/folder/script metadata before handing the request to the existing host.
+- Provides the selected-item dispatcher helper, rejects direct scene rows, reuses TreeItemSubtreeContainsScript(...) to reject system/folder targets without scripts, and intentionally continues to support selected script rows while script filtering is active.
 - Routes context-menu opening and every plugin-owned Refactor Namespace signal through the ensure path, logs invalid component names or composition exceptions, and emits one warning for a failed user action.
 
 Partials/SystemExplorerPlugin.TreeStatePersistence.cs
@@ -62,6 +64,7 @@ Partials/SystemExplorerPlugin.TreeStatePersistence.cs
 
 Partials/SystemExplorerPlugin.TreeBuilding.cs
 - Builds/rebuilds the tree only after the managed assembly generation and persistent tree state have been verified, restores expansion state, re-establishes filter-mode bookkeeping after managed reload, tracks forced expansion, and contains collapse/expand helpers.
+- Owns the shared Collapse Tree command helper used by real Tree focus and the hidden focus-release target; it preserves systems recovery and recovered-state rebuilding, delegates unchanged collapse-state and selection clearing to CollapseEntireTree(), blocks the flat script-filter list, and defers focus transfer back to the hidden target after a successful command.
 - Provides tree expansion snapshot helpers plus generic system-parent discovery, exact metadata-within-subtree lookup, and parent expansion used by persistent selection, rename restoration, and ScriptEditorSync. Collapse Entire Tree explicitly clears the persistent selected-item identity while rebuild-time Tree.Clear() does not.
 - Handles lock icon visibility/display state and script tooltip text during tree creation.
 - Applies the bound-folder color and exact physical res:// tooltip only to folders with their own loaded binding; normal folders retain the standard folder color and empty tooltip.
@@ -73,6 +76,8 @@ Partials/SystemExplorerPlugin.ScriptFilter.cs
 
 Partials/SystemExplorerPlugin.AddCreate.cs
 - Handles adding systems/folders/scripts/scenes and creating new C# script files from the template.
+- Provides the shared selected-item New Folder dialog opener used by keyboard routing and the exact TreeItem-hierarchy target resolver used by both shortcuts and the context menu; system/folder targets create inside themselves while script/direct-scene targets resolve their exact virtual parent without a global first-entry lookup, and filtering blocks dialog opening.
+- Provides shared bool-returning selected-item openers for the existing Add Scripts and Add Scenes EditorFileDialogs; both context-menu routing and TreeShortcutDispatcher use these same validation/opening paths, preserve system/folder/script/direct-scene destination resolution, and reject opening while script filtering is active.
 - Provides the shared validated Create Script dialog opener used by context-menu and shortcut routing; it requires a supported selected System Explorer target, a resolvable selected system, inactive script filtering, and valid tree/dialog instances before opening the existing dialog.
 - Handles selected file callbacks, target location resolution, forced expansion after additions, and opening newly created scripts through the shared System Explorer script-open helper.
 - Create Script verifies the selected system and runs Persistence.cs's shared verified systems metadata preflight before creating the .cs file; its existing post-creation snapshot rollback and incomplete-file-retained flow remain the second protection layer.
@@ -82,17 +87,16 @@ Partials/SystemExplorerPlugin.NavigationRecovery.cs
 - Handles tree item selection/navigation for scripts and scenes, reopening selected scripts, and missing script recovery dialogs.
 - Forwards every meaningful ItemSelected change to TreeStatePersistence.cs before ScriptEditorSync navigation suppression is consumed, so user, right-click, filter, and Script Editor Sync selections share the same persistent save queue; persistent restore suppression still permits lock-icon refresh without navigation or resave.
 - Captures the exact virtual source occurrence from a selected script TreeItem and forwards it through the shared script-open flow without mutating system data.
-- Owns the teardown-safe transfer to the hidden focus-release target after System Explorer navigation and recovery flows, preserving System Explorer as the active shortcut and keyboard-navigation context without assigning visual focus to the Tree.
+- Provides the reusable teardown-safe transfer to the hidden focus-release target after System Explorer navigation and recovery flows, preserving System Explorer as the active shortcut and keyboard-navigation context without assigning visual focus to the Tree; the explicit toggle-shortcut path can additionally reveal the valid mounted EditorDock before requesting the same hidden focus.
 - Handles relinking or removing missing scripts and safely replacing entries in systems.
-- Delegates System Explorer script opening to Partials/SystemExplorerPlugin.ScriptOpenPosition.cs so navigation behavior stays centralized.
+- Delegates System Explorer script opening to Partials/SystemExplorerPlugin.ScriptOpening.cs so navigation behavior stays centralized.
 
-Partials/SystemExplorerPlugin.ScriptOpenPosition.cs
-- Contains the shared System Explorer script-open helper used by tree navigation and newly created scripts.
-- Registers an optional source-aware System Explorer activation with ScriptEditorSync immediately before EditScript(...), then queues the token-guarded deferred resolution used when Godot emits no new active-script signal.
-- Uses EditorIntegration/ScriptEditing/ScriptPathUtility.cs for general script-path string normalization.
-- Tracks which physical script paths have been opened from System Explorer during the current editor session; virtual duplicate occurrences do not reset caret/scroll position again.
-- After the first System Explorer open for a script in a session, verifies the active script editor and attempts to place the TextEdit caret/scroll position at the top.
-- Releases tree focus after navigation when requested and logs applied, skipped, and failed top-reset attempts through the shared DebugLogger.Log(...) sink.
+Partials/SystemExplorerPlugin.ScriptOpening.cs
+- Owns the shared System Explorer script-open path used by normal tree navigation and newly created scripts.
+- Registers an optional source-aware activation with ScriptEditorSync before EditScript(...), then queues the token-guarded deferred resolution used when Godot emits no new active-script signal.
+- Uses EditorIntegration/ScriptEditing/ScriptPathUtility.cs to normalize the expected script path used by ScriptEditorSync.
+- Returns keyboard context to the hidden tree-focus target when the call site requests it, without assigning visual focus to the Tree.
+- Does not own or mutate script caret, selection, or scroll position; those remain entirely owned by Godot's Script Editor state.
 
 Partials/SystemExplorerPlugin.ScriptEditorSync.cs
 - Handles synchronization between Godot's active Script Editor script and the System Explorer tree selection.
@@ -110,34 +114,45 @@ Partials/SystemExplorerPlugin.ScriptEditorSync.cs
 - Does not mutate system data or persist systems; only updates visual tree selection/expansion defensively.
 
 Partials/SystemExplorerPlugin.Shortcuts.cs
-- Owns the stable EditorSettings shortcut paths for Beautify, New Script, and Remove Selected Item, registers missing default Shortcut resources once per managed assembly generation while preserving existing user-modified or intentionally empty events, and retries registration defensively when matching needs it.
-- Matches current user bindings through EditorSettings.IsShortcut(...) without permanently caching active Shortcut resources, so editor-setting changes and intentionally empty shortcuts take effect without restarting System Explorer.
-- Retains the plugin's single global _Input(...) composition point, routing Beautify, New Script, and Remove Selected Item before delegating strictly hidden-focus Up/Down/Left/Right handling to TreeKeyboardNavigation.cs.
-- Handles global Beautify routing, uses ScriptPathUtility.Normalize(...) for the active Script Editor script path, prioritizes the verified active Script Editor target before the selected System Explorer item, captures that target as the current Script/ScriptEditorBase/TextEdit identity relation for the immediate Beautify operation, and protects ordinary unmodified Unicode text entry inside LineEdit and TextEdit controls.
-- Complements TreeInput.cs's tree-local New Script routing with global New Script routing only when the current GUI focus owner is exactly the valid hidden focus-release target; it follows the current EditorSettings binding and filter restriction, opens the shared validated Create Script dialog, and consumes input only after the dialog opens.
-- Complements TreeInput.cs's tree-local Remove routing with global Remove routing only when the current GUI focus owner is exactly the valid hidden focus-release target; this preserves System Explorer's shortcut context without giving the Tree visual focus, follows the current user binding, retains the filter restriction, and consumes input only after the shared selected-item Remove helper opens the dialog.
-- Provides the shared selected-item Beautify and Remove dialog-opening helpers, does not handle lock input, and leaves Ctrl+Shift collapse as an unregistered tree-local special-gesture matcher.
+- Owns ten stable EditorSettings shortcut paths for Beautify, New Script, Remove Selected Item, Toggle Tree / Script Editor Focus, New Folder, Rename, Collapse Tree, Add Scripts, Add Scenes, and Refactor Namespace, registers missing default Shortcut resources once per managed assembly generation while preserving existing user-modified or intentionally empty events, and retains the display-only lookup surface used by context menus; tree-context routing for the registered commands is owned by TreeShortcutDispatcher.cs.
+- Retains the plugin's single global _Input(...) composition point, delegates hidden-focus Up/Down/Left/Right to TreeKeyboardNavigation.cs before delegating hidden tree-context shortcuts to TreeShortcutDispatcher.cs, and does not individually route tree-scoped commands.
+- Owns only the external active-Script-Editor Beautify route, uses ScriptPathUtility.Normalize(...) plus the verified current Script/ScriptEditorBase/TextEdit identity relation, and protects ordinary unmodified Unicode text entry inside LineEdit and TextEdit controls; selected TreeItem Beautify is owned exclusively by the tree dispatcher.
+- Owns only the external Script Editor to hidden System Explorer tree-context half of Toggle Tree / Script Editor Focus; the Tree to Script Editor half is owned by the tree dispatcher.
+- Provides the shared selected-item Beautify and Remove dialog-opening helpers reused by dispatcher execution and does not handle lock input.
+
+Partials/SystemExplorerPlugin.TreeShortcutDispatcher.cs
+- Owns the single stable registry of ten tree-scoped EditorSettings commands and their non-user-editable display names: Beautify, New Script, Remove Selected Item, Toggle Tree / Script Editor Focus, New Folder, Rename, Collapse Tree, Add Scripts, Add Scenes, and Refactor Namespace.
+- Matches the current user bindings directly through EditorSettings.IsShortcut(...) after one registration ensure per dispatch attempt, honors multiple events and intentionally empty shortcuts, deduplicates command identities, and never selects a winner when one input matches multiple commands.
+- Separates System Explorer ownership of a matching tree-context input from command availability: one or more matches are consumed before execution, a single match remains consumed when its helper returns false, and multiple matches execute nothing while presenting the reusable Shortcut Conflict dialog; Add Scripts, Add Scenes, and Refactor Namespace therefore inherit the same consumption and conflict behavior.
+- Uses the same dispatcher for the exact hidden _focusReleaseTarget and direct Tree.GuiInput routes, consuming through GetViewport().SetInputAsHandled() or _tree.AcceptEvent() respectively while preserving route-specific validation.
+- Defensively rejects unmodified Up/Down/Left/Right so reserved navigation keeps absolute priority, while modified arrow combinations remain eligible for normal shortcut matching.
+- Routes each command to one shared bool-returning command helper while preserving filtering rules and external Script Editor special routes; Add Scripts and Add Scenes are functionally blocked while filtering, while Refactor Namespace remains available for a selected filtered script row.
+- Future shortcuts available in System Explorer tree context must add one command id, one registry definition, and one execution case here instead of creating parallel hidden-global and Tree.GuiInput chains.
 
 Partials/SystemExplorerPlugin.TreeKeyboardNavigation.cs
-- Owns the global arrow-key proxy that activates only when the current GUI focus owner is exactly the valid hidden _focusReleaseTarget, sharing the generalized focus predicate used by hidden-context New Script and Remove routing.
-- Interprets only unmodified pressed Up, Down, Left, and Right key events, allows key repeat, and consumes every recognized hidden-focus arrow command even when navigation reaches a boundary or becomes a no-op.
+- Owns the shared arrow-key navigation algorithm used both by the global hidden _focusReleaseTarget context and by direct Tree.GuiInput when _tree itself has GUI focus.
+- Keeps the global arrow-key proxy restricted to the exact valid hidden focus-release target through the generalized focus predicate shared by hidden tree-context routing.
+- Treats unmodified pressed Up, Down, Left, and Right as reserved core navigation commands with higher priority than every rebindable shortcut, allows key repeat, and treats every recognized arrow command as handled even when navigation reaches a boundary or becomes a no-op.
+- Leaves Ctrl/Shift/Alt/Meta-modified arrows unhandled so TreeShortcutDispatcher.cs can match them as ordinary user bindings; a user binding can never replace the pure arrow navigation commands.
 - Navigates visible TreeItems without wrap: Up/Down move to the previous/next visible item; Left collapses an expanded item or moves to the previous visible item; Right expands a collapsed item, enters its first child when already expanded, or moves to the next visible item for leaves.
 - Handles a missing selection defensively by letting Down select the first visible item and Up select the last visible item while Left and Right remain consumed no-ops.
-- Selects column 0 and scrolls the item into view without giving the Tree GUI focus, opening scripts/scenes directly, or bypassing the existing ItemSelected navigation and persistence flow; the same behavior naturally applies to the flat script-filter tree.
+- Selects column 0 and scrolls the item into view without changing the current focus owner, opening scripts/scenes directly, or bypassing the existing ItemSelected navigation and persistence flow; the same behavior naturally applies to the flat script-filter tree.
 
 Partials/SystemExplorerPlugin.TreeInput.cs
 - Handles Tree.GuiInput and mouse-exit behavior for tree keyboard/mouse input, hover lock icon updates, filtering clicks, double-click scene opening, drag preparation/release, and ordered tree-local keyboard routing.
-- Routes tree-local New Script and Remove through their current registered EditorSettings shortcuts, consumes New Script only after the shared Create Script dialog opener succeeds, retains Ctrl+Shift as an unregistered Collapse Entire Tree special gesture, and defers focus transfer to the existing hidden focus-release target after a full collapse clears selection and persistent selection.
-- Leaves ordinary Up/Down/Left/Right handling to Godot's built-in Tree navigation whenever the Tree itself has GUI focus; hidden-focus arrow proxying is owned separately by TreeKeyboardNavigation.cs to prevent double handling.
+- Routes reserved unmodified Up/Down/Left/Right events to TreeKeyboardNavigation.cs first, consumes every recognized tree-local arrow command through _tree.AcceptEvent(), and therefore prevents Godot's built-in Tree or directional-focus navigation from applying a second navigation model.
+- Delegates all rebindable tree-scoped keyboard input, including Tree to Script Editor focus transfer, to TreeShortcutDispatcher.cs after navigation and contains no separate IsEditorShortcut(...) chain.
 - Retains middle-click as the only shortcut-like lock/unlock input and calls ToggleItemLock(item, selectToggledItemAfterBuild: false) without changing the underlying lock mutation safeguards.
 - Contains tree-item input helpers for script/scene detection, selected script/scene click handling, shift-click expansion, and local expand/collapse toggling.
 
 Partials/SystemExplorerPlugin.ContextMenu.cs
 - Handles context menu constants, hidden submenu icon state, context menu construction, submenu direction/icon behavior, and context menu action routing.
-- Handles pending metadata setup, captures the exact selected script occurrence for remove before the popup takes focus, New/Add/Quick Actions menu composition, Open File Path / Open Folder Path routing, visibility of file-manager actions, and context-specific system/folder/script/scene menu entries; the New submenu's Script row displays the current New Script EditorSettings binding through the shared display-only shortcut helper.
-- Routes ContextNewScript through AddCreate.cs's shared validated Create Script dialog opener so menu and keyboard entry points use the same availability and opening behavior.
+- Handles pending metadata setup, captures the exact selected script occurrence for remove before the popup takes focus, New/Add/Quick Actions menu composition, Open File Path / Open Folder Path routing, visibility of file-manager actions, and context-specific system/folder/script/scene menu entries.
+- Uses AddCreate.cs's exact selected-TreeItem resolver for the pending New Folder target, so context-menu folder creation follows the clicked virtual occurrence rather than a global first entry match.
+- Displays the current New Script binding on New > Script, the current New Folder binding on New > Folder, and the current Add Scripts, Add Scenes, and Refactor Namespace bindings on Add > Scripts, Add > Scenes, and Quick Actions > Refactor Namespace through the shared display-only shortcut helper; Rename currently has no displayed binding and Collapse Tree is intentionally not added to any context menu.
+- Routes ContextNewScript through AddCreate.cs's shared validated Create Script dialog opener so menu and keyboard entry points use the same availability and opening behavior, and routes Add Scripts / Add Scenes through their shared bool-returning AddCreate.cs dialog openers.
 - Adds folder-only Bind To Folder / Unbind Folder actions between the creation/quick-action section and Rename/Remove and routes them to the folder-binding partial.
-- Routes ContextRefactorNamespace through the plugin-owned OpenNamespaceRefactorDialog(_pendingRenameMetadata) wrapper, preserving the existing pending-metadata capture semantics while requiring the centralized host ensure/recovery path before opening.
+- Routes ContextRefactorNamespace through the bool-returning plugin-owned TryOpenNamespaceRefactorDialog(_pendingRenameMetadata) wrapper, preserving the existing pending-metadata capture and no-scripts semantics while sharing Quick Actions and Beautify validation with dispatcher routing.
 - Owns the defensive main-menu/Quick-Actions-submenu visibility check used by focused-editor Beautify so _isBeautifyingScript always changes while hidden menu items are refreshed only when the context-menu hierarchy is currently visible; menu construction still applies availability unconditionally.
 - Captures the exact selected script's system/folder/entry, filter, expansion, and pre-dialog focus context before the context menu takes focus so script rename can restore the same location after rebuilding.
 - Delegates physical file/folder target resolution and OS file-manager opening to Partials/SystemExplorerPlugin.ContextMenu.FileManager.cs.
@@ -188,6 +203,7 @@ Partials/SystemExplorerPlugin.DragDrop.cs
 
 Partials/SystemExplorerPlugin.RenameRemove.cs
 - Handles rename and remove operations for systems, folders, scripts, linked scenes, and direct scene entries.
+- Provides the shared selected-item Rename dialog opener used by keyboard routing, validates the exact selected metadata, and captures script rename tree state before dialog focus; context-menu opening preserves its existing pre-popup capture and both paths use the same defensive bool-returning dialog opener.
 - Handles file deletion, file/folder renames, forced expansion after renames, and updating script/scene entries after path changes.
 - Removes a non-deleted script by exact captured system/entry occurrence rather than a global first entry match; if the physical file is deleted, removes every virtual script or scene reference whose normalized path points to a deleted file.
 - Calls mutate-only folder-binding migration/removal helpers after successful system/folder mutations and reports whether bindings changed.

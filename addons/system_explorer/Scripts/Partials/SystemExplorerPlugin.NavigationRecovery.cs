@@ -59,6 +59,7 @@ public partial class SystemExplorerPlugin
 
 	private void OpenSceneFromTreeItem(TreeItem item)
 	{
+		
 		if (item == null)
 			return;
 
@@ -109,7 +110,7 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private void ReleaseTreeFocusAfterNavigation()
+	private bool TryFocusSystemExplorerHiddenTreeContext(bool revealDock)
 	{
 		if (
 			_focusReleaseTarget == null
@@ -117,12 +118,35 @@ public partial class SystemExplorerPlugin
 			|| !_focusReleaseTarget.IsInsideTree()
 		)
 		{
-			return;
+			return false;
+		}
+
+		if (revealDock)
+		{
+			if (
+				_editorDock == null
+				|| !GodotObject.IsInstanceValid(_editorDock)
+				|| !_editorDock.IsInsideTree()
+				|| _tree == null
+				|| !GodotObject.IsInstanceValid(_tree)
+				|| !_tree.IsInsideTree()
+			)
+			{
+				return false;
+			}
+
+			_editorDock.MakeVisible();
 		}
 
 		// Preserve System Explorer's shortcut and keyboard-navigation context
 		// without giving the tree a visual focus frame.
 		_focusReleaseTarget.GrabFocus();
+		return true;
+	}
+
+	private void ReleaseTreeFocusAfterNavigation()
+	{
+		TryFocusSystemExplorerHiddenTreeContext(revealDock: false);
 	}
 
 	private void OpenMissingScriptDialog(string entry, string scriptPath)

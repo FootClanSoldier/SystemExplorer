@@ -77,25 +77,89 @@ public partial class SystemExplorerPlugin
 		_pendingRemoveScriptOccurrence = occurrence;
 	}
 
-	private void OpenRenameDialog()
+	private bool TryOpenRenameDialogForSelectedItem()
 	{
-		if (string.IsNullOrWhiteSpace(_pendingRenameMetadata))
-			return;
-
-		if (_pendingRenameMetadata.StartsWith("system::"))
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _renameDialog == null
+			|| !GodotObject.IsInstanceValid(_renameDialog)
+			|| _renameInput == null
+			|| !GodotObject.IsInstanceValid(_renameInput)
+		)
 		{
-			_renameInput.Text = _pendingRenameMetadata.Replace("system::", "");
+			return false;
 		}
-		else if (_pendingRenameMetadata.StartsWith("folder::"))
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (selectedItem == null || !GodotObject.IsInstanceValid(selectedItem))
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+
+		if (!IsRenameTargetMetadata(metadata))
+			return false;
+
+		_pendingRenameMetadata = metadata;
+		_pendingScriptRenameTreeState = metadata.StartsWith(
+			"script::",
+			StringComparison.Ordinal
+		)
+			? CaptureScriptRenameTreeState(GetEntryFromMetadata(metadata))
+			: null;
+
+		if (OpenRenameDialog())
+			return true;
+
+		_pendingRenameMetadata = "";
+		_pendingScriptRenameTreeState = null;
+		return false;
+	}
+
+	private static bool IsRenameTargetMetadata(string metadata)
+	{
+		return !string.IsNullOrWhiteSpace(metadata)
+			&& (
+				metadata.StartsWith("system::", StringComparison.Ordinal)
+				|| metadata.StartsWith("folder::", StringComparison.Ordinal)
+				|| metadata.StartsWith("script::", StringComparison.Ordinal)
+				|| metadata.StartsWith("sceneLink::", StringComparison.Ordinal)
+			);
+	}
+
+	private bool OpenRenameDialog()
+	{
+		if (
+			!IsRenameTargetMetadata(_pendingRenameMetadata)
+			|| _renameDialog == null
+			|| !GodotObject.IsInstanceValid(_renameDialog)
+			|| _renameInput == null
+			|| !GodotObject.IsInstanceValid(_renameInput)
+		)
 		{
-			string[] parts = _pendingRenameMetadata.Split("::");
-
-			if (parts.Length < 3)
-				return;
-
-			_renameInput.Text = parts[2].Split("/").Last();
+			return false;
 		}
-		else if (_pendingRenameMetadata.StartsWith("script::"))
+
+		if (_pendingRenameMetadata.StartsWith("system::", StringComparison.Ordinal))
+		{
+			string systemName = GetSystemNameFromMetadata(_pendingRenameMetadata);
+
+			if (string.IsNullOrWhiteSpace(systemName))
+				return false;
+
+			_renameInput.Text = systemName;
+		}
+		else if (_pendingRenameMetadata.StartsWith("folder::", StringComparison.Ordinal))
+		{
+			string folderPath = GetFolderPathFromMetadata(_pendingRenameMetadata);
+
+			if (string.IsNullOrWhiteSpace(folderPath))
+				return false;
+
+			_renameInput.Text = folderPath.GetFile();
+		}
+		else if (_pendingRenameMetadata.StartsWith("script::", StringComparison.Ordinal))
 		{
 			string entry = GetEntryFromMetadata(_pendingRenameMetadata);
 			string scriptPath = GetScriptPathFromEntry(entry);
@@ -105,29 +169,33 @@ public partial class SystemExplorerPlugin
 			if (_pendingScriptRenameTreeState == null || !_pendingScriptRenameTreeState.IsValid)
 			{
 				ReportTreeOperationFailureOrWarning(
-                    "System Explorer could not identify the exact selected script entry before opening the rename dialog."
+					"System Explorer could not identify the exact selected script entry before opening the rename dialog."
 				);
-				return;
+				return false;
 			}
 
 			_renameInput.Text = scriptPath.GetFile().GetBaseName();
 		}
-		else if (_pendingRenameMetadata.StartsWith("sceneLink::"))
+		else if (_pendingRenameMetadata.StartsWith("sceneLink::", StringComparison.Ordinal))
 		{
-			string entry = _pendingRenameMetadata.Substring("sceneLink::".Length);
+			string entry = GetEntryFromMetadata(_pendingRenameMetadata);
 			string scenePath = GetScenePathFromEntry(entry);
+
+			if (string.IsNullOrWhiteSpace(scenePath))
+				return false;
 
 			_renameInput.Text = scenePath.GetFile().GetBaseName();
 		}
 		else
 		{
-			return;
+			return false;
 		}
 
 		_renameDialog.DialogHideOnOk = false;
 		_renameDialog.PopupCentered();
 		_renameInput.Edit(true);
 		_renameInput.SelectAll();
+		return true;
 	}
 
 	private void OnRemoveConfirmed()

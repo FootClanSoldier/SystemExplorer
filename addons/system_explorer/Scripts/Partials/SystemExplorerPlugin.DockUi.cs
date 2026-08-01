@@ -182,6 +182,7 @@ public partial class SystemExplorerPlugin
 
 		CreateNamespaceRefactorDialogs();
 		CreateTreeOperationDialog();
+		CreateTreeShortcutConflictDialog();
 
 
 		_csharpierInstallResultDialog = new AcceptDialog
@@ -222,6 +223,7 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_removeDialog);
 		_dock.AddChild(_physicalRemoveIncompleteDialog);
 		_dock.AddChild(_treeOperationDialog);
+		_dock.AddChild(_treeShortcutConflictDialog);
 		_dock.AddChild(_missingScriptDialog);
 		_dock.AddChild(_missingSceneDialog);
 		_dock.AddChild(_renameDialog);
@@ -659,6 +661,7 @@ public partial class SystemExplorerPlugin
 		_contextQuickActionsSubmenu = null;
 		_removeDialog = null;
 		_physicalRemoveIncompleteDialog = null;
+		_treeShortcutConflictDialog = null;
 		_removeFromFilesystemCheckBox = null;
 		_renameDialog = null;
 		_renameInput = null;

@@ -352,6 +352,12 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
+		if (!IsValidGodotObject(_treeShortcutConflictDialog))
+		{
+			failureDetail = "The shortcut-conflict dialog is unavailable.";
+			return false;
+		}
+
 		if (!AreNamespaceRefactorSignalSourcesValid(out failureDetail))
 			return false;
 
@@ -457,6 +463,7 @@ public partial class SystemExplorerPlugin
 		_namespaceRefactorHost = null;
 
 		HideWindowForManagedAssemblyReload(_removeDialog);
+		HideWindowForManagedAssemblyReload(_treeShortcutConflictDialog);
 		HideWindowForManagedAssemblyReload(_renameNameConflictDialog);
 		HideWindowForManagedAssemblyReload(_renameDialog);
 		HideWindowForManagedAssemblyReload(_addFolderConflictDialog);

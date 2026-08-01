@@ -86,6 +86,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private PopupMenu _contextQuickActionsSubmenu;
 	private ConfirmationDialog _removeDialog;
 	private AcceptDialog _physicalRemoveIncompleteDialog;
+	private AcceptDialog _treeShortcutConflictDialog;
 	private CheckBox _removeFromFilesystemCheckBox;
 	private AcceptDialog _renameDialog;
 	private LineEdit _renameInput;
