@@ -914,7 +914,8 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		_pendingRemoveMetadata = metadata;
-		CapturePendingRemoveScriptOccurrence();
+		CapturePendingRemoveTreeSelectionState(selectedItem);
+		CapturePendingRemoveScriptOccurrence(selectedItem);
 		OpenRemoveDialog();
 		return true;
 	}

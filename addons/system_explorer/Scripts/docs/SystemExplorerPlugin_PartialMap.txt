@@ -24,6 +24,7 @@ Diagnostics/SystemExplorerDebugLogger.cs
 
 Partials/SystemExplorerPlugin.DockUi.cs
 - Builds the dock UI controls, toolbar/input layout, feature-specific dialogs, tree control, context menu nodes, and their plugin-owned reload-safe signal wiring, including the reusable Physical Remove terminal-result dialog whose title and message are selected by RenameRemove.cs.
+- Creates the reusable wrapped input-warning dialogs for Rename, Add Folder, Add System, and Create Script through one shared factory; Rename and Add Folder warnings remain children of their originating dialogs while Add System and Create Script warnings are mounted directly under the dock.
 - Creates and mounts the single shared technical tree-operation result dialog through TreeOperationDialogs.cs without owning its presentation policy or operation context, and mounts the reusable Shortcut Conflict dialog created by TreeShortcutDispatcher.cs without adding signal ownership or a separate teardown path.
 - Creates exactly one reusable Resources-access EditorFileDialog for folder binding, configured for OpenDir and connected through DirSelected.
 - Invokes the dedicated Refactor Namespace partial to create its plugin-owned dialogs and controls, delegates their idempotent named-callable wiring to that partial, mounts both dialogs directly under _dock as siblings after _createScriptDialog and before the CSharpier dialogs, and creates the initial managed host through the same centralized composition method used by recovery.
@@ -38,7 +39,7 @@ Partials/SystemExplorerPlugin.EditorReloadLifecycle.cs
 - Provides the shared named-method Callable helpers that use Godot's actual IsConnected state for defensive Connect and Disconnect behavior across plugin partials.
 
 Partials/SystemExplorerPlugin.TreeOperationDialogs.cs
-- Owns the single reusable plugin-level AcceptDialog used for user-facing technical tree-operation failure, incomplete, and unclear-state results.
+- Owns the single reusable plugin-level AcceptDialog used for user-facing technical tree-operation failure, incomplete, and unclear-state results, plus the purely visual fixed-width/wrapped AcceptDialog helpers shared with normal input warnings.
 - Owns the scoped tree-operation context, nested result merging, severity precedence, per-operation deduplication, and the separation between concise user text and DebugLogger technical diagnostics. A finalized active failure presentation can be transferred into an immutable Godot-independent deferred snapshot without keeping the operation context or scope active across deferred frames.
 - Owns deferred and lifecycle-safe popup scheduling, including queued presentation before the dock is mounted, persistent deduplication for automatic folder sync, reload-state invalidation, named-callable signal wiring, and shutdown invalidation of stale deferred callbacks.
 - Enforces close-origin-before-popup ordering through idempotent feature-owned cleanup callbacks and provides the small shared reporting surface used by deeper persistence and recovery helpers without coupling them to originating dialogs.
@@ -175,8 +176,9 @@ Partials/SystemExplorerPlugin.FolderBinding.cs
 
 Partials/SystemExplorerPlugin.DialogInput.cs
 - Handles remove dialog setup and its existing Enter-confirm helper.
-- Owns the general deferred rename-name-conflict popup for systems, folders, scripts, and scenes, including object-specific dialog configuration, duplicate-popup guards, and focus restoration to the rename input.
-- Owns the Add Folder and Add System name-conflict popup guards plus deferred focus restoration to their respective input fields.
+- Owns the reusable deferred input-warning presentation for Rename, Add Folder, Add System, and Create Script, including dynamic titles/messages, duplicate-popup guards, and the shared fixed-width wrapped AcceptDialog presentation supplied by TreeOperationDialogs.cs.
+- Restores focus to the Rename, Add Folder, and System Name inputs after either Confirmed or Canceled closes the warning, while preserving the still-open Rename and Add Folder parent dialogs.
+- Revalidates the current selection after a Create Script warning closes, reopens the existing EditorFileDialog through TryOpenCreateScriptDialogForSelectedItem(), clears its file-name LineEdit through GetLineEdit(), and restores file-name focus best-effort without traversing child nodes.
 - Retains the general IsEnterPressed(...) helper for the remove dialog, but no longer contains Refactor Namespace input or confirmation handling.
 - Contains dialog OK focus release helpers used by remove and missing-item recovery dialogs.
 

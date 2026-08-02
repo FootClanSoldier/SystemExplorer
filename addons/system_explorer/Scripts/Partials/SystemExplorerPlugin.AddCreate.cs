@@ -27,6 +27,21 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (ContainsReservedSystemNameSeparator(systemName))
+		{
+			_systemNameInput.Text = "";
+			UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
+			ShowAddSystemInputWarning(
+				"Invalid System Name",
+				"System names cannot contain \"::\" because it is reserved by System Explorer."
+			);
+			DebugLogger.LogOperation(
+				"Add System cancelled: reserved separator",
+				systemName
+			);
+			return;
+		}
+
 		using TreeOperationDialogScope operationScope =
 			BeginTreeOperationDialogScope("Add System Failed");
 
@@ -38,7 +53,10 @@ public partial class SystemExplorerPlugin
 			DebugLogger.LogOperation("Add System failed: name conflict", systemName);
 			_systemNameInput.Text = "";
 			UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
-			ShowAddSystemConflictWarning();
+			ShowAddSystemInputWarning(
+				"System Already Exists",
+				"A system with this name already exists."
+			);
 			return;
 		}
 
@@ -198,6 +216,20 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (ContainsReservedVirtualFolderSeparator(folderName))
+		{
+			_addFolderInput.Text = "";
+			ShowAddFolderInputWarning(
+				"Invalid Folder Name",
+				"Folder names cannot contain \"::\" or \"|\" because those characters are reserved by System Explorer."
+			);
+			DebugLogger.LogOperation(
+				"Add Folder cancelled: reserved separator",
+				folderName
+			);
+			return;
+		}
+
 		string targetSystemName = GetSystemNameFromMetadata(_pendingAddFolderMetadata);
 		string parentFolderPath = GetFolderPathFromMetadata(_pendingAddFolderMetadata);
 		string addedFolderPath = string.IsNullOrWhiteSpace(parentFolderPath)
@@ -223,7 +255,10 @@ public partial class SystemExplorerPlugin
 				$"{targetSystemName}/{addedFolderPath}"
 			);
 			_addFolderInput.Text = "";
-			ShowAddFolderConflictWarning();
+			ShowAddFolderInputWarning(
+				"Folder Already Exists",
+				"A folder with this name already exists."
+			);
 			return;
 		}
 
@@ -235,7 +270,10 @@ public partial class SystemExplorerPlugin
 		if (result == FolderMutationResult.NameConflict)
 		{
 			_addFolderInput.Text = "";
-			ShowAddFolderConflictWarning();
+			ShowAddFolderInputWarning(
+				"Folder Already Exists",
+				"A folder with this name already exists."
+			);
 			return;
 		}
 
@@ -479,6 +517,23 @@ public partial class SystemExplorerPlugin
 		if (scriptPaths.Count == 0)
 			return AddTreeMutationResult.NoChange;
 
+		string unrepresentablePath = scriptPaths.FirstOrDefault(path =>
+			!IsPrimaryResourcePathRepresentable(path)
+		);
+
+		if (!string.IsNullOrWhiteSpace(unrepresentablePath))
+		{
+			ReportTreeOperationFailureOrWarning(
+				$"System Explorer cannot add this file because its path contains \"|\" which is reserved by the current entry format:\n{unrepresentablePath}",
+				$"Path='{unrepresentablePath}'"
+			);
+			DebugLogger.LogOperation(
+				"Add Scripts cancelled: unrepresentable primary resource path",
+				unrepresentablePath
+			);
+			return AddTreeMutationResult.Failed;
+		}
+
 		string systemName = GetSelectedSystemName();
 		string folderPath = GetSelectedFolderPath();
 
@@ -684,6 +739,23 @@ public partial class SystemExplorerPlugin
 		if (scenePaths.Count == 0)
 			return AddTreeMutationResult.NoChange;
 
+		string unrepresentablePath = scenePaths.FirstOrDefault(path =>
+			!IsPrimaryResourcePathRepresentable(path)
+		);
+
+		if (!string.IsNullOrWhiteSpace(unrepresentablePath))
+		{
+			ReportTreeOperationFailureOrWarning(
+				$"System Explorer cannot add this file because its path contains \"|\" which is reserved by the current entry format:\n{unrepresentablePath}",
+				$"Path='{unrepresentablePath}'"
+			);
+			DebugLogger.LogOperation(
+				"Add Scenes cancelled: unrepresentable primary resource path",
+				unrepresentablePath
+			);
+			return AddTreeMutationResult.Failed;
+		}
+
 		string systemName = GetSelectedSystemName();
 		string folderPath = GetSelectedFolderPath();
 
@@ -784,6 +856,20 @@ public partial class SystemExplorerPlugin
 
 		if (!path.EndsWith(".cs"))
 			path += ".cs";
+
+		if (!IsPrimaryResourcePathRepresentable(path))
+		{
+			ClearCreateScriptFileNameInputBestEffort();
+			ShowCreateScriptInputWarning(
+				"Invalid Script Path",
+				"System Explorer cannot create this script because its path contains \"|\" which is reserved by the current entry format.\n\nNo script file was created."
+			);
+			DebugLogger.LogOperation(
+				"Create Script cancelled: unrepresentable primary resource path",
+				path
+			);
+			return;
+		}
 
 		if (FileAccess.FileExists(path))
 		{

@@ -265,6 +265,19 @@ public partial class SystemExplorerPlugin
 
 		string oldEntry = _pendingMissingScriptEntry;
 
+		if (!IsPrimaryResourcePathRepresentable(newScriptPath))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer cannot relink this script because the selected path contains \"|\" which is reserved by the current entry format. The existing entry was not changed.",
+				$"Path='{newScriptPath}'"
+			);
+			DebugLogger.LogOperation(
+				"Relink Script cancelled: unrepresentable primary resource path",
+				newScriptPath
+			);
+			return;
+		}
+
 		if (!EnsureSystemsLoadedForTreeOperation("Relink Missing Script"))
 			return;
 

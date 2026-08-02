@@ -57,8 +57,10 @@ public partial class SystemExplorerPlugin
 		}
 
 		_pendingRemoveMetadata = metadata;
-		CapturePendingRemoveScriptOccurrence();
+		CapturePendingRemoveTreeSelectionState(item);
+		CapturePendingRemoveScriptOccurrence(item);
 		_pendingRenameMetadata = metadata;
+		CapturePendingNonScriptRenameTreeSelectionState(item, metadata);
 		_pendingScriptRenameTreeState = metadata.StartsWith("script::")
 			? CaptureScriptRenameTreeState(GetEntryFromMetadata(metadata))
 			: null;

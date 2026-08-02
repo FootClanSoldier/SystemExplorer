@@ -100,132 +100,193 @@ public partial class SystemExplorerPlugin
 		OnRemoveConfirmed();
 	}
 
-	private void ConfigureRenameNameConflictDialog(RenameConflictItemType itemType)
+	private void ShowRenameNameConflictWarning(RenameConflictItemType itemType)
 	{
-		if (
-			_renameNameConflictDialog == null
-			|| !GodotObject.IsInstanceValid(_renameNameConflictDialog)
-		)
-		{
-			return;
-		}
-
 		switch (itemType)
 		{
 			case RenameConflictItemType.System:
-				_renameNameConflictDialog.Title = "System Already Exists";
-				_renameNameConflictDialog.DialogText = "A system with this name already exists.";
+				ShowRenameInputWarning(
+					"System Already Exists",
+					"A system with this name already exists."
+				);
 				break;
 			case RenameConflictItemType.Folder:
-				_renameNameConflictDialog.Title = "Folder Already Exists";
-				_renameNameConflictDialog.DialogText = "A folder with this name already exists.";
+				ShowRenameInputWarning(
+					"Folder Already Exists",
+					"A folder with this name already exists."
+				);
 				break;
 			case RenameConflictItemType.Script:
-				_renameNameConflictDialog.Title = "Script Already Exists";
-				_renameNameConflictDialog.DialogText = "A script with this name already exists.";
+				ShowRenameInputWarning(
+					"Script Already Exists",
+					"A script with this name already exists."
+				);
 				break;
 			case RenameConflictItemType.Scene:
-				_renameNameConflictDialog.Title = "Scene Already Exists";
-				_renameNameConflictDialog.DialogText = "A scene with this name already exists.";
+				ShowRenameInputWarning(
+					"Scene Already Exists",
+					"A scene with this name already exists."
+				);
 				break;
 		}
 	}
 
-	private void ShowRenameNameConflictWarning()
+	private void ShowRenameInputWarning(string title, string message)
 	{
 		if (
-			_isRenameNameConflictPopupPending
-			|| _renameNameConflictDialog == null
-			|| !GodotObject.IsInstanceValid(_renameNameConflictDialog)
-			|| _renameNameConflictDialog.Visible
-		)
-			return;
-
-		_isRenameNameConflictPopupPending = true;
-		CallDeferred(nameof(PopupRenameNameConflictWarningDeferred));
-	}
-
-	private void PopupRenameNameConflictWarningDeferred()
-	{
-		_isRenameNameConflictPopupPending = false;
-
-		if (
-			_renameDialog == null
-			|| !GodotObject.IsInstanceValid(_renameDialog)
+			_isRenameInputWarningPopupPending
+			|| !IsValidGodotObject(_renameDialog)
 			|| !_renameDialog.Visible
-			|| _renameNameConflictDialog == null
-			|| !GodotObject.IsInstanceValid(_renameNameConflictDialog)
-			|| _renameNameConflictDialog.Visible
+			|| !IsValidGodotObject(_renameInputWarningDialog)
+			|| _renameInputWarningDialog.Visible
 		)
+		{
 			return;
+		}
 
-		_renameNameConflictDialog.PopupCentered();
+		ConfigureInputWarningDialog(_renameInputWarningDialog, title, message);
+		_isRenameInputWarningPopupPending = true;
+		CallDeferred(nameof(PopupRenameInputWarningDeferred));
 	}
 
-	private void ShowAddFolderConflictWarning()
+	private void PopupRenameInputWarningDeferred()
 	{
-		if (
-			_isAddFolderConflictPopupPending
-			|| _addFolderConflictDialog == null
-			|| !GodotObject.IsInstanceValid(_addFolderConflictDialog)
-			|| _addFolderConflictDialog.Visible
-		)
-			return;
+		_isRenameInputWarningPopupPending = false;
 
-		_isAddFolderConflictPopupPending = true;
-		CallDeferred(nameof(PopupAddFolderConflictWarningDeferred));
+		if (
+			!IsValidGodotObject(_renameDialog)
+			|| !_renameDialog.Visible
+			|| !IsValidGodotObject(_renameInputWarningDialog)
+			|| _renameInputWarningDialog.Visible
+		)
+		{
+			return;
+		}
+
+		PopupWrappedAcceptDialogForCurrentContent(_renameInputWarningDialog);
 	}
 
-	private void PopupAddFolderConflictWarningDeferred()
+	private void ShowAddFolderInputWarning(string title, string message)
 	{
-		_isAddFolderConflictPopupPending = false;
-
 		if (
-			_addFolderDialog == null
-			|| !GodotObject.IsInstanceValid(_addFolderDialog)
+			_isAddFolderInputWarningPopupPending
+			|| !IsValidGodotObject(_addFolderDialog)
 			|| !_addFolderDialog.Visible
-			|| _addFolderConflictDialog == null
-			|| !GodotObject.IsInstanceValid(_addFolderConflictDialog)
-			|| _addFolderConflictDialog.Visible
+			|| !IsValidGodotObject(_addFolderInputWarningDialog)
+			|| _addFolderInputWarningDialog.Visible
 		)
+		{
 			return;
+		}
 
-		_addFolderConflictDialog.PopupCentered();
+		ConfigureInputWarningDialog(_addFolderInputWarningDialog, title, message);
+		_isAddFolderInputWarningPopupPending = true;
+		CallDeferred(nameof(PopupAddFolderInputWarningDeferred));
 	}
 
-	private void ShowAddSystemConflictWarning()
+	private void PopupAddFolderInputWarningDeferred()
 	{
-		if (
-			_isAddSystemConflictPopupPending
-			|| _addSystemConflictDialog == null
-			|| !GodotObject.IsInstanceValid(_addSystemConflictDialog)
-			|| _addSystemConflictDialog.Visible
-		)
-			return;
+		_isAddFolderInputWarningPopupPending = false;
 
-		_isAddSystemConflictPopupPending = true;
-		CallDeferred(nameof(PopupAddSystemConflictWarningDeferred));
+		if (
+			!IsValidGodotObject(_addFolderDialog)
+			|| !_addFolderDialog.Visible
+			|| !IsValidGodotObject(_addFolderInputWarningDialog)
+			|| _addFolderInputWarningDialog.Visible
+		)
+		{
+			return;
+		}
+
+		PopupWrappedAcceptDialogForCurrentContent(_addFolderInputWarningDialog);
 	}
 
-	private void PopupAddSystemConflictWarningDeferred()
+	private void ShowAddSystemInputWarning(string title, string message)
 	{
-		_isAddSystemConflictPopupPending = false;
-
 		if (
-			_dock == null
-			|| !GodotObject.IsInstanceValid(_dock)
+			_isAddSystemInputWarningPopupPending
+			|| !IsValidGodotObject(_dock)
 			|| !_dock.IsInsideTree()
-			|| _addSystemConflictDialog == null
-			|| !GodotObject.IsInstanceValid(_addSystemConflictDialog)
-			|| _addSystemConflictDialog.Visible
+			|| !IsValidGodotObject(_addSystemInputWarningDialog)
+			|| _addSystemInputWarningDialog.Visible
 		)
+		{
 			return;
+		}
 
-		_addSystemConflictDialog.PopupCentered();
+		ConfigureInputWarningDialog(_addSystemInputWarningDialog, title, message);
+		_isAddSystemInputWarningPopupPending = true;
+		CallDeferred(nameof(PopupAddSystemInputWarningDeferred));
 	}
 
-	private void OnRenameNameConflictDialogClosed()
+	private void PopupAddSystemInputWarningDeferred()
 	{
+		_isAddSystemInputWarningPopupPending = false;
+
+		if (
+			!IsValidGodotObject(_dock)
+			|| !_dock.IsInsideTree()
+			|| !IsValidGodotObject(_addSystemInputWarningDialog)
+			|| _addSystemInputWarningDialog.Visible
+		)
+		{
+			return;
+		}
+
+		PopupWrappedAcceptDialogForCurrentContent(_addSystemInputWarningDialog);
+	}
+
+	private void ShowCreateScriptInputWarning(string title, string message)
+	{
+		if (
+			_isCreateScriptInputWarningPopupPending
+			|| !IsValidGodotObject(_dock)
+			|| !_dock.IsInsideTree()
+			|| !IsValidGodotObject(_createScriptInputWarningDialog)
+			|| _createScriptInputWarningDialog.Visible
+		)
+		{
+			return;
+		}
+
+		ConfigureInputWarningDialog(_createScriptInputWarningDialog, title, message);
+		_isCreateScriptInputWarningPopupPending = true;
+		CallDeferred(nameof(PopupCreateScriptInputWarningDeferred));
+	}
+
+	private void PopupCreateScriptInputWarningDeferred()
+	{
+		_isCreateScriptInputWarningPopupPending = false;
+
+		if (
+			!IsValidGodotObject(_dock)
+			|| !_dock.IsInsideTree()
+			|| !IsValidGodotObject(_createScriptInputWarningDialog)
+			|| _createScriptInputWarningDialog.Visible
+		)
+		{
+			return;
+		}
+
+		PopupWrappedAcceptDialogForCurrentContent(_createScriptInputWarningDialog);
+	}
+
+	private static void ConfigureInputWarningDialog(
+		AcceptDialog dialog,
+		string title,
+		string message
+	)
+	{
+		if (!IsValidGodotObject(dialog))
+			return;
+
+		dialog.Title = title;
+		dialog.DialogText = message;
+	}
+
+	private void OnRenameInputWarningDialogClosed()
+	{
+		_isRenameInputWarningPopupPending = false;
 		CallDeferred(nameof(RestoreRenameInputFocusDeferred));
 	}
 
@@ -234,8 +295,9 @@ public partial class SystemExplorerPlugin
 		RestoreDialogInputFocus(_renameDialog, _renameInput);
 	}
 
-	private void OnAddFolderConflictDialogClosed()
+	private void OnAddFolderInputWarningDialogClosed()
 	{
+		_isAddFolderInputWarningPopupPending = false;
 		CallDeferred(nameof(RestoreAddFolderInputFocusDeferred));
 	}
 
@@ -244,36 +306,84 @@ public partial class SystemExplorerPlugin
 		RestoreDialogInputFocus(_addFolderDialog, _addFolderInput);
 	}
 
-	private void OnAddSystemConflictDialogClosed()
+	private void OnAddSystemInputWarningDialogClosed()
 	{
+		_isAddSystemInputWarningPopupPending = false;
 		CallDeferred(nameof(RestoreSystemNameInputFocusDeferred));
 	}
 
 	private void RestoreSystemNameInputFocusDeferred()
 	{
 		if (
-			_dock == null
-			|| !GodotObject.IsInstanceValid(_dock)
+			!IsValidGodotObject(_dock)
 			|| !_dock.IsInsideTree()
-			|| _systemNameInput == null
-			|| !GodotObject.IsInstanceValid(_systemNameInput)
+			|| !IsValidGodotObject(_systemNameInput)
 		)
+		{
 			return;
+		}
 
 		_systemNameInput.Edit(true);
 		_systemNameInput.CaretColumn = 0;
 	}
 
+	private void OnCreateScriptInputWarningDialogClosed()
+	{
+		_isCreateScriptInputWarningPopupPending = false;
+		CallDeferred(nameof(ReopenCreateScriptDialogAfterInputWarningDeferred));
+	}
+
+	private void ReopenCreateScriptDialogAfterInputWarningDeferred()
+	{
+		if (!TryOpenCreateScriptDialogForSelectedItem())
+			return;
+
+		ClearCreateScriptFileNameInputBestEffort();
+		CallDeferred(nameof(RestoreCreateScriptFileNameInputFocusDeferred));
+	}
+
+	private void ClearCreateScriptFileNameInputBestEffort()
+	{
+		if (!IsValidGodotObject(_createScriptDialog))
+			return;
+
+		_createScriptDialog.CurrentFile = "";
+		LineEdit lineEdit = _createScriptDialog.GetLineEdit();
+
+		if (IsValidGodotObject(lineEdit))
+			lineEdit.Text = "";
+	}
+
+	private void RestoreCreateScriptFileNameInputFocusDeferred()
+	{
+		if (
+			!IsValidGodotObject(_createScriptDialog)
+			|| !_createScriptDialog.Visible
+		)
+		{
+			return;
+		}
+
+		LineEdit lineEdit = _createScriptDialog.GetLineEdit();
+
+		if (!IsValidGodotObject(lineEdit))
+			return;
+
+		lineEdit.Text = "";
+		lineEdit.Edit(true);
+		lineEdit.CaretColumn = 0;
+	}
+
 	private static void RestoreDialogInputFocus(AcceptDialog parentDialog, LineEdit input)
 	{
 		if (
-			parentDialog == null
-			|| !GodotObject.IsInstanceValid(parentDialog)
+			!IsValidGodotObject(parentDialog)
 			|| !parentDialog.Visible
-			|| input == null
-			|| !GodotObject.IsInstanceValid(input)
+			|| !IsValidGodotObject(input)
 		)
+		{
 			return;
+		}
 
 		input.Edit(true);
 		input.CaretColumn = 0;

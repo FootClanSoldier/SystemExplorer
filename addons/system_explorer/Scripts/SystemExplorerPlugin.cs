@@ -90,11 +90,12 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private CheckBox _removeFromFilesystemCheckBox;
 	private AcceptDialog _renameDialog;
 	private LineEdit _renameInput;
-	private AcceptDialog _renameNameConflictDialog;
+	private AcceptDialog _renameInputWarningDialog;
 	private AcceptDialog _addFolderDialog;
 	private LineEdit _addFolderInput;
-	private AcceptDialog _addFolderConflictDialog;
-	private AcceptDialog _addSystemConflictDialog;
+	private AcceptDialog _addFolderInputWarningDialog;
+	private AcceptDialog _addSystemInputWarningDialog;
+	private AcceptDialog _createScriptInputWarningDialog;
 	private AcceptDialog _namespaceRefactorDialog;
 	private AcceptDialog _namespaceRefactorIncompleteWriteReportDialog;
 	private Label _namespaceRefactorDescriptionLabel;
@@ -138,9 +139,10 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _hoveredTreeItemMetadata = "";
 	private bool _isFilteringScripts;
 	private bool _ignoreNextScriptFilterReleaseOpen;
-	private bool _isRenameNameConflictPopupPending;
-	private bool _isAddFolderConflictPopupPending;
-	private bool _isAddSystemConflictPopupPending;
+	private bool _isRenameInputWarningPopupPending;
+	private bool _isAddFolderInputWarningPopupPending;
+	private bool _isAddSystemInputWarningPopupPending;
+	private bool _isCreateScriptInputWarningPopupPending;
 
 	private Texture2D _scriptIcon;
 	private Texture2D _sceneIcon;
@@ -423,6 +425,10 @@ public sealed class {{CLASS_NAME}}
 		FlushAndShutdownTreeStatePersistence();
 
 		CancelPendingScriptRenameEditorRestore();
+		_pendingNonScriptRenameTreeSelectionState = null;
+		_pendingRemoveTreeSelectionState = null;
+		_pendingRemoveSelectionFocusTarget = RemoveSelectionFocusTarget.None;
+		_pendingRemoveSelectionFocusCommitted = false;
 		_renameFilesystemFinalStateRefreshQueued = false;
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;

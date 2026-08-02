@@ -815,6 +815,15 @@ public partial class SystemExplorerPlugin
 			bool isScene = fileName.EndsWith(".tscn", StringComparison.OrdinalIgnoreCase);
 			string resourcePath = CombineBoundFolderFilePath(physicalFolderPath, fileName);
 
+			if (!IsPrimaryResourcePathRepresentable(resourcePath))
+			{
+				DebugLogger.LogOperation(
+					"Bound Folder Sync skipped unrepresentable resource path",
+					resourcePath
+				);
+				continue;
+			}
+
 			if (HasMatchingBoundFolderEntry(entries, virtualFolderPath, resourcePath, isScene))
 				continue;
 

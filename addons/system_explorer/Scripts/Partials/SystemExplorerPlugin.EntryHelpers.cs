@@ -287,6 +287,101 @@ public partial class SystemExplorerPlugin
 		return entryWithoutLinkedScene.Contains("|") ? entryWithoutLinkedScene.Split("|")[0] : "";
 	}
 
+	private static bool ContainsReservedSystemNameSeparator(string value)
+	{
+		return !string.IsNullOrEmpty(value)
+			&& value.Contains("::", System.StringComparison.Ordinal);
+	}
+
+	private static bool ContainsReservedVirtualFolderSeparator(string value)
+	{
+		return !string.IsNullOrEmpty(value)
+			&& (
+				value.Contains("::", System.StringComparison.Ordinal)
+				|| value.Contains('|')
+			);
+	}
+
+	private static bool IsPrimaryResourcePathRepresentable(string resourcePath)
+	{
+		return !string.IsNullOrWhiteSpace(resourcePath) && !resourcePath.Contains('|');
+	}
+
+	private static bool TryGetUnambiguousPhysicalResourcePath(
+		string entry,
+		bool expectScene,
+		out string resourcePath
+	)
+	{
+		resourcePath = "";
+
+		if (string.IsNullOrWhiteSpace(entry))
+			return false;
+
+		string primaryEntry = RemoveLockMarker(entry);
+		int linkedSceneMarkerIndex = primaryEntry.IndexOf(
+			LinkedSceneMarker,
+			System.StringComparison.Ordinal
+		);
+
+		if (linkedSceneMarkerIndex >= 0)
+			primaryEntry = primaryEntry.Substring(0, linkedSceneMarkerIndex);
+
+		if (string.IsNullOrWhiteSpace(primaryEntry))
+			return false;
+
+		int firstFolderSeparatorIndex = primaryEntry.IndexOf('|');
+		string payload;
+
+		if (firstFolderSeparatorIndex < 0)
+		{
+			payload = primaryEntry;
+		}
+		else
+		{
+			if (primaryEntry.IndexOf('|', firstFolderSeparatorIndex + 1) >= 0)
+				return false;
+
+			string folderPath = primaryEntry.Substring(0, firstFolderSeparatorIndex);
+			payload = primaryEntry.Substring(firstFolderSeparatorIndex + 1);
+
+			if (
+				string.IsNullOrWhiteSpace(folderPath)
+				|| ContainsReservedSystemNameSeparator(folderPath)
+				|| string.IsNullOrWhiteSpace(payload)
+			)
+			{
+				return false;
+			}
+		}
+
+		if (expectScene)
+		{
+			if (!payload.StartsWith(SceneEntryMarker, System.StringComparison.Ordinal))
+				return false;
+
+			resourcePath = payload.Substring(SceneEntryMarker.Length);
+		}
+		else
+		{
+			if (payload.StartsWith(SceneEntryMarker, System.StringComparison.Ordinal))
+				return false;
+
+			resourcePath = payload;
+		}
+
+		if (
+			!resourcePath.StartsWith("res://", System.StringComparison.Ordinal)
+			|| resourcePath.Contains('|')
+		)
+		{
+			resourcePath = "";
+			return false;
+		}
+
+		return true;
+	}
+
 	private static string GetScriptPathFromEntry(string entry)
 	{
 		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);

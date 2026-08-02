@@ -152,11 +152,11 @@ public partial class SystemExplorerPlugin
 		_renameDialog.AddChild(_renameInput);
 		_renameDialog.RegisterTextEnter(_renameInput);
 
-		_renameNameConflictDialog = CreateNameConflictDialog(
+		_renameInputWarningDialog = CreateInputWarningDialog(
 			"Folder Already Exists",
 			"A folder with this name already exists."
 		);
-		_renameDialog.AddChild(_renameNameConflictDialog);
+		_renameDialog.AddChild(_renameInputWarningDialog);
 
 		_addFolderDialog = new AcceptDialog
 		{
@@ -169,15 +169,20 @@ public partial class SystemExplorerPlugin
 		_addFolderDialog.AddChild(_addFolderInput);
 		_addFolderDialog.RegisterTextEnter(_addFolderInput);
 
-		_addFolderConflictDialog = CreateNameConflictDialog(
+		_addFolderInputWarningDialog = CreateInputWarningDialog(
 			"Folder Already Exists",
 			"A folder with this name already exists."
 		);
-		_addFolderDialog.AddChild(_addFolderConflictDialog);
+		_addFolderDialog.AddChild(_addFolderInputWarningDialog);
 
-		_addSystemConflictDialog = CreateNameConflictDialog(
+		_addSystemInputWarningDialog = CreateInputWarningDialog(
 			"System Already Exists",
 			"A system with this name already exists."
+		);
+
+		_createScriptInputWarningDialog = CreateInputWarningDialog(
+			"Invalid Script Path",
+			"System Explorer cannot create this script because its path is invalid."
 		);
 
 		CreateNamespaceRefactorDialogs();
@@ -228,7 +233,8 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_missingSceneDialog);
 		_dock.AddChild(_renameDialog);
 		_dock.AddChild(_addFolderDialog);
-		_dock.AddChild(_addSystemConflictDialog);
+		_dock.AddChild(_addSystemInputWarningDialog);
+		_dock.AddChild(_createScriptInputWarningDialog);
 		_dock.AddChild(_createScriptDialog);
 		_dock.AddChild(_namespaceRefactorDialog);
 		_dock.AddChild(_namespaceRefactorIncompleteWriteReportDialog);
@@ -362,10 +368,11 @@ public partial class SystemExplorerPlugin
 		AddInvalidDockSignalSource(invalidSources, nameof(_removeDialog), _removeDialog);
 		AddInvalidDockSignalSource(invalidSources, nameof(_removeFromFilesystemCheckBox), _removeFromFilesystemCheckBox);
 		AddInvalidDockSignalSource(invalidSources, nameof(_renameDialog), _renameDialog);
-		AddInvalidDockSignalSource(invalidSources, nameof(_renameNameConflictDialog), _renameNameConflictDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_renameInputWarningDialog), _renameInputWarningDialog);
 		AddInvalidDockSignalSource(invalidSources, nameof(_addFolderDialog), _addFolderDialog);
-		AddInvalidDockSignalSource(invalidSources, nameof(_addFolderConflictDialog), _addFolderConflictDialog);
-		AddInvalidDockSignalSource(invalidSources, nameof(_addSystemConflictDialog), _addSystemConflictDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_addFolderInputWarningDialog), _addFolderInputWarningDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_addSystemInputWarningDialog), _addSystemInputWarningDialog);
+		AddInvalidDockSignalSource(invalidSources, nameof(_createScriptInputWarningDialog), _createScriptInputWarningDialog);
 		AddInvalidDockSignalSource(invalidSources, nameof(_csharpierNotInstalledDialog), _csharpierNotInstalledDialog);
 		AddInvalidDockSignalSource(invalidSources, nameof(_firstRunWelcomeNote), _firstRunWelcomeNote);
 
@@ -424,13 +431,15 @@ public partial class SystemExplorerPlugin
 		connected &= TryConnectPluginSignal(_removeDialog, Window.SignalName.WindowInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeDialog));
 		connected &= TryConnectPluginSignal(_removeFromFilesystemCheckBox, Control.SignalName.GuiInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeFromFilesystemCheckBox));
 		connected &= TryConnectPluginSignal(_renameDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameConfirmedSignal), nameof(_renameDialog));
-		connected &= TryConnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
-		connected &= TryConnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
+		connected &= TryConnectPluginSignal(_renameInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameInputWarningDialogClosed), nameof(_renameInputWarningDialog));
+		connected &= TryConnectPluginSignal(_renameInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnRenameInputWarningDialogClosed), nameof(_renameInputWarningDialog));
 		connected &= TryConnectPluginSignal(_addFolderDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConfirmedSignal), nameof(_addFolderDialog));
-		connected &= TryConnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
-		connected &= TryConnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
-		connected &= TryConnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
-		connected &= TryConnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
+		connected &= TryConnectPluginSignal(_addFolderInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderInputWarningDialogClosed), nameof(_addFolderInputWarningDialog));
+		connected &= TryConnectPluginSignal(_addFolderInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddFolderInputWarningDialogClosed), nameof(_addFolderInputWarningDialog));
+		connected &= TryConnectPluginSignal(_addSystemInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddSystemInputWarningDialogClosed), nameof(_addSystemInputWarningDialog));
+		connected &= TryConnectPluginSignal(_addSystemInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddSystemInputWarningDialogClosed), nameof(_addSystemInputWarningDialog));
+		connected &= TryConnectPluginSignal(_createScriptInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCreateScriptInputWarningDialogClosed), nameof(_createScriptInputWarningDialog));
+		connected &= TryConnectPluginSignal(_createScriptInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnCreateScriptInputWarningDialogClosed), nameof(_createScriptInputWarningDialog));
 		connected &= TryConnectPluginSignal(_csharpierNotInstalledDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCSharpierInstallConfirmedSignal), nameof(_csharpierNotInstalledDialog));
 		connected &= TryConnectPluginSignal(_firstRunWelcomeNote, Control.SignalName.Resized, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
 		connected &= TryConnectPluginSignal(_firstRunWelcomeNote, CanvasItem.SignalName.VisibilityChanged, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
@@ -474,13 +483,15 @@ public partial class SystemExplorerPlugin
 		DisconnectPluginSignal(_removeDialog, Window.SignalName.WindowInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeDialog));
 		DisconnectPluginSignal(_removeFromFilesystemCheckBox, Control.SignalName.GuiInput, nameof(OnRemoveDialogWindowInputSignal), nameof(_removeFromFilesystemCheckBox));
 		DisconnectPluginSignal(_renameDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameConfirmedSignal), nameof(_renameDialog));
-		DisconnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
-		DisconnectPluginSignal(_renameNameConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnRenameNameConflictDialogClosed), nameof(_renameNameConflictDialog));
+		DisconnectPluginSignal(_renameInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnRenameInputWarningDialogClosed), nameof(_renameInputWarningDialog));
+		DisconnectPluginSignal(_renameInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnRenameInputWarningDialogClosed), nameof(_renameInputWarningDialog));
 		DisconnectPluginSignal(_addFolderDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConfirmedSignal), nameof(_addFolderDialog));
-		DisconnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
-		DisconnectPluginSignal(_addFolderConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddFolderConflictDialogClosed), nameof(_addFolderConflictDialog));
-		DisconnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
-		DisconnectPluginSignal(_addSystemConflictDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddSystemConflictDialogClosed), nameof(_addSystemConflictDialog));
+		DisconnectPluginSignal(_addFolderInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddFolderInputWarningDialogClosed), nameof(_addFolderInputWarningDialog));
+		DisconnectPluginSignal(_addFolderInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddFolderInputWarningDialogClosed), nameof(_addFolderInputWarningDialog));
+		DisconnectPluginSignal(_addSystemInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnAddSystemInputWarningDialogClosed), nameof(_addSystemInputWarningDialog));
+		DisconnectPluginSignal(_addSystemInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnAddSystemInputWarningDialogClosed), nameof(_addSystemInputWarningDialog));
+		DisconnectPluginSignal(_createScriptInputWarningDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCreateScriptInputWarningDialogClosed), nameof(_createScriptInputWarningDialog));
+		DisconnectPluginSignal(_createScriptInputWarningDialog, AcceptDialog.SignalName.Canceled, nameof(OnCreateScriptInputWarningDialogClosed), nameof(_createScriptInputWarningDialog));
 		DisconnectPluginSignal(_csharpierNotInstalledDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCSharpierInstallConfirmedSignal), nameof(_csharpierNotInstalledDialog));
 		DisconnectPluginSignal(_firstRunWelcomeNote, Control.SignalName.Resized, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
 		DisconnectPluginSignal(_firstRunWelcomeNote, CanvasItem.SignalName.VisibilityChanged, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
@@ -665,11 +676,12 @@ public partial class SystemExplorerPlugin
 		_removeFromFilesystemCheckBox = null;
 		_renameDialog = null;
 		_renameInput = null;
-		_renameNameConflictDialog = null;
+		_renameInputWarningDialog = null;
 		_addFolderDialog = null;
 		_addFolderInput = null;
-		_addFolderConflictDialog = null;
-		_addSystemConflictDialog = null;
+		_addFolderInputWarningDialog = null;
+		_addSystemInputWarningDialog = null;
+		_createScriptInputWarningDialog = null;
 		_namespaceRefactorDialog = null;
 		_namespaceRefactorIncompleteWriteReportDialog = null;
 		_namespaceRefactorDescriptionLabel = null;
@@ -691,6 +703,10 @@ public partial class SystemExplorerPlugin
 		_missingScriptDialog = null;
 		_missingSceneDialog = null;
 		_treeOperationDialog = null;
+		_isRenameInputWarningPopupPending = false;
+		_isAddFolderInputWarningPopupPending = false;
+		_isAddSystemInputWarningPopupPending = false;
+		_isCreateScriptInputWarningPopupPending = false;
 	}
 
 	private void UpdateFirstRunWelcomeNoteVisibility()
@@ -701,15 +717,20 @@ public partial class SystemExplorerPlugin
 		_firstRunWelcomeNote.Visible = _systems.Count == 0 && !FileAccess.FileExists(SavePath);
 	}
 
-	private static AcceptDialog CreateNameConflictDialog(string title, string dialogText)
+	private static AcceptDialog CreateInputWarningDialog(string title, string dialogText)
 	{
-		return new AcceptDialog
+		var dialog = new AcceptDialog
 		{
 			Title = title,
 			DialogText = dialogText,
 			OkButtonText = "OK",
-			MinSize = new Vector2I(420, 160),
+			MinSize = WrappedAcceptDialogMinimumSize,
+			DialogAutowrap = true,
+			Unresizable = true,
 		};
+
+		ConfigureWrappedAcceptDialogMessageLabel(dialog);
+		return dialog;
 	}
 
 	private void ConfigureTreeColumns()

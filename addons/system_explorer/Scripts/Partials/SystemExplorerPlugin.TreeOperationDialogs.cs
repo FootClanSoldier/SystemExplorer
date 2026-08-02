@@ -115,11 +115,11 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private const int TreeOperationDialogWidth = 480;
-	private const int TreeOperationDialogMinimumHeight = 150;
+	private const int WrappedAcceptDialogWidth = 480;
+	private const int WrappedAcceptDialogMinimumHeight = 150;
 
-	private static readonly Vector2I TreeOperationDialogMinimumSize =
-		new(TreeOperationDialogWidth, TreeOperationDialogMinimumHeight);
+	private static readonly Vector2I WrappedAcceptDialogMinimumSize =
+		new(WrappedAcceptDialogWidth, WrappedAcceptDialogMinimumHeight);
 
 	private AcceptDialog _treeOperationDialog;
 	private TreeOperationDialogContext _activeTreeOperationDialogContext;
@@ -137,15 +137,15 @@ public partial class SystemExplorerPlugin
 			Title = "Operation Failed",
 			DialogText = "System Explorer could not complete the operation.",
 			OkButtonText = "OK",
-			MinSize = TreeOperationDialogMinimumSize,
+			MinSize = WrappedAcceptDialogMinimumSize,
 			Unresizable = true,
 			DialogAutowrap = true,
 		};
 
-		ConfigureTreeOperationDialogMessageLabel(_treeOperationDialog);
+		ConfigureWrappedAcceptDialogMessageLabel(_treeOperationDialog);
 	}
 
-	private static void ConfigureTreeOperationDialogMessageLabel(AcceptDialog dialog)
+	private static void ConfigureWrappedAcceptDialogMessageLabel(AcceptDialog dialog)
 	{
 		if (!IsValidGodotObject(dialog))
 			return;
@@ -556,26 +556,26 @@ public partial class SystemExplorerPlugin
 		_visibleTreeOperationPresentationFingerprint = presentation.Fingerprint;
 		_treeOperationDialog.Title = presentation.Title;
 		_treeOperationDialog.DialogText = presentation.UserMessage;
-		PopupTreeOperationDialogForCurrentContent();
+		PopupWrappedAcceptDialogForCurrentContent(_treeOperationDialog);
 	}
 
-	private void PopupTreeOperationDialogForCurrentContent()
+	private static void PopupWrappedAcceptDialogForCurrentContent(AcceptDialog dialog)
 	{
-		if (!IsValidGodotObject(_treeOperationDialog))
+		if (!IsValidGodotObject(dialog))
 			return;
 
-		_treeOperationDialog.Size = TreeOperationDialogMinimumSize;
-		_treeOperationDialog.ChildControlsChanged();
-		_treeOperationDialog.ResetSize();
+		dialog.Size = WrappedAcceptDialogMinimumSize;
+		dialog.ChildControlsChanged();
+		dialog.ResetSize();
 
-		Vector2I fittedSize = _treeOperationDialog.Size;
+		Vector2I fittedSize = dialog.Size;
 		fittedSize = new Vector2I(
-			TreeOperationDialogWidth,
-			Math.Max(fittedSize.Y, TreeOperationDialogMinimumHeight)
+			WrappedAcceptDialogWidth,
+			Math.Max(fittedSize.Y, WrappedAcceptDialogMinimumHeight)
 		);
 
-		_treeOperationDialog.Size = fittedSize;
-		_treeOperationDialog.PopupCentered(fittedSize);
+		dialog.Size = fittedSize;
+		dialog.PopupCentered(fittedSize);
 	}
 
 	private void OnTreeOperationDialogClosed()
@@ -652,27 +652,28 @@ public partial class SystemExplorerPlugin
 
 	private void CloseAddFolderUiAfterFailure()
 	{
-		HideTreeOperationOriginWindow(_addFolderConflictDialog);
+		HideTreeOperationOriginWindow(_addFolderInputWarningDialog);
 		HideTreeOperationOriginWindow(_addFolderDialog);
 		_pendingAddFolderMetadata = "";
 
 		if (_addFolderInput != null && GodotObject.IsInstanceValid(_addFolderInput))
 			_addFolderInput.Text = "";
 
-		_isAddFolderConflictPopupPending = false;
+		_isAddFolderInputWarningPopupPending = false;
 	}
 
 	private void CloseRenameUiAfterFailure()
 	{
-		HideTreeOperationOriginWindow(_renameNameConflictDialog);
+		HideTreeOperationOriginWindow(_renameInputWarningDialog);
 		HideTreeOperationOriginWindow(_renameDialog);
 		_pendingRenameMetadata = "";
 		_pendingScriptRenameTreeState = null;
+		_pendingNonScriptRenameTreeSelectionState = null;
 
 		if (_renameInput != null && GodotObject.IsInstanceValid(_renameInput))
 			_renameInput.Text = "";
 
-		_isRenameNameConflictPopupPending = false;
+		_isRenameInputWarningPopupPending = false;
 	}
 
 	private void CloseRemoveUiAfterFailure()
@@ -680,6 +681,12 @@ public partial class SystemExplorerPlugin
 		HideTreeOperationOriginWindow(_removeDialog);
 		_pendingRemoveMetadata = "";
 		_pendingRemoveScriptOccurrence = null;
+		_pendingRemoveTreeSelectionState = null;
+
+		// A rebuilt tree may already have committed its deferred post-remove focus.
+		// Preserve that target while this failure scope closes its originating dialog.
+		if (!_pendingRemoveSelectionFocusCommitted)
+			_pendingRemoveSelectionFocusTarget = RemoveSelectionFocusTarget.None;
 
 		if (
 			_removeFromFilesystemCheckBox != null

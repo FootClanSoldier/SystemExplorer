@@ -448,6 +448,183 @@ public partial class SystemExplorerPlugin
 		return true;
 	}
 
+	private bool TryRestoreTreeSelectionByIdentity(
+		PersistentTreeSelection selection,
+		string reason
+	)
+	{
+		try
+		{
+			if (!IsPersistentTreeSelectionStillValid(selection, out _))
+				return false;
+
+			if (!TryFindTreeItemByPersistentSelectionIdentity(selection, out TreeItem targetItem))
+				return false;
+
+			if (!TryApplyPersistentTreeSelection(targetItem, selection))
+				return false;
+
+			DebugLogger.LogOperation(
+				"Tree selection restored by exact identity",
+				BuildPersistentTreeSelectionLogDetail(reason, selection)
+			);
+			return true;
+		}
+		catch (Exception exception)
+		{
+			LogPersistentTreeSelectionRestoreIgnored(
+				reason,
+				$"Detail='Exact selection restore failed: {exception.Message}'"
+			);
+			return false;
+		}
+	}
+
+	private bool TryRestoreFirstVisibleTreeSelection(string reason)
+	{
+		TreeItem firstVisibleItem = _tree?.GetRoot()?.GetFirstChild();
+
+		if (
+			firstVisibleItem == null
+			|| !TryCreatePersistentTreeSelection(
+				firstVisibleItem,
+				out PersistentTreeSelection selection
+			)
+		)
+		{
+			return false;
+		}
+
+		return TryRestoreTreeSelectionByIdentity(selection, reason);
+	}
+
+	private bool TryFindTreeItemByPersistentSelectionIdentity(
+		PersistentTreeSelection selection,
+		out TreeItem targetItem
+	)
+	{
+		targetItem = null;
+
+		if (!IsValidGodotObject(_tree))
+			return false;
+
+		TreeItem root = _tree.GetRoot();
+		if (root == null)
+			return false;
+
+		if (IsScriptFilterActive())
+		{
+			if (!IsScriptOrScenePersistentTreeSelection(selection))
+				return false;
+
+			string entry = GetEntryFromMetadata(selection.Metadata);
+			bool isSceneEntry = selection.Metadata.StartsWith(
+				"sceneLink::",
+				StringComparison.Ordinal
+			);
+
+			return TryFindScriptFilterTreeItemByIdentity(
+				selection.SystemName,
+				entry,
+				isSceneEntry,
+				out targetItem
+			);
+		}
+
+		TreeItem systemItem = FindDirectSystemTreeItem(root, selection.SystemName);
+		targetItem = systemItem == null
+			? null
+			: FindTreeItemByMetadataWithinSubtree(systemItem, selection.Metadata);
+		return targetItem != null;
+	}
+
+	private bool TryApplyPersistentTreeSelection(
+		TreeItem targetItem,
+		PersistentTreeSelection selection
+	)
+	{
+		if (
+			targetItem == null
+			|| !GodotObject.IsInstanceValid(targetItem)
+			|| !IsValidGodotObject(_tree)
+		)
+		{
+			return false;
+		}
+
+		bool previousSuppression = _isRestoringOrRebuildingPersistentTreeState;
+		_isRestoringOrRebuildingPersistentTreeState = true;
+		bool restored = false;
+
+		try
+		{
+			if (!IsScriptFilterActive())
+				ExpandParentsForTreeItem(targetItem);
+
+			if (_tree.GetSelected() != targetItem)
+				targetItem.Select(0);
+
+			_tree.ScrollToItem(targetItem);
+			UpdateTreeLockIconVisibility();
+			restored = _tree.GetSelected() == targetItem;
+		}
+		finally
+		{
+			_isRestoringOrRebuildingPersistentTreeState = previousSuppression;
+			if (!previousSuppression && _treeStateSaveDirty)
+				QueuePersistentTreeStateSave();
+		}
+
+		if (!restored)
+			return false;
+
+		if (
+			!_persistentTreeSelection.HasValue
+			|| !IsSamePersistentTreeSelection(
+				_persistentTreeSelection.Value,
+				selection
+			)
+		)
+		{
+			_persistentTreeSelection = selection;
+			QueuePersistentTreeStateSave();
+		}
+
+		return true;
+	}
+
+	private void ClearPersistentTreeSelectionAndTreeSelection()
+	{
+		bool previousSuppression = _isRestoringOrRebuildingPersistentTreeState;
+		_isRestoringOrRebuildingPersistentTreeState = true;
+
+		try
+		{
+			if (IsValidGodotObject(_tree))
+			{
+				_tree.DeselectAll();
+				UpdateTreeLockIconVisibility();
+			}
+		}
+		catch (Exception exception)
+		{
+			LogPersistentTreeSelectionRestoreIgnored(
+				"Clear Tree Selection",
+				$"Detail='Tree deselection failed: {exception.Message}'"
+			);
+		}
+		finally
+		{
+			_isRestoringOrRebuildingPersistentTreeState = previousSuppression;
+		}
+
+		if (IsScriptFilterActive())
+			_selectedScriptEntryFromFilter = "";
+
+		_persistentTreeSelection = null;
+		QueuePersistentTreeStateSave();
+	}
+
 	private void RestorePersistentTreeSelectionBestEffort(string reason)
 	{
 		if (!_persistentTreeSelection.HasValue)
@@ -474,99 +651,50 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		TreeItem root = _tree.GetRoot();
-		if (root == null)
+		if (_tree.GetRoot() == null)
 		{
 			LogPersistentTreeSelectionRestoreIgnored(reason, "Detail='Tree root is unavailable.'");
 			return;
 		}
 
-		TreeItem targetItem;
-
-		if (IsScriptFilterActive())
+		if (!TryFindTreeItemByPersistentSelectionIdentity(selection, out TreeItem targetItem))
 		{
-			if (!IsScriptOrScenePersistentTreeSelection(selection))
+			if (IsScriptFilterActive())
 			{
 				LogPersistentTreeSelectionRestoreIgnored(
 					reason,
-					"Detail='The selected system or folder is temporarily unavailable in the flat filter tree.'"
+					IsScriptOrScenePersistentTreeSelection(selection)
+						? "Detail='The selected item is valid but does not occur in the current filter result.'"
+						: "Detail='The selected system or folder is temporarily unavailable in the flat filter tree.'"
 				);
 				return;
 			}
 
-			string entry = GetEntryFromMetadata(selection.Metadata);
-			bool isSceneEntry = selection.Metadata.StartsWith(
-				"sceneLink::",
-				StringComparison.Ordinal
+			_persistentTreeSelection = null;
+			QueuePersistentTreeStateSave();
+			LogPersistentTreeSelectionRestoreIgnored(
+				reason,
+				"Detail='The exact selected item was not found in its owning system subtree.'"
 			);
-
-			if (!TryFindScriptFilterTreeItemByIdentity(
-				selection.SystemName,
-				entry,
-				isSceneEntry,
-				out targetItem
-			))
-			{
-				LogPersistentTreeSelectionRestoreIgnored(
-					reason,
-					"Detail='The selected item is valid but does not occur in the current filter result.'"
-				);
-				return;
-			}
+			return;
 		}
-		else
-		{
-			TreeItem systemItem = FindDirectSystemTreeItem(root, selection.SystemName);
-			targetItem = systemItem == null
-				? null
-				: FindTreeItemByMetadataWithinSubtree(systemItem, selection.Metadata);
-
-			if (targetItem == null)
-			{
-				_persistentTreeSelection = null;
-				QueuePersistentTreeStateSave();
-				LogPersistentTreeSelectionRestoreIgnored(
-					reason,
-					"Detail='The exact selected item was not found in its owning system subtree.'"
-				);
-				return;
-			}
-		}
-
-		bool previousSuppression = _isRestoringOrRebuildingPersistentTreeState;
-		_isRestoringOrRebuildingPersistentTreeState = true;
-		bool restored = false;
 
 		try
 		{
-			ExpandParentsForTreeItem(targetItem);
-
-			if (_tree.GetSelected() != targetItem)
-				targetItem.Select(0);
-
-			_tree.ScrollToItem(targetItem);
-			UpdateTreeLockIconVisibility();
-			restored = _tree.GetSelected() == targetItem;
+			if (!TryApplyPersistentTreeSelection(targetItem, selection))
+			{
+				LogPersistentTreeSelectionRestoreIgnored(
+					reason,
+					"Detail='Tree selection verification did not match the intended item.'"
+				);
+				return;
+			}
 		}
 		catch (Exception exception)
 		{
 			LogPersistentTreeSelectionRestoreIgnored(
 				reason,
 				$"Detail='Selection application failed: {exception.Message}'"
-			);
-		}
-		finally
-		{
-			_isRestoringOrRebuildingPersistentTreeState = previousSuppression;
-			if (!previousSuppression && _treeStateSaveDirty)
-				QueuePersistentTreeStateSave();
-		}
-
-		if (!restored)
-		{
-			LogPersistentTreeSelectionRestoreIgnored(
-				reason,
-				"Detail='Tree selection verification did not match the intended item.'"
 			);
 			return;
 		}

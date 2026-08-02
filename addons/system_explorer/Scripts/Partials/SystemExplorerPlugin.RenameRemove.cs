@@ -44,10 +44,365 @@ public partial class SystemExplorerPlugin
 		bool FolderBindingsChanged
 	);
 
+	private sealed class TreeSelectionOperationState
+	{
+		public PersistentTreeSelection OriginalSelection { get; init; }
+		public PersistentTreeSelection? PreviousVisibleSelection { get; init; }
+		public PersistentTreeSelection? NextVisibleSelectionOutsideSubtree { get; init; }
+		public bool IsValid =>
+			!string.IsNullOrWhiteSpace(OriginalSelection.SystemName)
+			&& !string.IsNullOrWhiteSpace(OriginalSelection.Metadata);
+	}
+
+	private enum RemoveSelectionFocusTarget
+	{
+		None,
+		HiddenTreeContext,
+		SystemNameInput,
+	}
+
 	#region Rename and Remove Operations
 	private ScriptTreeOccurrence? _pendingRemoveScriptOccurrence;
+	private TreeSelectionOperationState _pendingNonScriptRenameTreeSelectionState;
+	private TreeSelectionOperationState _pendingRemoveTreeSelectionState;
+	private RemoveSelectionFocusTarget _pendingRemoveSelectionFocusTarget;
+	private bool _pendingRemoveSelectionFocusCommitted;
 
-	private void CapturePendingRemoveScriptOccurrence()
+	private TreeSelectionOperationState CaptureTreeSelectionOperationState(TreeItem selectedItem)
+	{
+		if (
+			selectedItem == null
+			|| !GodotObject.IsInstanceValid(selectedItem)
+			|| !TryCreatePersistentTreeSelection(
+				selectedItem,
+				out PersistentTreeSelection originalSelection
+			)
+		)
+		{
+			return null;
+		}
+
+		PersistentTreeSelection? previousSelection = null;
+		TreeItem previousVisibleItem = selectedItem.GetPrevVisible(false);
+
+		if (
+			previousVisibleItem != null
+			&& TryCreatePersistentTreeSelection(
+				previousVisibleItem,
+				out PersistentTreeSelection capturedPreviousSelection
+			)
+		)
+		{
+			previousSelection = capturedPreviousSelection;
+		}
+
+		PersistentTreeSelection? nextSelection = null;
+		TreeItem nextVisibleItemOutsideSubtree =
+			FindNextVisibleTreeItemOutsideSubtree(selectedItem);
+
+		if (
+			nextVisibleItemOutsideSubtree != null
+			&& TryCreatePersistentTreeSelection(
+				nextVisibleItemOutsideSubtree,
+				out PersistentTreeSelection capturedNextSelection
+			)
+		)
+		{
+			nextSelection = capturedNextSelection;
+		}
+
+		return new TreeSelectionOperationState
+		{
+			OriginalSelection = originalSelection,
+			PreviousVisibleSelection = previousSelection,
+			NextVisibleSelectionOutsideSubtree = nextSelection,
+		};
+	}
+
+	private static TreeItem FindNextVisibleTreeItemOutsideSubtree(TreeItem selectedItem)
+	{
+		TreeItem current = selectedItem;
+
+		while (current != null)
+		{
+			TreeItem nextSibling = current.GetNext();
+			if (nextSibling != null)
+				return nextSibling;
+
+			current = current.GetParent();
+			if (current == null || current.GetParent() == null)
+				break;
+		}
+
+		return null;
+	}
+
+	private void CapturePendingNonScriptRenameTreeSelectionState(
+		TreeItem selectedItem,
+		string metadata
+	)
+	{
+		_pendingNonScriptRenameTreeSelectionState = null;
+
+		if (
+			string.IsNullOrWhiteSpace(metadata)
+			|| metadata.StartsWith("script::", StringComparison.Ordinal)
+		)
+		{
+			return;
+		}
+
+		TreeSelectionOperationState state = CaptureTreeSelectionOperationState(selectedItem);
+
+		if (
+			state != null
+			&& state.IsValid
+			&& string.Equals(
+				state.OriginalSelection.Metadata,
+				metadata,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			_pendingNonScriptRenameTreeSelectionState = state;
+		}
+	}
+
+	private void CapturePendingRemoveTreeSelectionState(TreeItem selectedItem)
+	{
+		_pendingRemoveSelectionFocusTarget = RemoveSelectionFocusTarget.None;
+		_pendingRemoveSelectionFocusCommitted = false;
+		_pendingRemoveTreeSelectionState = CaptureTreeSelectionOperationState(selectedItem);
+	}
+
+	private static TreeSelectionOperationState RemapTreeSelectionStateAfterSceneRename(
+		TreeSelectionOperationState state,
+		string oldScenePath,
+		string newScenePath
+	)
+	{
+		if (state == null || !state.IsValid)
+			return state;
+
+		return new TreeSelectionOperationState
+		{
+			OriginalSelection = RemapPersistentSelectionAfterSceneRename(
+				state.OriginalSelection,
+				oldScenePath,
+				newScenePath
+			),
+			PreviousVisibleSelection = RemapOptionalPersistentSelectionAfterSceneRename(
+				state.PreviousVisibleSelection,
+				oldScenePath,
+				newScenePath
+			),
+			NextVisibleSelectionOutsideSubtree =
+				RemapOptionalPersistentSelectionAfterSceneRename(
+					state.NextVisibleSelectionOutsideSubtree,
+					oldScenePath,
+					newScenePath
+				),
+		};
+	}
+
+	private static PersistentTreeSelection? RemapOptionalPersistentSelectionAfterSceneRename(
+		PersistentTreeSelection? selection,
+		string oldScenePath,
+		string newScenePath
+	)
+	{
+		return selection.HasValue
+			? RemapPersistentSelectionAfterSceneRename(
+				selection.Value,
+				oldScenePath,
+				newScenePath
+			)
+			: null;
+	}
+
+	private static PersistentTreeSelection RemapPersistentSelectionAfterSceneRename(
+		PersistentTreeSelection selection,
+		string oldScenePath,
+		string newScenePath
+	)
+	{
+		if (!IsScriptOrScenePersistentTreeSelection(selection))
+			return selection;
+
+		string entry = GetEntryFromMetadata(selection.Metadata);
+		string normalizedOldScenePath = NormalizeRenameResourcePath(oldScenePath);
+		string normalizedNewScenePath = NormalizeRenameResourcePath(newScenePath);
+
+		if (selection.Metadata.StartsWith("sceneLink::", StringComparison.Ordinal))
+		{
+			if (!string.Equals(
+				NormalizeRenameResourcePath(GetScenePathFromEntry(entry)),
+				normalizedOldScenePath,
+				StringComparison.OrdinalIgnoreCase
+			))
+			{
+				return selection;
+			}
+
+			string updatedSceneEntry = BuildSceneEntry(
+				GetFolderPathFromEntry(entry),
+				normalizedNewScenePath,
+				IsEntryLocked(entry)
+			);
+			return new PersistentTreeSelection(
+				selection.SystemName,
+				$"sceneLink::{updatedSceneEntry}"
+			);
+		}
+
+		if (!string.Equals(
+			NormalizeRenameResourcePath(GetLinkedScenePathFromEntry(entry)),
+			normalizedOldScenePath,
+			StringComparison.OrdinalIgnoreCase
+		))
+		{
+			return selection;
+		}
+
+		string updatedScriptEntry = BuildScriptEntry(
+			GetFolderPathFromEntry(entry),
+			GetScriptPathFromEntry(entry),
+			normalizedNewScenePath,
+			IsEntryLocked(entry)
+		);
+		return new PersistentTreeSelection(
+			selection.SystemName,
+			$"script::{updatedScriptEntry}"
+		);
+	}
+
+	private void RestoreNonScriptRenameSelectionAfterRebuild(
+		TreeSelectionOperationState state,
+		PersistentTreeSelection renamedSelection,
+		string reason
+	)
+	{
+		bool restored = TryRestoreTreeSelectionByIdentity(renamedSelection, reason);
+
+		if (
+			!restored
+			&& state != null
+			&& state.PreviousVisibleSelection.HasValue
+		)
+		{
+			restored = TryRestoreTreeSelectionByIdentity(
+				state.PreviousVisibleSelection.Value,
+				$"{reason}: previous visible fallback"
+			);
+		}
+
+		if (
+			!restored
+			&& state != null
+			&& state.NextVisibleSelectionOutsideSubtree.HasValue
+		)
+		{
+			restored = TryRestoreTreeSelectionByIdentity(
+				state.NextVisibleSelectionOutsideSubtree.Value,
+				$"{reason}: next visible fallback"
+			);
+		}
+
+		if (!restored)
+			restored = TryRestoreFirstVisibleTreeSelection($"{reason}: first visible fallback");
+
+		if (!restored)
+			ClearPersistentTreeSelectionAndTreeSelection();
+
+		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+	}
+
+	private void RestoreTreeSelectionAfterRemove(
+		TreeSelectionOperationState state,
+		string reason
+	)
+	{
+		if (_systems.Count == 0)
+		{
+			ClearPersistentTreeSelectionAndTreeSelection();
+			QueueRemoveSelectionFocus(RemoveSelectionFocusTarget.SystemNameInput);
+			return;
+		}
+
+		bool restored =
+			state != null
+			&& state.IsValid
+			&& TryRestoreTreeSelectionByIdentity(
+				state.OriginalSelection,
+				$"{reason}: original selection"
+			);
+
+		if (
+			!restored
+			&& state != null
+			&& state.PreviousVisibleSelection.HasValue
+		)
+		{
+			restored = TryRestoreTreeSelectionByIdentity(
+				state.PreviousVisibleSelection.Value,
+				$"{reason}: previous visible selection"
+			);
+		}
+
+		if (
+			!restored
+			&& state != null
+			&& state.NextVisibleSelectionOutsideSubtree.HasValue
+		)
+		{
+			restored = TryRestoreTreeSelectionByIdentity(
+				state.NextVisibleSelectionOutsideSubtree.Value,
+				$"{reason}: next visible selection"
+			);
+		}
+
+		if (!restored)
+			restored = TryRestoreFirstVisibleTreeSelection($"{reason}: first visible selection");
+
+		if (!restored)
+			ClearPersistentTreeSelectionAndTreeSelection();
+
+		QueueRemoveSelectionFocus(RemoveSelectionFocusTarget.HiddenTreeContext);
+	}
+
+	private void QueueRemoveSelectionFocus(RemoveSelectionFocusTarget target)
+	{
+		_pendingRemoveSelectionFocusTarget = target;
+		_pendingRemoveSelectionFocusCommitted = true;
+		CallDeferred(nameof(ApplyPendingRemoveSelectionFocusDeferred));
+	}
+
+	private void ApplyPendingRemoveSelectionFocusDeferred()
+	{
+		RemoveSelectionFocusTarget target = _pendingRemoveSelectionFocusTarget;
+		_pendingRemoveSelectionFocusTarget = RemoveSelectionFocusTarget.None;
+		_pendingRemoveSelectionFocusCommitted = false;
+
+		if (target == RemoveSelectionFocusTarget.SystemNameInput)
+		{
+			if (
+				_systems.Count == 0
+				&& _systemNameInput != null
+				&& GodotObject.IsInstanceValid(_systemNameInput)
+				&& _systemNameInput.IsInsideTree()
+			)
+			{
+				_systemNameInput.Edit(true);
+			}
+
+			return;
+		}
+
+		if (target == RemoveSelectionFocusTarget.HiddenTreeContext && _systems.Count > 0)
+			TryFocusSystemExplorerHiddenTreeContext(revealDock: false);
+	}
+
+	private void CapturePendingRemoveScriptOccurrence(TreeItem selectedItem = null)
 	{
 		_pendingRemoveScriptOccurrence = null;
 
@@ -61,7 +416,7 @@ public partial class SystemExplorerPlugin
 
 		if (
 			!TryGetScriptTreeOccurrenceFromTreeItem(
-				_tree?.GetSelected(),
+				selectedItem ?? _tree?.GetSelected(),
 				out ScriptTreeOccurrence occurrence
 			)
 			|| !string.Equals(
@@ -102,6 +457,7 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		_pendingRenameMetadata = metadata;
+		CapturePendingNonScriptRenameTreeSelectionState(selectedItem, metadata);
 		_pendingScriptRenameTreeState = metadata.StartsWith(
 			"script::",
 			StringComparison.Ordinal
@@ -114,6 +470,7 @@ public partial class SystemExplorerPlugin
 
 		_pendingRenameMetadata = "";
 		_pendingScriptRenameTreeState = null;
+		_pendingNonScriptRenameTreeSelectionState = null;
 		return false;
 	}
 
@@ -139,6 +496,41 @@ public partial class SystemExplorerPlugin
 		)
 		{
 			return false;
+		}
+
+		bool renamesScript = _pendingRenameMetadata.StartsWith(
+			"script::",
+			StringComparison.Ordinal
+		);
+
+		if (!renamesScript)
+		{
+			if (
+				_pendingNonScriptRenameTreeSelectionState == null
+				|| !_pendingNonScriptRenameTreeSelectionState.IsValid
+				|| !string.Equals(
+					_pendingNonScriptRenameTreeSelectionState.OriginalSelection.Metadata,
+					_pendingRenameMetadata,
+					StringComparison.Ordinal
+				)
+			)
+			{
+				CapturePendingNonScriptRenameTreeSelectionState(
+					_tree?.GetSelected(),
+					_pendingRenameMetadata
+				);
+			}
+
+			if (
+				_pendingNonScriptRenameTreeSelectionState == null
+				|| !_pendingNonScriptRenameTreeSelectionState.IsValid
+			)
+			{
+				ReportTreeOperationFailureOrWarning(
+					"System Explorer could not identify the exact selected tree occurrence before opening the rename dialog."
+				);
+				return false;
+			}
 		}
 
 		if (_pendingRenameMetadata.StartsWith("system::", StringComparison.Ordinal))
@@ -211,6 +603,8 @@ public partial class SystemExplorerPlugin
 		);
 
 		string removeMetadata = _pendingRemoveMetadata;
+		TreeSelectionOperationState removeSelectionState =
+			_pendingRemoveTreeSelectionState;
 
 		if (!EnsureSystemsLoadedForTreeOperation("Remove Item"))
 			return;
@@ -319,10 +713,12 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			_pendingRemoveMetadata = "";
-			_pendingRemoveScriptOccurrence = null;
-			_removeFromFilesystemCheckBox.ButtonPressed = false;
 			BuildTree(keepCurrentExpansionState: true);
+			RestoreTreeSelectionAfterRemove(
+				removeSelectionState,
+				"Virtual Remove"
+			);
+			ClearPendingPhysicalRemoveState();
 			return;
 		}
 
@@ -400,6 +796,10 @@ public partial class SystemExplorerPlugin
 		{
 			RestoreSystemsAndFolderBindingsSnapshot(physicalRemoveBaseline);
 			BuildTree(keepCurrentExpansionState: true);
+			RestoreTreeSelectionAfterRemove(
+				removeSelectionState,
+				"Physical Remove without verified deletion"
+			);
 			ClearPendingPhysicalRemoveState();
 			HideTreeOperationOriginWindow(_removeDialog);
 
@@ -514,6 +914,10 @@ public partial class SystemExplorerPlugin
 		}
 
 		BuildTree(keepCurrentExpansionState: true);
+		RestoreTreeSelectionAfterRemove(
+			removeSelectionState,
+			"Physical Remove final state"
+		);
 
 		if (deletedAnyVerifiedPhysicalPath)
 			EditorInterface.Singleton.GetResourceFilesystem().Scan();
@@ -549,6 +953,7 @@ public partial class SystemExplorerPlugin
 	{
 		_pendingRemoveMetadata = "";
 		_pendingRemoveScriptOccurrence = null;
+		_pendingRemoveTreeSelectionState = null;
 		_removeFromFilesystemCheckBox.ButtonPressed = false;
 	}
 
@@ -905,18 +1310,48 @@ public partial class SystemExplorerPlugin
 		if (metadata.StartsWith("script::", StringComparison.Ordinal))
 		{
 			string entry = GetEntryFromMetadata(metadata);
+
+			if (
+				!TryGetUnambiguousPhysicalResourcePath(
+					entry,
+					false,
+					out string scriptPath
+				)
+			)
+			{
+				return new PhysicalRemoveTargetInspection(
+					PhysicalRemoveTargetStatus.InvalidOrUnidentified,
+					Array.Empty<string>()
+				);
+			}
+
 			return new PhysicalRemoveTargetInspection(
 				PhysicalRemoveTargetStatus.ValidWithPhysicalFiles,
-				new[] { GetScriptPathFromEntry(entry) }
+				new[] { scriptPath }
 			);
 		}
 
 		if (metadata.StartsWith("sceneLink::", StringComparison.Ordinal))
 		{
 			string entry = metadata.Substring("sceneLink::".Length);
+
+			if (
+				!TryGetUnambiguousPhysicalResourcePath(
+					entry,
+					true,
+					out string scenePath
+				)
+			)
+			{
+				return new PhysicalRemoveTargetInspection(
+					PhysicalRemoveTargetStatus.InvalidOrUnidentified,
+					Array.Empty<string>()
+				);
+			}
+
 			return new PhysicalRemoveTargetInspection(
 				PhysicalRemoveTargetStatus.ValidWithPhysicalFiles,
-				new[] { GetScenePathFromEntry(entry) }
+				new[] { scenePath }
 			);
 		}
 
@@ -936,11 +1371,31 @@ public partial class SystemExplorerPlugin
 				);
 			}
 
-			List<string> filePaths = entries
-				.Where(IsScriptOrSceneEntry)
-				.Select(GetPathFromEntry)
-				.Distinct()
-				.ToList();
+			List<string> filePaths = new();
+
+			foreach (string entry in entries)
+			{
+				if (!IsScriptOrSceneEntry(entry))
+					continue;
+
+				if (
+					!TryGetUnambiguousPhysicalResourcePath(
+						entry,
+						IsSceneEntry(entry),
+						out string resourcePath
+					)
+				)
+				{
+					return new PhysicalRemoveTargetInspection(
+						PhysicalRemoveTargetStatus.InvalidOrUnidentified,
+						Array.Empty<string>()
+					);
+				}
+
+				filePaths.Add(resourcePath);
+			}
+
+			filePaths = filePaths.Distinct().ToList();
 
 			return new PhysicalRemoveTargetInspection(
 				filePaths.Count == 0
@@ -986,14 +1441,39 @@ public partial class SystemExplorerPlugin
 				);
 			}
 
-			List<string> filePaths = entries
-				.Where(entry =>
-					IsScriptOrSceneEntry(entry)
-					&& (entry.StartsWith($"{folderPath}|") || entry.StartsWith($"{folderPath}/"))
+			List<string> filePaths = new();
+
+			foreach (string entry in entries)
+			{
+				if (
+					!IsScriptOrSceneEntry(entry)
+					|| (
+						!entry.StartsWith($"{folderPath}|")
+						&& !entry.StartsWith($"{folderPath}/")
+					)
 				)
-				.Select(GetPathFromEntry)
-				.Distinct()
-				.ToList();
+				{
+					continue;
+				}
+
+				if (
+					!TryGetUnambiguousPhysicalResourcePath(
+						entry,
+						IsSceneEntry(entry),
+						out string resourcePath
+					)
+				)
+				{
+					return new PhysicalRemoveTargetInspection(
+						PhysicalRemoveTargetStatus.InvalidOrUnidentified,
+						Array.Empty<string>()
+					);
+				}
+
+				filePaths.Add(resourcePath);
+			}
+
+			filePaths = filePaths.Distinct().ToList();
 
 			return new PhysicalRemoveTargetInspection(
 				filePaths.Count == 0
@@ -1030,7 +1510,7 @@ public partial class SystemExplorerPlugin
 		if (inspection.Status == PhysicalRemoveTargetStatus.InvalidOrUnidentified)
 		{
 			failureMessage =
-				"System Explorer could not identify any physical files for the selected remove operation.";
+				"System Explorer cancelled physical removal because the selected item or one of its stored entries could not be interpreted safely. No project file was deleted.";
 			return false;
 		}
 
@@ -2055,6 +2535,40 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(_pendingRenameMetadata))
 			return;
 
+		if (
+			_pendingRenameMetadata.StartsWith("system::", StringComparison.Ordinal)
+			&& ContainsReservedSystemNameSeparator(newName)
+		)
+		{
+			_renameInput.Text = "";
+			ShowRenameInputWarning(
+				"Invalid System Name",
+				"System names cannot contain \"::\" because it is reserved by System Explorer."
+			);
+			DebugLogger.LogOperation(
+				"Rename System cancelled: reserved separator",
+				newName
+			);
+			return;
+		}
+
+		if (
+			_pendingRenameMetadata.StartsWith("folder::", StringComparison.Ordinal)
+			&& ContainsReservedVirtualFolderSeparator(newName)
+		)
+		{
+			_renameInput.Text = "";
+			ShowRenameInputWarning(
+				"Invalid Folder Name",
+				"Folder names cannot contain \"::\" or \"|\" because those characters are reserved by System Explorer."
+			);
+			DebugLogger.LogOperation(
+				"Rename Folder cancelled: reserved separator",
+				newName
+			);
+			return;
+		}
+
 		bool renamesPhysicalResource =
 			_pendingRenameMetadata.StartsWith("script::", StringComparison.Ordinal)
 			|| _pendingRenameMetadata.StartsWith("sceneLink::", StringComparison.Ordinal);
@@ -2064,8 +2578,29 @@ public partial class SystemExplorerPlugin
 			&& (newName.Contains('/') || newName.Contains('\\'))
 		)
 		{
-			GD.PushWarning("The new file name cannot contain folder separators.");
-			CallDeferred(nameof(RestoreRenameInputFocusDeferred));
+			_renameInput.Text = "";
+			ShowRenameInputWarning(
+				"Invalid File Name",
+				"The new file name cannot contain folder separators. Rename only changes the file name, not the folder path."
+			);
+			DebugLogger.LogOperation(
+				"Rename physical resource cancelled: folder separator",
+				newName
+			);
+			return;
+		}
+
+		if (renamesPhysicalResource && newName.Contains('|'))
+		{
+			_renameInput.Text = "";
+			ShowRenameInputWarning(
+				"Invalid File Name",
+				"The new file name cannot contain \"|\" because it is reserved by System Explorer."
+			);
+			DebugLogger.LogOperation(
+				"Rename physical resource cancelled: reserved separator",
+				newName
+			);
 			return;
 		}
 
@@ -2082,6 +2617,11 @@ public partial class SystemExplorerPlugin
 		string oldSystemName = "";
 		string oldFolderMetadata = "";
 		string newFolderPath = "";
+		string oldScenePathForSelection = "";
+		string finalScenePath = "";
+		TreeSelectionOperationState renameSelectionState =
+			_pendingNonScriptRenameTreeSelectionState;
+		PersistentTreeSelection? renamedSelection = null;
 
 		if (_pendingRenameMetadata.StartsWith("system::"))
 		{
@@ -2093,6 +2633,14 @@ public partial class SystemExplorerPlugin
 				newName,
 				out folderBindingsChanged
 			);
+
+			if (result == RenameMutationResult.Success)
+			{
+				renamedSelection = new PersistentTreeSelection(
+					newName,
+					$"system::{newName}"
+				);
+			}
 		}
 		else if (_pendingRenameMetadata.StartsWith("folder::"))
 		{
@@ -2105,6 +2653,15 @@ public partial class SystemExplorerPlugin
 				out newFolderPath,
 				out folderBindingsChanged
 			);
+
+			if (result == RenameMutationResult.Success)
+			{
+				string systemName = GetSystemNameFromMetadata(oldFolderMetadata);
+				renamedSelection = new PersistentTreeSelection(
+					systemName,
+					$"folder::{systemName}::{newFolderPath}"
+				);
+			}
 		}
 		else if (_pendingRenameMetadata.StartsWith("script::"))
 		{
@@ -2116,7 +2673,40 @@ public partial class SystemExplorerPlugin
 		{
 			itemType = RenameConflictItemType.Scene;
 			renameHandledPersistence = true;
-			result = RenameScene(_pendingRenameMetadata, newName);
+			string selectedSceneEntry = GetEntryFromMetadata(_pendingRenameMetadata);
+			result = RenameScene(
+				_pendingRenameMetadata,
+				newName,
+				out finalScenePath
+			);
+
+			if (
+				result == RenameMutationResult.Success
+				&& TryGetUnambiguousPhysicalResourcePath(
+					selectedSceneEntry,
+					true,
+					out string selectedOldScenePath
+				)
+			)
+			{
+				oldScenePathForSelection = NormalizeRenameResourcePath(
+					selectedOldScenePath
+				);
+			}
+
+			if (
+				result == RenameMutationResult.Success
+				&& renameSelectionState != null
+				&& renameSelectionState.IsValid
+			)
+			{
+				renameSelectionState = RemapTreeSelectionStateAfterSceneRename(
+					renameSelectionState,
+					oldScenePathForSelection,
+					finalScenePath
+				);
+				renamedSelection = renameSelectionState.OriginalSelection;
+			}
 		}
 		else
 		{
@@ -2134,8 +2724,7 @@ public partial class SystemExplorerPlugin
 		if (result == RenameMutationResult.NameConflict)
 		{
 			_renameInput.Text = "";
-			ConfigureRenameNameConflictDialog(itemType);
-			ShowRenameNameConflictWarning();
+			ShowRenameNameConflictWarning(itemType);
 			return;
 		}
 
@@ -2161,6 +2750,7 @@ public partial class SystemExplorerPlugin
 			_renameDialog.Hide();
 			_pendingRenameMetadata = "";
 			_pendingScriptRenameTreeState = null;
+			_pendingNonScriptRenameTreeSelectionState = null;
 			_renameInput.Text = "";
 			return;
 		}
@@ -2201,9 +2791,37 @@ public partial class SystemExplorerPlugin
 		_renameInput.Text = "";
 
 		if (renameHandledPersistence)
+		{
+			if (
+				itemType == RenameConflictItemType.Scene
+				&& renamedSelection.HasValue
+			)
+			{
+				RestoreNonScriptRenameSelectionAfterRebuild(
+					renameSelectionState,
+					renamedSelection.Value,
+					"Rename Scene"
+				);
+			}
+
+			_pendingNonScriptRenameTreeSelectionState = null;
 			return;
+		}
 
 		BuildTree();
+
+		if (renamedSelection.HasValue)
+		{
+			RestoreNonScriptRenameSelectionAfterRebuild(
+				renameSelectionState,
+				renamedSelection.Value,
+				itemType == RenameConflictItemType.System
+					? "Rename System"
+					: "Rename Folder"
+			);
+		}
+
+		_pendingNonScriptRenameTreeSelectionState = null;
 	}
 
 	private void ForceExpandAfterSystemRename(string oldSystemName, string newSystemName)
@@ -2607,7 +3225,27 @@ public partial class SystemExplorerPlugin
 		}
 
 		string entry = GetEntryFromMetadata(metadata);
-		string oldScriptPath = ScriptPathUtility.Normalize(GetScriptPathFromEntry(entry));
+
+		if (
+			!TryGetUnambiguousPhysicalResourcePath(
+				entry,
+				false,
+				out string unambiguousScriptPath
+			)
+		)
+		{
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer cancelled the script rename because the stored entry could not be interpreted safely. No project file was changed."
+			);
+			DebugLogger.LogOperation(
+				"Rename Script failed: ambiguous stored entry",
+				entry
+			);
+			_pendingScriptRenameTreeState = null;
+			return RenameMutationResult.Failed;
+		}
+
+		string oldScriptPath = ScriptPathUtility.Normalize(unambiguousScriptPath);
 		ScriptRenameTreeState treeState = _pendingScriptRenameTreeState;
 		_pendingScriptRenameTreeState = null;
 
@@ -6338,10 +6976,34 @@ public partial class SystemExplorerPlugin
 			UpdatedSceneEntryCount > 0 || UpdatedLinkedScriptCount > 0;
 	}
 
-	private RenameMutationResult RenameScene(string metadata, string newName)
+	private RenameMutationResult RenameScene(
+		string metadata,
+		string newName,
+		out string finalScenePath
+	)
 	{
+		finalScenePath = "";
 		string entry = metadata.Substring("sceneLink::".Length);
-		string oldScenePath = NormalizeRenameResourcePath(GetScenePathFromEntry(entry));
+
+		if (
+			!TryGetUnambiguousPhysicalResourcePath(
+				entry,
+				true,
+				out string unambiguousScenePath
+			)
+		)
+		{
+			ReportTreeOperationFailureOrWarning(
+				"System Explorer cancelled the scene rename because the stored entry could not be interpreted safely. No project file was changed."
+			);
+			DebugLogger.LogOperation(
+				"Rename Scene failed: ambiguous stored entry",
+				entry
+			);
+			return RenameMutationResult.Failed;
+		}
+
+		string oldScenePath = NormalizeRenameResourcePath(unambiguousScenePath);
 
 		if (newName.Contains("/") || newName.Contains("\\"))
 		{
@@ -6677,6 +7339,7 @@ public partial class SystemExplorerPlugin
 			$"old='{oldScenePath}', target='{newScenePath}', sceneEntries={metadataUpdateResult.UpdatedSceneEntryCount}, linkedScripts={metadataUpdateResult.UpdatedLinkedScriptCount}"
 		);
 
+		finalScenePath = newScenePath;
 		return RenameMutationResult.Success;
 	}
 

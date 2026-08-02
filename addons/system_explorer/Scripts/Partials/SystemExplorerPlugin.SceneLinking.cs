@@ -271,6 +271,19 @@ public partial class SystemExplorerPlugin
 
 	private bool UpdateScenePath(string oldEntry, string newScenePath)
 	{
+		if (!IsPrimaryResourcePathRepresentable(newScenePath))
+		{
+			ReportTreeOperationFailure(
+				"System Explorer cannot relink this scene because the selected path contains \"|\" which is reserved by the current entry format. The existing entry was not changed.",
+				$"Path='{newScenePath}'"
+			);
+			DebugLogger.LogOperation(
+				"Relink Scene cancelled: unrepresentable primary resource path",
+				newScenePath
+			);
+			return false;
+		}
+
 		if (!EnsureSystemsLoadedForTreeOperation("Update Scene"))
 			return false;
 
