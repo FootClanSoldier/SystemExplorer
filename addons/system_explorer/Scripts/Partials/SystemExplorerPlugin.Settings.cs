@@ -5,13 +5,9 @@ public partial class SystemExplorerPlugin
 {
 	#region Project Settings
 	private const string ProjectSettingsPath = "addons/system_explorer";
-	private const string EnableContextMenuIconsSetting =
-		ProjectSettingsPath + "/enable_context_menu_icons";
 	private const string EnableQuickActionsSetting = ProjectSettingsPath + "/enable_quick_actions";
 	private const string DebugStateSetting = ProjectSettingsPath + "/enable_debug_state";
 
-	private bool EnableContextMenuIcons =>
-		GetBoolProjectSetting(EnableContextMenuIconsSetting, true);
 	private bool EnableQuickActions => GetBoolProjectSetting(EnableQuickActionsSetting, false);
 
 	// Enable only when investigating editor state/save/Quick Action issues.
@@ -19,7 +15,6 @@ public partial class SystemExplorerPlugin
 
 	private void EnsureProjectSettings()
 	{
-		EnsureBoolProjectSetting(EnableContextMenuIconsSetting, true);
 		EnsureBoolProjectSetting(EnableQuickActionsSetting, false);
 		EnsureBoolProjectSetting(DebugStateSetting, false);
 	}
@@ -62,7 +57,7 @@ public partial class SystemExplorerPlugin
 		if (menu == null || !GodotObject.IsInstanceValid(menu))
 			return;
 
-		if (!EnableContextMenuIcons || icon == null)
+		if (icon == null)
 			menu.AddItem(label, id);
 		else
 			menu.AddIconItem(icon, label, id);

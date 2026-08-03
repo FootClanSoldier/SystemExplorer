@@ -306,11 +306,8 @@ public partial class SystemExplorerPlugin
 		_contextMenu.AddSubmenuNodeItem(label, submenu);
 
 		int index = _contextMenu.ItemCount - 1;
-		bool shouldShowSubmenuItemIcon =
-			EnableContextMenuIcons
-			|| ShouldForceReversedContextSubmenuDirectionIcon(useReversedIcons);
 
-		if (shouldShowSubmenuItemIcon && icon != null)
+		if (icon != null)
 			_contextMenu.SetItemIcon(index, icon);
 	}
 

@@ -148,6 +148,7 @@ Partials/SystemExplorerPlugin.TreeInput.cs
 
 Partials/SystemExplorerPlugin.ContextMenu.cs
 - Handles context menu constants, hidden submenu icon state, context menu construction, submenu direction/icon behavior, and context menu action routing.
+- Always applies available editor icons to context menu and submenu entries while preserving the existing left/right submenu-direction logic and text-only fallback when an icon is unavailable.
 - Handles pending metadata setup, captures the exact selected script occurrence for remove before the popup takes focus, New/Add/Quick Actions menu composition, Open File Path / Open Folder Path routing, visibility of file-manager actions, and context-specific system/folder/script/scene menu entries.
 - Uses AddCreate.cs's exact selected-TreeItem resolver for the pending New Folder target, so context-menu folder creation follows the clicked virtual occurrence rather than a global first entry match.
 - Displays the current New Script binding on New > Script, the current New Folder binding on New > Folder, and the current Add Scripts, Add Scenes, and Refactor Namespace bindings on Add > Scripts, Add > Scenes, and Quick Actions > Refactor Namespace through the shared display-only shortcut helper; Rename currently has no displayed binding and Collapse Tree is intentionally not added to any context menu.
@@ -257,8 +258,9 @@ Partials/SystemExplorerPlugin.Persistence.cs
 - Owns the shared strict metadata-save preflight for operations with physical or otherwise difficult-to-reverse side effects. The preflight routes systems.json and folder_bindings.json through the commit-capability-required save paths, snapshots and restores both in-memory models on failure, replaces generic save reports in the active dialog scope, and leaves each operation's post-mutation rollback/incomplete handling intact.
 
 Partials/SystemExplorerPlugin.Settings.cs
-- Handles plugin Project Settings registration and reading configurable settings under addons/system_explorer/..
-- Contains settings-backed toggles for context menu icons and Quick Actions.
+- Registers and reads the plugin's remaining Project Settings under addons/system_explorer/.
+- Contains the settings-backed choices for Quick Actions and debug state.
+- Provides the central context menu-item helper, which always uses an available editor icon and otherwise falls back to a normal text-only menu item while preserving shortcut display.
 
 Partials/SystemExplorerPlugin.QuickAction.Beautify.cs
 - Handles the Quick Action flow for Beautify Script / Beautify Scripts and retains the full single- and batch-formatting orchestration.
