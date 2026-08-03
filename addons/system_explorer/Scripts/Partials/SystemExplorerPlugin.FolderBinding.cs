@@ -1011,7 +1011,20 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
-			string selectedMetadata = _tree?.GetSelected()?.GetMetadata(0).AsString() ?? "";
+			PersistentTreeSelection? selectedTreeIdentity = null;
+			TreeItem selectedItem = _tree.GetSelected();
+
+			if (
+				selectedItem != null
+				&& TryCreatePersistentTreeSelection(
+					selectedItem,
+					out PersistentTreeSelection capturedSelection
+				)
+			)
+			{
+				selectedTreeIdentity = capturedSelection;
+			}
+
 			SystemsAndFolderBindingsSnapshot snapshot =
 				CaptureSystemsAndFolderBindingsSnapshot();
 			int addedEntries = SynchronizeAllBoundFolders();
@@ -1050,8 +1063,19 @@ public partial class SystemExplorerPlugin
 			ClearPersistentTreeOperationFailure("BoundFolderSync");
 			BuildTree();
 
-			if (!string.IsNullOrWhiteSpace(selectedMetadata))
-				SelectTreeItemByMetadata(selectedMetadata);
+			if (
+				selectedTreeIdentity.HasValue
+				&& !TryRestoreTreeSelectionByIdentity(
+					selectedTreeIdentity.Value,
+					"Bound Folder automatic sync"
+				)
+			)
+			{
+				DebugLogger.LogOperation(
+					"Bound Folder automatic sync selection restore warning",
+					$"system='{selectedTreeIdentity.Value.SystemName}', metadata='{selectedTreeIdentity.Value.Metadata}'"
+				);
+			}
 		}
 		finally
 		{

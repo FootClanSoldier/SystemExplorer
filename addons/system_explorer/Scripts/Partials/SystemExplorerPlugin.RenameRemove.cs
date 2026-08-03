@@ -3017,7 +3017,7 @@ public partial class SystemExplorerPlugin
 		public bool WasFiltering { get; init; }
 		public string FilterText { get; init; } = "";
 		public HashSet<string> ExpansionState { get; init; } =
-			new(StringComparer.OrdinalIgnoreCase);
+			new(StringComparer.Ordinal);
 		public Control FocusOwnerBeforeDialog { get; init; }
 		public bool TreeHadFocusBeforeDialog { get; init; }
 		public bool IsValid =>
@@ -4159,7 +4159,7 @@ public partial class SystemExplorerPlugin
 		HashSet<string> expansionState = wasFiltering
 			? new HashSet<string>(
 				_expandedItemsBeforeScriptFilter,
-				StringComparer.OrdinalIgnoreCase
+				StringComparer.Ordinal
 			)
 			: CaptureTreeExpansionStateSnapshot();
 
@@ -5837,69 +5837,26 @@ public partial class SystemExplorerPlugin
 		string selectedEntry
 	)
 	{
-		TreeItem root = _tree?.GetRoot();
+		var selection = new PersistentTreeSelection(
+			treeState.SystemName,
+			$"script::{selectedEntry}"
+		);
 
-		if (root == null)
-			return false;
-
-		TreeItem targetItem = null;
-
-		if (treeState.WasFiltering && IsScriptFilterActive())
+		if (
+			TryRestoreTreeSelectionByIdentity(
+				selection,
+				"Rename Script tree restore"
+			)
+		)
 		{
-			List<ScriptFilterResult> results = GetFilteredScriptResults(
-				(_scriptFilterInput?.Text ?? "").Trim().ToLowerInvariant()
-			);
-			TreeItem item = root.GetFirstChild();
-
-			for (int index = 0; item != null && index < results.Count; index++)
-			{
-				ScriptFilterResult result = results[index];
-
-				if (
-					result.SystemName == treeState.SystemName
-					&& result.FolderPath == treeState.FolderPath
-					&& result.Entry == selectedEntry
-				)
-				{
-					targetItem = item;
-					break;
-				}
-
-				item = item.GetNext();
-			}
-		}
-		else
-		{
-			TreeItem systemItem = root.GetFirstChild();
-
-			while (systemItem != null)
-			{
-				if (systemItem.GetMetadata(0).AsString() == $"system::{treeState.SystemName}")
-				{
-					targetItem = FindTreeItemByMetadataWithinSubtree(
-						systemItem,
-						$"script::{selectedEntry}"
-					);
-					break;
-				}
-
-				systemItem = systemItem.GetNext();
-			}
+			return true;
 		}
 
-		if (targetItem == null)
-		{
-			DebugLogger.LogOperation(
-				"Rename Script tree restore warning: exact entry not found",
-				$"system='{treeState.SystemName}', folder='{treeState.FolderPath}', entry='{selectedEntry}'"
-			);
-			return false;
-		}
-
-		targetItem.Select(0);
-		_tree.ScrollToItem(targetItem);
-		UpdateTreeLockIconVisibility();
-		return _tree.GetSelected() == targetItem;
+		DebugLogger.LogOperation(
+			"Rename Script tree restore warning: exact entry not found",
+			$"system='{treeState.SystemName}', folder='{treeState.FolderPath}', entry='{selectedEntry}'"
+		);
+		return false;
 	}
 
 	private bool TryGetMatchingOpenScriptResources(

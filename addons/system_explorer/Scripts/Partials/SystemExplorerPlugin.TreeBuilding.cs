@@ -343,7 +343,7 @@ public partial class SystemExplorerPlugin
 	{
 		SaveExpansionState();
 
-		return new HashSet<string>(_expandedItems, StringComparer.OrdinalIgnoreCase);
+		return new HashSet<string>(_expandedItems, StringComparer.Ordinal);
 	}
 
 	private void RestoreTreeExpansionStateSnapshot(HashSet<string> expandedItemsSnapshot)
