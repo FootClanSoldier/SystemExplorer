@@ -569,14 +569,24 @@ public partial class SystemExplorerPlugin
 
 	private void OnSystemNameSubmitted(string submittedText)
 	{
-		if (EnsureManagedAssemblyStateCurrent("Submit System Name"))
+		if (
+			HasMissingSystemsWithFolderBindingsConflict
+			|| EnsureManagedAssemblyStateCurrent("Submit System Name")
+		)
+		{
 			OnAddSystemPressed();
+		}
 	}
 
 	private void OnSystemNameInputGuiInputSignal(InputEvent inputEvent)
 	{
-		if (EnsureManagedAssemblyStateCurrent("System Name Input"))
+		if (
+			HasMissingSystemsWithFolderBindingsConflict
+			|| EnsureManagedAssemblyStateCurrent("System Name Input")
+		)
+		{
 			OnSystemNameInputGuiInput(inputEvent);
+		}
 	}
 
 	private void OnScriptFilterTextChangedSignal(string filterText)
@@ -714,7 +724,10 @@ public partial class SystemExplorerPlugin
 		if (_firstRunWelcomeNote == null)
 			return;
 
-		_firstRunWelcomeNote.Visible = _systems.Count == 0 && !FileAccess.FileExists(SavePath);
+		_firstRunWelcomeNote.Visible =
+			HasVerifiedPersistentTreeStateForCurrentAssembly
+			&& _systems.Count == 0
+			&& !FileAccess.FileExists(SavePath);
 	}
 
 	private static AcceptDialog CreateInputWarningDialog(string title, string dialogText)

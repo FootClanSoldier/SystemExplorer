@@ -140,6 +140,7 @@ public partial class SystemExplorerPlugin
 			MinSize = WrappedAcceptDialogMinimumSize,
 			Unresizable = true,
 			DialogAutowrap = true,
+			TransientToFocused = true,
 		};
 
 		ConfigureWrappedAcceptDialogMessageLabel(_treeOperationDialog);

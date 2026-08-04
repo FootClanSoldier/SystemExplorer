@@ -27,6 +27,9 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (TryBlockAddSystemForPersistentMetadataConflict())
+			return;
+
 		if (ContainsReservedSystemNameSeparator(systemName))
 		{
 			_systemNameInput.Text = "";
@@ -84,6 +87,26 @@ public partial class SystemExplorerPlugin
 		ForceExpandSystem(systemName);
 		BuildTree();
 		RestoreAddedSystemSelectionAfterRebuild(systemName);
+	}
+
+	private bool TryBlockAddSystemForPersistentMetadataConflict()
+	{
+		if (!HasMissingSystemsWithFolderBindingsConflict)
+			return false;
+
+		DebugLogger.LogOperation(
+			"Add System blocked by persistent metadata conflict",
+			$"FailureKind='{_persistentTreeStateLoadFailureKind}', SystemsPath='{SavePath}', FolderBindingsPath='{FolderBindingsPath}'"
+		);
+		_systemNameInput.Text = "";
+		UpdateSystemNameEnterIconVisibility(_systemNameInput.Text);
+		ShowAddSystemInputWarning(
+			"Cannot Create System",
+			"System Explorer cannot create a new system because systems.json is missing while folder_bindings.json still contains folder bindings that depend on it.\n\n"
+			+ "System Explorer will not modify or remove either metadata file automatically.\n\n"
+			+ "Restore res://addons/system_explorer/Resources/systems.json, or back up and remove res://addons/system_explorer/Resources/folder_bindings.json manually if those bindings are no longer needed. Then reload the plugin or restart Godot before creating a system."
+		);
+		return true;
 	}
 
 	private void RestoreAddedSystemSelectionAfterRebuild(string systemName)

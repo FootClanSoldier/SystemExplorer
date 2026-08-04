@@ -13,6 +13,7 @@ public partial class SystemExplorerPlugin
 		Missing,
 		ValidEmpty,
 		ValidNonEmpty,
+		UnknownSystemReference,
 		OpenFailed,
 		InvalidJson,
 	}
@@ -21,6 +22,8 @@ public partial class SystemExplorerPlugin
 	{
 		internal FolderBindingsFileReadStatus Status { get; }
 		internal Dictionary<string, Dictionary<string, string>> FolderBindings { get; }
+		internal IReadOnlyList<string> UnknownSystemReferences { get; }
+		internal int UnknownSystemBindingCount { get; }
 		internal string FailureDetail { get; }
 
 		internal bool IsValid =>
@@ -31,12 +34,17 @@ public partial class SystemExplorerPlugin
 		internal FolderBindingsFileReadResult(
 			FolderBindingsFileReadStatus status,
 			Dictionary<string, Dictionary<string, string>> folderBindings = null,
+			IEnumerable<string> unknownSystemReferences = null,
+			int unknownSystemBindingCount = 0,
 			string failureDetail = ""
 		)
 		{
 			Status = status;
 			FolderBindings = folderBindings
 				?? new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+			UnknownSystemReferences = (unknownSystemReferences ?? Array.Empty<string>())
+				.ToArray();
+			UnknownSystemBindingCount = Math.Max(0, unknownSystemBindingCount);
 			FailureDetail = failureDetail ?? "";
 		}
 	}
@@ -96,6 +104,9 @@ public partial class SystemExplorerPlugin
 
 		var loadedFolderBindings =
 			new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+		var seenSystemNames = new HashSet<string>(StringComparer.Ordinal);
+		var unknownSystemReferences = new List<string>();
+		int unknownSystemBindingCount = 0;
 
 		try
 		{
@@ -113,16 +124,27 @@ public partial class SystemExplorerPlugin
 			{
 				string systemName = NormalizeFolderBindingSystemName(systemProperty.Name);
 
-				if (
-					string.IsNullOrWhiteSpace(systemName)
-					|| systemProperty.Value.ValueKind != JsonValueKind.Object
-					|| !validatedSystems.ContainsKey(systemName)
-					|| loadedFolderBindings.ContainsKey(systemName)
-				)
+				if (string.IsNullOrWhiteSpace(systemName))
 				{
 					return new FolderBindingsFileReadResult(
 						FolderBindingsFileReadStatus.InvalidJson,
-						failureDetail: $"Invalid or duplicate system binding entry '{systemProperty.Name}'."
+						failureDetail: $"Invalid system binding entry '{systemProperty.Name}'."
+					);
+				}
+
+				if (!seenSystemNames.Add(systemName))
+				{
+					return new FolderBindingsFileReadResult(
+						FolderBindingsFileReadStatus.InvalidJson,
+						failureDetail: $"Duplicate normalized system binding entry '{systemName}'."
+					);
+				}
+
+				if (systemProperty.Value.ValueKind != JsonValueKind.Object)
+				{
+					return new FolderBindingsFileReadResult(
+						FolderBindingsFileReadStatus.InvalidJson,
+						failureDetail: $"System binding entry '{systemProperty.Name}' must be a JSON object."
 					);
 				}
 
@@ -147,7 +169,28 @@ public partial class SystemExplorerPlugin
 						string.IsNullOrWhiteSpace(virtualFolderPath)
 						|| string.IsNullOrWhiteSpace(physicalFolderPath)
 						|| systemBindings.ContainsKey(virtualFolderPath)
-						|| !DoesVirtualFolderExist(
+					)
+					{
+						return new FolderBindingsFileReadResult(
+							FolderBindingsFileReadStatus.InvalidJson,
+							failureDetail: $"Binding '{systemProperty.Name}/{folderProperty.Name}' has an invalid or duplicate normalized folder path."
+						);
+					}
+
+					systemBindings[virtualFolderPath] = physicalFolderPath;
+				}
+
+				if (!validatedSystems.ContainsKey(systemName))
+				{
+					unknownSystemReferences.Add(systemName);
+					unknownSystemBindingCount += systemBindings.Count;
+					continue;
+				}
+
+				foreach (string virtualFolderPath in systemBindings.Keys)
+				{
+					if (
+						!DoesVirtualFolderExist(
 							validatedSystems,
 							systemName,
 							virtualFolderPath
@@ -156,11 +199,9 @@ public partial class SystemExplorerPlugin
 					{
 						return new FolderBindingsFileReadResult(
 							FolderBindingsFileReadStatus.InvalidJson,
-							failureDetail: $"Binding '{systemProperty.Name}/{folderProperty.Name}' could not be validated against systems.json."
+							failureDetail: $"Binding '{systemProperty.Name}/{virtualFolderPath}' could not be validated against systems.json."
 						);
 					}
-
-					systemBindings[virtualFolderPath] = physicalFolderPath;
 				}
 
 				if (systemBindings.Count > 0)
@@ -172,6 +213,18 @@ public partial class SystemExplorerPlugin
 			return new FolderBindingsFileReadResult(
 				FolderBindingsFileReadStatus.InvalidJson,
 				failureDetail: exception.Message
+			);
+		}
+
+		if (unknownSystemReferences.Count > 0)
+		{
+			return new FolderBindingsFileReadResult(
+				FolderBindingsFileReadStatus.UnknownSystemReference,
+				loadedFolderBindings,
+				unknownSystemReferences,
+				unknownSystemBindingCount,
+				failureDetail:
+					$"Unknown systems='{string.Join(", ", unknownSystemReferences)}', BindingCount='{unknownSystemBindingCount}'."
 			);
 		}
 

@@ -12,6 +12,12 @@ public partial class SystemExplorerPlugin
 		"System Explorer Reload Failed";
 	private const string ManagedAssemblyRecoveryFailureMessage =
 		"System Explorer could not restore its editor integration after the C# assembly reload. Fix the reported persistent-state or editor-integration problem, then build again or restart Godot.";
+	private const string MissingSystemsWithFolderBindingsFailureTitle =
+		"System Explorer Tree Load Failed";
+	private const string MissingSystemsWithFolderBindingsFailureMessage =
+		"System Explorer could not build the tree because systems.json is missing, but folder_bindings.json still contains folder bindings that depend on it.\n\n"
+		+ "System Explorer will not modify or remove either metadata file automatically.\n\n"
+		+ "Restore res://addons/system_explorer/Resources/systems.json, or back up and remove res://addons/system_explorer/Resources/folder_bindings.json manually if those bindings are no longer needed. Then reload the plugin or restart Godot.";
 
 	private static readonly string ManagedAssemblyGeneration =
 		Guid.NewGuid().ToString("N");
@@ -27,12 +33,48 @@ public partial class SystemExplorerPlugin
 		PermanentlyFailed,
 	}
 
+	private enum PersistentTreeStateLoadFailureKind
+	{
+		None,
+		General,
+		MissingSystemsWithFolderBindings,
+	}
+
 	private string _loadedPersistentTreeStateGeneration = "";
 	private string _reportedManagedAssemblyRecoveryFailureGeneration = "";
 	private bool _isRecoveringManagedAssemblyState;
 	private ManagedAssemblyRecoveryState _managedAssemblyRecoveryState;
+	private PersistentTreeStateLoadFailureKind _persistentTreeStateLoadFailureKind;
 	private int _managedAssemblyRecoveryDeferredAttempts;
 	private string _managedAssemblyRecoveryReason = "";
+
+	private bool HasMissingSystemsWithFolderBindingsConflict =>
+		_persistentTreeStateLoadFailureKind
+			== PersistentTreeStateLoadFailureKind.MissingSystemsWithFolderBindings;
+
+	private bool HasVerifiedPersistentTreeStateForCurrentAssembly =>
+		string.Equals(
+			_loadedPersistentTreeStateGeneration,
+			ManagedAssemblyGeneration,
+			StringComparison.Ordinal
+		)
+		&& _persistentTreeStateLoadFailureKind
+			== PersistentTreeStateLoadFailureKind.None;
+
+	private void SetPersistentTreeStateLoadFailureKind(
+		PersistentTreeStateLoadFailureKind failureKind
+	)
+	{
+		_persistentTreeStateLoadFailureKind = failureKind;
+
+		if (failureKind == PersistentTreeStateLoadFailureKind.None)
+			return;
+
+		_loadedPersistentTreeStateGeneration = "";
+
+		if (IsValidGodotObject(_firstRunWelcomeNote))
+			_firstRunWelcomeNote.Visible = false;
+	}
 
 	private bool InitializePersistentTreeStateForCurrentAssembly(string reason)
 	{
@@ -50,6 +92,9 @@ public partial class SystemExplorerPlugin
 		}
 		catch (Exception exception)
 		{
+			SetPersistentTreeStateLoadFailureKind(
+				PersistentTreeStateLoadFailureKind.General
+			);
 			ReportManagedAssemblyRecoveryFailure(
 				reason,
 				$"Unexpected startup state exception: {exception}"
@@ -61,11 +106,7 @@ public partial class SystemExplorerPlugin
 	private bool EnsureManagedAssemblyStateCurrent(string reason)
 	{
 		if (
-			string.Equals(
-				_loadedPersistentTreeStateGeneration,
-				ManagedAssemblyGeneration,
-				StringComparison.Ordinal
-			)
+			HasVerifiedPersistentTreeStateForCurrentAssembly
 			&& VerifyCriticalManagedAssemblySignals()
 		)
 		{
@@ -255,46 +296,74 @@ public partial class SystemExplorerPlugin
 	)
 	{
 		failureDetail = "";
-		SystemsFileReadResult systemsReadResult = ReadSystemsFileFromDisk();
 
-		if (
-			systemsReadResult.Status != SystemsFileReadStatus.Missing
-			&& !systemsReadResult.IsValid
-		)
+		try
 		{
-			failureDetail =
-				$"Reason='{reason}', File='systems.json', Status='{systemsReadResult.Status}', Detail='{systemsReadResult.FailureDetail}'";
-			return false;
-		}
+			SystemsFileReadResult systemsReadResult = ReadSystemsFileFromDisk();
 
-		Dictionary<string, List<string>> validatedSystems =
-			CreateNormalizedSystemsCopy(
-				systemsReadResult.Status == SystemsFileReadStatus.Missing
-					? null
-					: systemsReadResult.Systems
+			if (
+				systemsReadResult.Status != SystemsFileReadStatus.Missing
+				&& !systemsReadResult.IsValid
+			)
+			{
+				SetPersistentTreeStateLoadFailureKind(
+					PersistentTreeStateLoadFailureKind.General
+				);
+				failureDetail =
+					$"systems.json Status='{systemsReadResult.Status}', Detail='{systemsReadResult.FailureDetail}', SystemsPath='{SavePath}'";
+				return false;
+			}
+
+			Dictionary<string, List<string>> validatedSystems =
+				CreateNormalizedSystemsCopy(
+					systemsReadResult.Status == SystemsFileReadStatus.Missing
+						? null
+						: systemsReadResult.Systems
+				);
+
+			FolderBindingsFileReadResult folderBindingsReadResult =
+				ReadFolderBindingsFileFromDisk(validatedSystems);
+
+			if (!folderBindingsReadResult.IsValid)
+			{
+				PersistentTreeStateLoadFailureKind failureKind =
+					systemsReadResult.Status == SystemsFileReadStatus.Missing
+					&& folderBindingsReadResult.Status
+						== FolderBindingsFileReadStatus.UnknownSystemReference
+					&& folderBindingsReadResult.UnknownSystemBindingCount > 0
+						? PersistentTreeStateLoadFailureKind.MissingSystemsWithFolderBindings
+						: PersistentTreeStateLoadFailureKind.General;
+
+				SetPersistentTreeStateLoadFailureKind(failureKind);
+				failureDetail =
+					$"systems.json Status='{systemsReadResult.Status}', folder_bindings.json Status='{folderBindingsReadResult.Status}', UnknownSystems='{string.Join(", ", folderBindingsReadResult.UnknownSystemReferences)}', UnknownSystemBindingCount='{folderBindingsReadResult.UnknownSystemBindingCount}', Detail='{folderBindingsReadResult.FailureDetail}', SystemsPath='{SavePath}', FolderBindingsPath='{FolderBindingsPath}'";
+				return false;
+			}
+
+			CommitPersistentTreeState(
+				validatedSystems,
+				folderBindingsReadResult.FolderBindings
+			);
+			LoadPersistentTreeStateBestEffort(reason);
+			SetPersistentTreeStateLoadFailureKind(
+				PersistentTreeStateLoadFailureKind.None
 			);
 
-		FolderBindingsFileReadResult folderBindingsReadResult =
-			ReadFolderBindingsFileFromDisk(validatedSystems);
-
-		if (!folderBindingsReadResult.IsValid)
+			DebugLogger.LogOperation(
+				"Persistent tree state loaded",
+				$"Reason='{reason}', FailureKind='{_persistentTreeStateLoadFailureKind}', SystemsStatus='{systemsReadResult.Status}', FolderBindingsStatus='{folderBindingsReadResult.Status}', Systems={validatedSystems.Count}, FolderBindings={CountFolderBindings(folderBindingsReadResult.FolderBindings)}"
+			);
+			return true;
+		}
+		catch (Exception exception)
 		{
+			SetPersistentTreeStateLoadFailureKind(
+				PersistentTreeStateLoadFailureKind.General
+			);
 			failureDetail =
-				$"Reason='{reason}', File='folder_bindings.json', Status='{folderBindingsReadResult.Status}', Detail='{folderBindingsReadResult.FailureDetail}'";
+				$"Unexpected persistent-state load exception: {exception}";
 			return false;
 		}
-
-		CommitPersistentTreeState(
-			validatedSystems,
-			folderBindingsReadResult.FolderBindings
-		);
-		LoadPersistentTreeStateBestEffort(reason);
-
-		DebugLogger.LogOperation(
-			"Persistent tree state loaded",
-			$"Reason='{reason}', SystemsStatus='{systemsReadResult.Status}', FolderBindingsStatus='{folderBindingsReadResult.Status}', Systems={validatedSystems.Count}, FolderBindings={CountFolderBindings(folderBindingsReadResult.FolderBindings)}"
-		);
-		return true;
 	}
 
 	private static Dictionary<string, List<string>> CreateNormalizedSystemsCopy(
@@ -510,21 +579,30 @@ public partial class SystemExplorerPlugin
 		}
 
 		_reportedManagedAssemblyRecoveryFailureGeneration = ManagedAssemblyGeneration;
-		string details = $"Reason='{reason}', {technicalDetail}";
+		bool isMissingSystemsWithFolderBindings =
+			HasMissingSystemsWithFolderBindingsConflict;
+		string title = isMissingSystemsWithFolderBindings
+			? MissingSystemsWithFolderBindingsFailureTitle
+			: ManagedAssemblyRecoveryFailureTitle;
+		string userMessage = isMissingSystemsWithFolderBindings
+			? MissingSystemsWithFolderBindingsFailureMessage
+			: ManagedAssemblyRecoveryFailureMessage;
+		string details =
+			$"Reason='{reason}', FailureKind='{_persistentTreeStateLoadFailureKind}', {technicalDetail}";
 
 		if (IsValidGodotObject(_treeOperationDialog))
 		{
 			ConnectTreeOperationDialogSignals();
 			QueueStandaloneTreeOperationDialog(
-				ManagedAssemblyRecoveryFailureTitle,
-				ManagedAssemblyRecoveryFailureMessage,
+				title,
+				userMessage,
 				details,
 				ManagedAssemblyRecoveryDeduplicationKey
 			);
 		}
 		else
 		{
-			DebugLogger.LogOperation(ManagedAssemblyRecoveryFailureTitle, details);
+			DebugLogger.LogOperation(title, details);
 		}
 	}
 
