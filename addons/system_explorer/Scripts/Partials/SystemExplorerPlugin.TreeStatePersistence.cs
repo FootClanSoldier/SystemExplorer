@@ -162,7 +162,7 @@ public partial class SystemExplorerPlugin
 
 		var candidate = new PersistentTreeSelection(
 			systemNameElement.GetString() ?? "",
-			metadataElement.GetString() ?? ""
+			NormalizePersistentTreeSelectionMetadata(metadataElement.GetString() ?? "")
 		);
 
 		if (!IsPersistentTreeSelectionIdentityWellFormed(candidate, out failureDetail))
@@ -173,6 +173,25 @@ public partial class SystemExplorerPlugin
 
 		selection = candidate;
 		return true;
+	}
+
+	private static string NormalizePersistentTreeSelectionMetadata(string metadata)
+	{
+		string prefix;
+
+		if (metadata.StartsWith("script::", StringComparison.Ordinal))
+			prefix = "script::";
+		else if (metadata.StartsWith("sceneLink::", StringComparison.Ordinal))
+			prefix = "sceneLink::";
+		else
+			return metadata;
+
+		string entry = metadata.Substring(prefix.Length);
+		string normalizedEntry = NormalizeScriptOrSceneResourcePaths(entry);
+
+		return string.Equals(entry, normalizedEntry, StringComparison.Ordinal)
+			? metadata
+			: $"{prefix}{normalizedEntry}";
 	}
 
 	private void QueuePersistentTreeStateSave()

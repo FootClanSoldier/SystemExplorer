@@ -3281,7 +3281,7 @@ public partial class SystemExplorerPlugin
 			? newName
 			: $"{newName}.cs";
 		string folderPath = ScriptPathUtility.Normalize(oldScriptPath.GetBaseDir());
-		string newScriptPath = ScriptPathUtility.Normalize($"{folderPath}/{newFileName}");
+		string newScriptPath = CombineResourcePath(folderPath, newFileName);
 		bool isExactSamePath = string.Equals(
 			oldScriptPath,
 			newScriptPath,
@@ -6009,7 +6009,22 @@ public partial class SystemExplorerPlugin
 
 	private static string NormalizeRenameResourcePath(string path)
 	{
-		return path?.Trim().Replace('\\', '/') ?? "";
+		return ScriptPathUtility.Normalize(path);
+	}
+
+	private static string CombineResourcePath(string folderPath, string fileName)
+	{
+		string normalizedFolderPath = ScriptPathUtility.Normalize(folderPath);
+		string separator = normalizedFolderPath.EndsWith(
+			"/",
+			StringComparison.Ordinal
+		)
+			? ""
+			: "/";
+
+		return ScriptPathUtility.Normalize(
+			$"{normalizedFolderPath}{separator}{fileName ?? ""}"
+		);
 	}
 
 	private bool TryCheckCaseOnlyRenameTargetConflict(
@@ -6913,8 +6928,9 @@ public partial class SystemExplorerPlugin
 		{
 			string temporaryFileName =
 				$".__system_explorer_case_rename_{Guid.NewGuid():N}{normalizedExtension}";
-			string temporaryResourcePath = NormalizeRenameResourcePath(
-				$"{normalizedFolderPath}/{temporaryFileName}"
+			string temporaryResourcePath = CombineResourcePath(
+				normalizedFolderPath,
+				temporaryFileName
 			);
 
 			if (!FileAccess.FileExists(temporaryResourcePath))
@@ -6978,7 +6994,7 @@ public partial class SystemExplorerPlugin
 		)
 			? newName
 			: $"{newName}.tscn";
-		string newScenePath = NormalizeRenameResourcePath($"{folderPath}/{newFileName}");
+		string newScenePath = CombineResourcePath(folderPath, newFileName);
 		bool isExactSamePath = string.Equals(
 			oldScenePath,
 			newScenePath,

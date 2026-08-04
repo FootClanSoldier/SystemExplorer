@@ -3,6 +3,7 @@ using Godot;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
 {
@@ -492,7 +493,11 @@ public partial class SystemExplorerPlugin
 
 		List<string> systemMarkers = entries.Where(IsSystemLockEntry).Distinct().ToList();
 
-		List<string> scripts = entries.Where(IsScriptOrSceneEntry).Distinct().ToList();
+		List<string> scripts = entries
+			.Where(IsScriptOrSceneEntry)
+			.Select(NormalizeScriptOrSceneResourcePaths)
+			.Distinct()
+			.ToList();
 
 		List<string> requiredFolders = new();
 
@@ -539,6 +544,93 @@ public partial class SystemExplorerPlugin
 		normalized.AddRange(scripts);
 
 		return normalized;
+	}
+
+	private static string NormalizeScriptOrSceneResourcePaths(string entry)
+	{
+		if (string.IsNullOrWhiteSpace(entry) || !IsScriptOrSceneEntry(entry))
+			return entry;
+
+		bool isSceneEntry = IsSceneEntry(entry);
+		if (
+			!TryGetUnambiguousPhysicalResourcePath(
+				entry,
+				isSceneEntry,
+				out string primaryResourcePath
+			)
+		)
+		{
+			return entry;
+		}
+
+		string folderPath = GetFolderPathFromEntry(entry);
+		bool isLocked = IsEntryLocked(entry);
+
+		if (isSceneEntry)
+		{
+			string reconstructedEntry = BuildSceneEntry(
+				folderPath,
+				primaryResourcePath,
+				isLocked
+			);
+
+			if (!string.Equals(reconstructedEntry, entry, System.StringComparison.Ordinal))
+				return entry;
+
+			string normalizedScenePath = ScriptPathUtility.Normalize(primaryResourcePath);
+			return string.Equals(
+				normalizedScenePath,
+				primaryResourcePath,
+				System.StringComparison.Ordinal
+			)
+				? entry
+				: BuildSceneEntry(folderPath, normalizedScenePath, isLocked);
+		}
+
+		string linkedScenePath = GetLinkedScenePathFromEntry(entry);
+		string reconstructedScriptEntry = BuildScriptEntry(
+			folderPath,
+			primaryResourcePath,
+			linkedScenePath,
+			isLocked
+		);
+
+		if (!string.Equals(reconstructedScriptEntry, entry, System.StringComparison.Ordinal))
+			return entry;
+
+		string normalizedScriptPath = ScriptPathUtility.Normalize(primaryResourcePath);
+		string normalizedLinkedScenePath = linkedScenePath;
+
+		if (
+			linkedScenePath.StartsWith("res://", System.StringComparison.Ordinal)
+			&& IsPrimaryResourcePathRepresentable(linkedScenePath)
+		)
+		{
+			normalizedLinkedScenePath = ScriptPathUtility.Normalize(linkedScenePath);
+		}
+
+		if (
+			string.Equals(
+				normalizedScriptPath,
+				primaryResourcePath,
+				System.StringComparison.Ordinal
+			)
+			&& string.Equals(
+				normalizedLinkedScenePath,
+				linkedScenePath,
+				System.StringComparison.Ordinal
+			)
+		)
+		{
+			return entry;
+		}
+
+		return BuildScriptEntry(
+			folderPath,
+			normalizedScriptPath,
+			normalizedLinkedScenePath,
+			isLocked
+		);
 	}
 
 	private static List<string> GetFolderEntriesForPath(string folderPath)
