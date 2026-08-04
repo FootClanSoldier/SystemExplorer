@@ -13,6 +13,56 @@ public partial class SystemExplorerPlugin
 		Right,
 	}
 
+	private Key? _pendingKeyboardControlTransitionKey;
+
+	private bool HandleGlobalDockAndFilteredTreeKeyboardInput(
+		InputEvent inputEvent
+	)
+	{
+		if (inputEvent is not InputEventKey keyEvent)
+			return false;
+
+		bool isTransitionContinuationEcho =
+			TryTakeKeyboardControlTransitionEcho(keyEvent);
+
+		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
+		bool isSystemNameInputFocused = IsExactFocusedControl(
+			focusedControl,
+			_systemNameInput
+		);
+		bool isScriptFilterInputFocused = IsExactFocusedControl(
+			focusedControl,
+			_scriptFilterInput
+		);
+		bool isHiddenTreeContextFocused = IsSystemExplorerFocusReleaseTarget(
+			focusedControl
+		);
+
+		if (
+			!isSystemNameInputFocused
+			&& !isScriptFilterInputFocused
+			&& !isHiddenTreeContextFocused
+		)
+		{
+			return false;
+		}
+
+		bool handled = isSystemNameInputFocused
+			? TryHandleSystemNameKeyboardNavigation(keyEvent)
+			: isScriptFilterInputFocused
+				? TryHandleScriptFilterKeyboardNavigation(
+					keyEvent,
+					isTransitionContinuationEcho
+				)
+				: TryHandleActiveScriptFilterTreeEscape(keyEvent);
+
+		if (!handled)
+			return false;
+
+		GetViewport().SetInputAsHandled();
+		return true;
+	}
+
 	private bool HandleGlobalTreeKeyboardNavigation(InputEvent inputEvent)
 	{
 		if (inputEvent is not InputEventKey keyEvent)
@@ -27,6 +77,176 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		GetViewport().SetInputAsHandled();
+		return true;
+	}
+
+	private static bool IsExactFocusedControl(
+		Control focusedControl,
+		Control expectedControl
+	)
+	{
+		return focusedControl != null
+			&& expectedControl != null
+			&& GodotObject.IsInstanceValid(expectedControl)
+			&& expectedControl.IsInsideTree()
+			&& focusedControl == expectedControl;
+	}
+
+	private bool TryHandleSystemNameKeyboardNavigation(
+		InputEventKey keyEvent
+	)
+	{
+		if (!IsUnmodifiedPressedKeyEvent(keyEvent))
+			return false;
+
+		switch (keyEvent.Keycode)
+		{
+			case Key.Escape:
+				ClearSystemNameInputForKeyboardNavigation();
+				return true;
+
+			case Key.Up:
+				return true;
+
+			case Key.Down:
+				if (keyEvent.Echo)
+					return true;
+
+				if (TryActivateLineEditForKeyboardNavigation(_scriptFilterInput))
+					RegisterKeyboardControlTransition(Key.Down);
+
+				return true;
+
+			default:
+				return false;
+		}
+	}
+
+	private bool TryHandleScriptFilterKeyboardNavigation(
+		InputEventKey keyEvent,
+		bool isTransitionContinuationEcho
+	)
+	{
+		if (!IsUnmodifiedPressedKeyEvent(keyEvent))
+			return false;
+
+		switch (keyEvent.Keycode)
+		{
+			case Key.Escape:
+				ClearScriptFilterInput();
+				TryActivateLineEditForKeyboardNavigation(_scriptFilterInput);
+				return true;
+
+			case Key.Up:
+				if (keyEvent.Echo && !isTransitionContinuationEcho)
+					return true;
+
+				if (TryActivateLineEditForKeyboardNavigation(_systemNameInput))
+					RegisterKeyboardControlTransition(Key.Up);
+
+				return true;
+
+			case Key.Down:
+				if (keyEvent.Echo && !isTransitionContinuationEcho)
+					return true;
+
+				return TryEnterTreeContextFromScriptFilterInput();
+
+			default:
+				return false;
+		}
+	}
+
+
+	private bool TryEnterTreeContextFromScriptFilterInput()
+	{
+		if (!TryGetFirstVisibleTreeItem(out TreeItem firstVisibleItem))
+			return true;
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (!IsVisibleTreeItem(selectedItem))
+			SelectTreeItemFromKeyboardNavigation(firstVisibleItem);
+
+		if (TryFocusSystemExplorerHiddenTreeContext(revealDock: false))
+			RegisterKeyboardControlTransition(Key.Down);
+
+		return true;
+	}
+
+	private bool TryHandleActiveScriptFilterTreeEscape(
+		InputEventKey keyEvent
+	)
+	{
+		return IsUnmodifiedPressedKeyEvent(keyEvent)
+			&& keyEvent.Keycode == Key.Escape
+			&& TryClearActiveScriptFilterFromTreeKeyboardContext();
+	}
+
+	private static bool IsUnmodifiedPressedKeyEvent(InputEventKey keyEvent)
+	{
+		return keyEvent != null
+			&& keyEvent.Pressed
+			&& !keyEvent.CtrlPressed
+			&& !keyEvent.ShiftPressed
+			&& !keyEvent.AltPressed
+			&& !keyEvent.MetaPressed;
+	}
+
+	private bool TryActivateLineEditForKeyboardNavigation(LineEdit lineEdit)
+	{
+		if (
+			lineEdit == null
+			|| !GodotObject.IsInstanceValid(lineEdit)
+			|| lineEdit.IsQueuedForDeletion()
+			|| !lineEdit.IsInsideTree()
+		)
+		{
+			return false;
+		}
+
+		lineEdit.GrabFocus(true);
+		lineEdit.Edit(true);
+
+		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
+
+		return IsExactFocusedControl(focusedControl, lineEdit)
+			&& lineEdit.IsEditing();
+	}
+
+	private void RegisterKeyboardControlTransition(Key key)
+	{
+		_pendingKeyboardControlTransitionKey = key;
+	}
+
+	private bool TryTakeKeyboardControlTransitionEcho(
+		InputEventKey keyEvent
+	)
+	{
+		if (
+			keyEvent == null
+			|| !_pendingKeyboardControlTransitionKey.HasValue
+			|| keyEvent.Keycode != _pendingKeyboardControlTransitionKey.Value
+		)
+		{
+			return false;
+		}
+
+		if (!keyEvent.Pressed)
+		{
+			_pendingKeyboardControlTransitionKey = null;
+			return false;
+		}
+
+		if (!keyEvent.Echo)
+		{
+			// A fresh press means the previous release was not observed by this
+			// plugin route. Clear the stale transition and continue normally.
+			_pendingKeyboardControlTransitionKey = null;
+			return false;
+		}
+
+		_pendingKeyboardControlTransitionKey = null;
 		return true;
 	}
 
@@ -46,17 +266,8 @@ public partial class SystemExplorerPlugin
 	{
 		command = TreeKeyboardNavigationCommand.None;
 
-		if (
-			keyEvent == null
-			|| !keyEvent.Pressed
-			|| keyEvent.CtrlPressed
-			|| keyEvent.ShiftPressed
-			|| keyEvent.AltPressed
-			|| keyEvent.MetaPressed
-		)
-		{
+		if (!IsUnmodifiedPressedKeyEvent(keyEvent))
 			return false;
-		}
 
 		command = keyEvent.Keycode switch
 		{
@@ -110,9 +321,7 @@ public partial class SystemExplorerPlugin
 		switch (command)
 		{
 			case TreeKeyboardNavigationCommand.Up:
-				SelectTreeItemFromKeyboardNavigation(
-					selectedItem.GetPrevVisible(false)
-				);
+				ApplyTreeKeyboardNavigationUp(selectedItem);
 				break;
 
 			case TreeKeyboardNavigationCommand.Down:
@@ -131,13 +340,30 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
+	private void ApplyTreeKeyboardNavigationUp(TreeItem selectedItem)
+	{
+		TreeItem previousVisibleItem = selectedItem.GetPrevVisible(false);
+
+		if (previousVisibleItem != null)
+		{
+			SelectTreeItemFromKeyboardNavigation(previousVisibleItem);
+			return;
+		}
+
+		if (!TryActivateLineEditForKeyboardNavigation(_scriptFilterInput))
+			return;
+
+		_tree.DeselectAll();
+		UpdateTreeLockIconVisibility();
+		ClearPersistentTreeSelectionForKeyboardNavigation();
+		RegisterKeyboardControlTransition(Key.Up);
+	}
+
 	private void ApplyTreeKeyboardNavigationWithoutSelection(
 		TreeKeyboardNavigationCommand command
 	)
 	{
-		TreeItem firstVisibleItem = _tree.GetRoot()?.GetFirstChild();
-
-		if (firstVisibleItem == null)
+		if (!TryGetFirstVisibleTreeItem(out TreeItem firstVisibleItem))
 			return;
 
 		if (command == TreeKeyboardNavigationCommand.Down)
@@ -159,6 +385,47 @@ public partial class SystemExplorerPlugin
 		}
 
 		SelectTreeItemFromKeyboardNavigation(lastVisibleItem);
+	}
+
+	private bool TryGetFirstVisibleTreeItem(out TreeItem firstVisibleItem)
+	{
+		firstVisibleItem = null;
+
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _tree.IsQueuedForDeletion()
+			|| !_tree.IsInsideTree()
+		)
+		{
+			return false;
+		}
+
+		firstVisibleItem = _tree.GetRoot()?.GetFirstChild();
+		return firstVisibleItem != null
+			&& GodotObject.IsInstanceValid(firstVisibleItem);
+	}
+
+	private bool IsVisibleTreeItem(TreeItem item)
+	{
+		if (
+			item == null
+			|| !GodotObject.IsInstanceValid(item)
+			|| !TryGetFirstVisibleTreeItem(out TreeItem current)
+		)
+		{
+			return false;
+		}
+
+		while (current != null)
+		{
+			if (current == item)
+				return true;
+
+			current = current.GetNextVisible(false);
+		}
+
+		return false;
 	}
 
 	private void ApplyTreeKeyboardNavigationLeft(TreeItem selectedItem)

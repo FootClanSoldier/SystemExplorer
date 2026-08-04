@@ -292,7 +292,9 @@ public partial class SystemExplorerPlugin
 					!_isFilteringScripts
 					&& TryOpenRemoveDialogForSelectedItem(),
 				TreeShortcutCommandId.ToggleTreeScriptEditorFocus =>
-					TryFocusCurrentScriptEditorCursor(),
+					TryFocusCurrentScriptEditorCursorFromSystemExplorer(
+						SystemExplorerToggleFocusReturnTarget.Tree
+					),
 				TreeShortcutCommandId.NewFolder =>
 					!_isFilteringScripts
 					&& TryOpenAddFolderDialogForSelectedItem(),

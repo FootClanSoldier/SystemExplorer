@@ -380,6 +380,15 @@ public partial class SystemExplorerPlugin
 		QueuePersistentTreeStateSave();
 	}
 
+	private void ClearPersistentTreeSelectionForKeyboardNavigation()
+	{
+		if (!_persistentTreeSelection.HasValue)
+			return;
+
+		_persistentTreeSelection = null;
+		QueuePersistentTreeStateSave();
+	}
+
 	private bool TryCreatePersistentTreeSelection(
 		TreeItem item,
 		out PersistentTreeSelection selection

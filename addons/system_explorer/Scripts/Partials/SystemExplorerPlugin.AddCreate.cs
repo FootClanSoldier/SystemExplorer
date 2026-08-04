@@ -83,6 +83,38 @@ public partial class SystemExplorerPlugin
 
 		ForceExpandSystem(systemName);
 		BuildTree();
+		RestoreAddedSystemSelectionAfterRebuild(systemName);
+	}
+
+	private void RestoreAddedSystemSelectionAfterRebuild(string systemName)
+	{
+		var addedSystemSelection = new PersistentTreeSelection(
+			systemName,
+			$"system::{systemName}"
+		);
+
+		try
+		{
+			if (
+				TryRestoreTreeSelectionByIdentity(
+					addedSystemSelection,
+					"Add System"
+				)
+			)
+			{
+				return;
+			}
+
+			DebugLogger.LogOperation(
+				"Add System selection restore warning: exact system not found",
+				$"system='{systemName}', metadata='{addedSystemSelection.Metadata}'"
+			);
+			ClearPersistentTreeSelectionAndTreeSelection();
+		}
+		finally
+		{
+			CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		}
 	}
 
 	private bool TryOpenAddFolderDialogForSelectedItem()

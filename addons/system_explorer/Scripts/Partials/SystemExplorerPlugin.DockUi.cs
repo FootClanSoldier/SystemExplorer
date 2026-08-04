@@ -778,6 +778,22 @@ public partial class SystemExplorerPlugin
 			ResetSystemNameInputCursor();
 	}
 
+	private void ClearSystemNameInputForKeyboardNavigation()
+	{
+		if (
+			_systemNameInput == null
+			|| !GodotObject.IsInstanceValid(_systemNameInput)
+			|| _systemNameInput.IsQueuedForDeletion()
+		)
+		{
+			return;
+		}
+
+		_systemNameInput.Text = "";
+		UpdateSystemNameEnterIconVisibility("");
+		_systemNameInput.Edit(true);
+	}
+
 	private void OnSystemNameInputGuiInput(InputEvent inputEvent)
 	{
 		if (_systemNameInput == null)

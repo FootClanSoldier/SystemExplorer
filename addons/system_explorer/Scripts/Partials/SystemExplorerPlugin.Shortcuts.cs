@@ -13,6 +13,17 @@ public partial class SystemExplorerPlugin
 		TextEdit TextEditor
 	);
 
+	private enum SystemExplorerToggleFocusReturnTarget
+	{
+		Tree,
+		SystemName,
+		FilterItems,
+	}
+
+	private SystemExplorerToggleFocusReturnTarget
+		_systemExplorerToggleFocusReturnTarget =
+			SystemExplorerToggleFocusReturnTarget.Tree;
+
 	#region Editor Shortcuts and Global Input Routing
 	private const string BeautifyEditorShortcutPath =
 		"system_explorer/beautify";
@@ -585,6 +596,9 @@ public partial class SystemExplorerPlugin
 		if (!EnsureManagedAssemblyStateCurrent("Global Input"))
 			return;
 
+		if (HandleGlobalDockAndFilteredTreeKeyboardInput(inputEvent))
+			return;
+
 		if (HandleGlobalBeautifyShortcut(inputEvent))
 			return;
 
@@ -650,14 +664,46 @@ public partial class SystemExplorerPlugin
 		}
 
 		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
+		bool isSystemNameInputFocused = IsExactFocusedControl(
+			focusedControl,
+			_systemNameInput
+		);
+		bool isScriptFilterInputFocused = IsExactFocusedControl(
+			focusedControl,
+			_scriptFilterInput
+		);
+		bool isScriptEditorFocused =
+			IsCurrentScriptEditorTextEditorFocused(focusedControl);
 
-		if (!IsCurrentScriptEditorTextEditorFocused(focusedControl))
+		if (
+			!isSystemNameInputFocused
+			&& !isScriptFilterInputFocused
+			&& !isScriptEditorFocused
+		)
+		{
 			return false;
-
-		if (!TryFocusSystemExplorerHiddenTreeContext(revealDock: true))
-			return false;
+		}
 
 		GetViewport().SetInputAsHandled();
+
+		bool transitionSucceeded = isSystemNameInputFocused
+			? TryFocusCurrentScriptEditorCursorFromSystemExplorer(
+				SystemExplorerToggleFocusReturnTarget.SystemName
+			)
+			: isScriptFilterInputFocused
+				? TryFocusCurrentScriptEditorCursorFromSystemExplorer(
+					SystemExplorerToggleFocusReturnTarget.FilterItems
+				)
+				: TryReturnToSystemExplorerFromScriptEditor();
+
+		if (!transitionSucceeded)
+		{
+			DebugLogger.LogOperation(
+				"Toggle Focus command unavailable",
+				$"FocusedControl='{focusedControl?.GetPath()}', ReturnTarget='{_systemExplorerToggleFocusReturnTarget}'"
+			);
+		}
+
 		return true;
 	}
 
@@ -752,6 +798,115 @@ public partial class SystemExplorerPlugin
 
 		textEditor.GrabFocus();
 		return true;
+	}
+
+	private bool TryFocusCurrentScriptEditorCursorFromSystemExplorer(
+		SystemExplorerToggleFocusReturnTarget returnTarget
+	)
+	{
+		if (!TryFocusCurrentScriptEditorCursor())
+			return false;
+
+		Control focusedControl = GetTree()?.Root?.GuiGetFocusOwner();
+
+		if (!IsCurrentScriptEditorTextEditorFocused(focusedControl))
+			return false;
+
+		_systemExplorerToggleFocusReturnTarget = returnTarget;
+		return true;
+	}
+
+	private bool TryReturnToSystemExplorerFromScriptEditor()
+	{
+		bool transitionSucceeded = _systemExplorerToggleFocusReturnTarget switch
+		{
+			SystemExplorerToggleFocusReturnTarget.SystemName =>
+				TryReturnToSystemExplorerLineEditFromScriptEditor(
+					_systemNameInput
+				),
+			SystemExplorerToggleFocusReturnTarget.FilterItems =>
+				TryReturnToSystemExplorerLineEditFromScriptEditor(
+					_scriptFilterInput
+				),
+			_ => TryReturnToSystemExplorerTreeFromScriptEditor(),
+		};
+
+		if (transitionSucceeded)
+		{
+			_systemExplorerToggleFocusReturnTarget =
+				SystemExplorerToggleFocusReturnTarget.Tree;
+		}
+
+		return transitionSucceeded;
+	}
+
+	private bool TryReturnToSystemExplorerLineEditFromScriptEditor(
+		LineEdit lineEdit
+	)
+	{
+		if (
+			TryRevealSystemExplorerDockForToggleFocus()
+			&& TryActivateLineEditForKeyboardNavigation(lineEdit)
+		)
+		{
+			return true;
+		}
+
+		return TryReturnToSystemExplorerTreeFromScriptEditor();
+	}
+
+	private bool TryRevealSystemExplorerDockForToggleFocus()
+	{
+		if (
+			_editorDock == null
+			|| !GodotObject.IsInstanceValid(_editorDock)
+			|| _editorDock.IsQueuedForDeletion()
+			|| !_editorDock.IsInsideTree()
+		)
+		{
+			return false;
+		}
+
+		_editorDock.MakeVisible();
+		return true;
+	}
+
+	private bool TryReturnToSystemExplorerTreeFromScriptEditor()
+	{
+		if (!TryRevealSystemExplorerDockForToggleFocus())
+			return false;
+
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _tree.IsQueuedForDeletion()
+			|| !_tree.IsInsideTree()
+		)
+		{
+			return false;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+
+		if (IsVisibleTreeItem(selectedItem))
+		{
+			_tree.ScrollToItem(selectedItem);
+			return TryFocusSystemExplorerHiddenTreeContext(revealDock: false);
+		}
+
+		if (TryGetFirstVisibleTreeItem(out TreeItem firstVisibleItem))
+		{
+			SelectTreeItemFromKeyboardNavigation(firstVisibleItem);
+
+			if (_tree.GetSelected() != firstVisibleItem)
+				return false;
+
+			return TryFocusSystemExplorerHiddenTreeContext(revealDock: false);
+		}
+
+		return TryActivateLineEditForKeyboardNavigation(
+			_isFilteringScripts ? _scriptFilterInput : _systemNameInput
+		);
 	}
 
 	private bool TryHandleBeautifyShortcutForFocusedScriptEditor(

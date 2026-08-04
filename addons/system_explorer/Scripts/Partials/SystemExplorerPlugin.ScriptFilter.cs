@@ -8,6 +8,8 @@ using System.Text.Json;
 public partial class SystemExplorerPlugin
 {
 	#region Script Filter
+	private bool _isClearingScriptFilterInputProgrammatically;
+
 	private void OnScriptFilterTextChanged(string filterText)
 	{
 		UpdateScriptFilterSearchIconVisibility(filterText);
@@ -33,7 +35,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!_isFilteringScripts)
+		if (!_isFilteringScripts || _isClearingScriptFilterInputProgrammatically)
 			return;
 
 		ExitScriptFilterMode();
@@ -131,22 +133,77 @@ public partial class SystemExplorerPlugin
 			&& localMousePosition.Y <= lineEdit.Size.Y;
 	}
 
-	private void ClearScriptFilterInput()
+	private void ClearScriptFilterInput(
+		PersistentTreeSelection? preferredExactSelection = null
+	)
 	{
 		if (_scriptFilterInput == null)
 			return;
 
-		if (string.IsNullOrEmpty(_scriptFilterInput.Text))
-			return;
+		PersistentTreeSelection? selectionToRestore = preferredExactSelection;
 
-		// Setting LineEdit.Text from code does not reliably run the same path
-		// as user input in the editor, so clear must explicitly update the icon
-		// and exit item filter mode.
-		_scriptFilterInput.Text = "";
-		UpdateScriptFilterSearchIconVisibility("");
+		if (
+			!selectionToRestore.HasValue
+			&& TryCaptureSelectedScriptFilterSelection(
+				out PersistentTreeSelection selectedFilterItem
+			)
+		)
+		{
+			selectionToRestore = selectedFilterItem;
+		}
+
+		// Programmatic text changes may emit TextChanged synchronously in some
+		// editor states. Keep the signal callback from exiting filter mode before
+		// the exact flat-row identity captured above can be supplied explicitly.
+		_isClearingScriptFilterInputProgrammatically = true;
+
+		try
+		{
+			_scriptFilterInput.Text = "";
+			UpdateScriptFilterSearchIconVisibility("");
+		}
+		finally
+		{
+			_isClearingScriptFilterInputProgrammatically = false;
+		}
 
 		if (_isFilteringScripts)
-			ExitScriptFilterMode();
+			ExitScriptFilterMode(selectionToRestore);
+	}
+
+	private bool TryCaptureSelectedScriptFilterSelection(
+		out PersistentTreeSelection selection
+	)
+	{
+		selection = default;
+
+		return _isFilteringScripts
+			&& IsScriptFilterActive()
+			&& TryCreatePersistentTreeSelection(
+				_tree?.GetSelected(),
+				out selection
+			);
+	}
+
+	private bool TryClearActiveScriptFilterFromTreeKeyboardContext()
+	{
+		if (!_isFilteringScripts || !IsScriptFilterActive())
+			return false;
+
+		PersistentTreeSelection? exactSelection = null;
+
+		if (
+			TryCaptureSelectedScriptFilterSelection(
+				out PersistentTreeSelection selectedFilterItem
+			)
+		)
+		{
+			exactSelection = selectedFilterItem;
+		}
+
+		ClearScriptFilterInput(exactSelection);
+		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		return true;
 	}
 
 	private bool IsScriptFilterActive()
@@ -344,30 +401,36 @@ public partial class SystemExplorerPlugin
 			: _sceneIcon;
 	}
 
-	private void ExitScriptFilterMode()
+	private void ExitScriptFilterMode(
+		PersistentTreeSelection? preferredExactSelection = null
+	)
 	{
-		PersistentTreeSelection? selectionToRestore = _persistentTreeSelection;
+		PersistentTreeSelection? selectionToRestore =
+			preferredExactSelection ?? _persistentTreeSelection;
 
 		if (
-			TryCreatePersistentTreeSelection(
-				_tree?.GetSelected(),
+			!preferredExactSelection.HasValue
+			&& TryCaptureSelectedScriptFilterSelection(
 				out PersistentTreeSelection selectedFilterItem
 			)
 		)
 		{
 			selectionToRestore = selectedFilterItem;
+		}
 
-			if (
+		if (
+			selectionToRestore.HasValue
+			&& (
 				!_persistentTreeSelection.HasValue
 				|| !IsSamePersistentTreeSelection(
 					_persistentTreeSelection.Value,
-					selectedFilterItem
+					selectionToRestore.Value
 				)
 			)
-			{
-				_persistentTreeSelection = selectedFilterItem;
-				QueuePersistentTreeStateSave();
-			}
+		)
+		{
+			_persistentTreeSelection = selectionToRestore.Value;
+			QueuePersistentTreeStateSave();
 		}
 
 		_isFilteringScripts = false;

@@ -207,6 +207,14 @@ public partial class SystemExplorerPlugin
 
 	private void HandleTreeKeyboardInput(InputEventKey keyEvent)
 	{
+		TryTakeKeyboardControlTransitionEcho(keyEvent);
+
+		if (TryHandleActiveScriptFilterTreeEscape(keyEvent))
+		{
+			_tree.AcceptEvent();
+			return;
+		}
+
 		if (TryApplyTreeKeyboardNavigation(keyEvent))
 		{
 			_tree.AcceptEvent();
