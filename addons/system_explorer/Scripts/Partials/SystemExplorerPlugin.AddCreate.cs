@@ -307,6 +307,41 @@ public partial class SystemExplorerPlugin
 		_pendingAddFolderMetadata = "";
 		_addFolderInput.Text = "";
 		BuildTree();
+		RestoreAddedFolderSelectionAfterRebuild(targetSystemName, addedFolderPath);
+	}
+
+	private void RestoreAddedFolderSelectionAfterRebuild(
+		string targetSystemName,
+		string addedFolderPath
+	)
+	{
+		var addedFolderSelection = new PersistentTreeSelection(
+			targetSystemName,
+			$"folder::{targetSystemName}::{addedFolderPath}"
+		);
+
+		try
+		{
+			if (
+				TryRestoreTreeSelectionByIdentity(
+					addedFolderSelection,
+					"Add Folder"
+				)
+			)
+			{
+				return;
+			}
+
+			DebugLogger.LogOperation(
+				"Add Folder selection restore warning: exact folder not found",
+				$"system='{targetSystemName}', folder='{addedFolderPath}', metadata='{addedFolderSelection.Metadata}'"
+			);
+			ClearPersistentTreeSelectionAndTreeSelection();
+		}
+		finally
+		{
+			CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		}
 	}
 
 	private FolderMutationResult AddFolderToPendingLocation()
