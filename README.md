@@ -39,6 +39,52 @@
   </a>
 </p>
 
+<details>
+  <summary><strong>▶ See System Explorer in action</strong></summary>
+
+  <br>
+
+  <p align="center">
+    <img
+      src="screenshots/context_menu.gif"
+      width="400"
+      alt="Using the System Explorer context menu"
+    >
+  </p>
+
+  <p align="center">
+    <em>Access organization, file operations, scene linking, and Quick Actions from the tree context menu.</em>
+  </p>
+
+  <br>
+
+  <p align="center">
+    <img
+      src="screenshots/navigation.gif"
+      width="250"
+      alt="Navigating System Explorer with the keyboard"
+    >
+  </p>
+
+  <p align="center">
+    <em>Navigate the tree and input fields without leaving the keyboard.</em>
+  </p>
+
+  <br>
+
+  <p align="center">
+    <img
+      src="screenshots/quick_actions.png"
+      width="400"
+      alt="System Explorer Quick Actions"
+    >
+  </p>
+
+  <p align="center">
+    <em>Optional Quick Actions provide C# formatting and namespace refactoring inside Godot.</em>
+  </p>
+</details>
+
 <a id="contents"></a>
 
 ## Contents
