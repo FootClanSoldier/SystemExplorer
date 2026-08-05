@@ -112,6 +112,18 @@ Organize the project around how its systems relate to each other, not only where
 * Remove entries virtually or explicitly delete their physical script and scene files
 * Keep the System Explorer hierarchy independent of the physical project structure
 
+<p align="center">
+  <img
+    src="screenshots/context_menu.gif"
+    width="400"
+    alt="System Explorer context menu"
+  >
+</p>
+
+<p align="center">
+  <em>Most organization and file operations are available directly from the tree context menu.</em>
+</p>
+
 ## Path-Bound Folders
 
 Virtual folders can optionally be bound to physical folders inside the Godot project.
