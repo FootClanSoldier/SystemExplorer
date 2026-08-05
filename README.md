@@ -221,7 +221,12 @@ Project
 → Enable Quick Actions
 ```
 
+
 When enabled, Quick Actions add lightweight C# tools to the System Explorer context menu and shortcut workflow.
+
+  <a href="#contents">
+    <img  src="screenshots/quick_actions.png" width="400"  alt="">
+  </a>
 
 ## Beautify
 
