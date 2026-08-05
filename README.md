@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/C%23-.NET-purple" alt="C# .NET">
   </a>
 
-  <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
+  <a href="https://github.com/FootClanSoldier/SystemExplorer/releases/tag/v1.5.0">
     <img src="https://img.shields.io/badge/Version-1.5.0-green" alt="Version 1.5.0">
   </a>
 
