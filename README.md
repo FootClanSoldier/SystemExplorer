@@ -35,7 +35,7 @@
 
 <p align="center">
   <a href="#contents">
-    <img src="screenshots/overview.png" alt="System Explorer Overview">
+    <img src="screenshots/overview.png" width="250"  alt="System Explorer Overview">
   </a>
 </p>
 
