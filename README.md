@@ -97,6 +97,21 @@
 <p align="center">
   <em>Beautify reformats valid C# code directly inside Godot using CSharpier.</em>
 </p>
+
+<br>
+
+<p align="center">
+  <img
+    src="screenshots/refactor_namespace.gif"
+    width="700"
+    alt="System Explorer Refactor Namespace updating namespaces and using directives"
+  >
+</p>
+
+<p align="center">
+  <em>Refactor Namespace updates the namespaces of scripts under the selected system or folder and also updates other scripts whose <code>using</code> directives reference them.</em>
+</p>
+
 </details>
 
 <a id="contents"></a>
