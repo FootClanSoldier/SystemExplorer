@@ -53,7 +53,7 @@
   </p>
 
   <p align="center">
-    <em>Access organization, file operations, scene linking, and Quick Actions from the tree context menu.</em>
+    <em>Organize items with drag and drop, and access file operations, scene linking, and optional Quick Actions from the tree context menu.</em>
   </p>
 
   <br>
