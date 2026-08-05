@@ -48,7 +48,6 @@
 * [Features](#features)
 * [Keyboard Workflow and Shortcuts](#keyboard-workflow-and-shortcuts)
 * [Quick Actions](#quick-actions)
-* [Configuration](#configuration)
 * [Installation](#installation)
 * [Script Templates](#script-templates)
 * [Data Storage](#data-storage)
@@ -245,22 +244,6 @@ Namespace refactoring can be run for a selected script, folder, or system.
 It can add or replace namespaces and update related references across the selected scope while protecting open editor buffers and reporting files that could not be updated.
 
 Because namespace refactoring may affect multiple project files, reviewing the result before committing changes is recommended.
-
----
-
-<a id="configuration"></a>
-
-# Configuration
-
-## Editor Shortcuts
-
-Shortcut bindings are managed under:
-
-```text
-Editor Settings → Shortcuts → System Explorer
-```
-
-Changes and unbound shortcuts are preserved by Godot's Editor Settings.
 
 ---
 
