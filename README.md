@@ -1,3 +1,6 @@
+> [!NOTE]
+> **Work in progress:** This README is currently being updated for the upcoming System Explorer v1.5.0 release. Some content may change before the release is published.
+
 <p align="center">
   <a href="https://github.com/FootClanSoldier/SystemExplorer">
     <img src="icon.png" width="300" alt="System Explorer Logo">
