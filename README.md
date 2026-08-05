@@ -81,7 +81,7 @@
   </p>
 
   <p align="center">
-    <em>Optional Quick Actions provide C# formatting and namespace refactoring inside Godot.</em>
+    <em>Quick Actions provide C# formatting and namespace refactoring inside Godot.</em>
   </p>
   
 <br>
