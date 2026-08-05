@@ -223,11 +223,12 @@ Project
 
 
 When enabled, Quick Actions add lightweight C# tools to the System Explorer context menu and shortcut workflow.
-
+<p align="center">
   <a href="#contents">
     <img  src="screenshots/quick_actions.png" width="400"  alt="">
   </a>
-
+<p/>
+  
 ## Beautify
 
 System Explorer integrates with the open-source [CSharpier](https://github.com/belav/csharpier) formatter.
