@@ -217,6 +217,9 @@ Project
 → Addons
 → System Explorer
 → Enable Quick Actions
+```
+
+When enabled, Quick Actions add lightweight C# tools to the System Explorer context menu and shortcut workflow.
 
 ## Beautify
 
@@ -243,6 +246,8 @@ Because namespace refactoring may affect multiple project files, reviewing the r
 ---
 
 <a id="configuration"></a>
+
+# Configuration
 
 ## Editor Shortcuts
 
