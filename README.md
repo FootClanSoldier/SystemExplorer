@@ -8,36 +8,25 @@
 
 <p align="center">
   <a href="https://godotengine.org/">
-    <img src="https://img.shields.io/badge/Godot-4.6-blue" alt="Godot">
+    <img src="https://img.shields.io/badge/Godot-4.6-blue" alt="Godot 4.6">
   </a>
 
   <a href="#about">
-    <img src="https://img.shields.io/badge/C%23-.NET-purple" alt="C#">
+    <img src="https://img.shields.io/badge/C%23-.NET-purple" alt="C# .NET">
   </a>
 
   <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
-    <img src="https://img.shields.io/badge/Version-1.4.0-green" alt="Version">
+    <img src="https://img.shields.io/badge/Version-1.5.0-green" alt="Version 1.5.0">
   </a>
 
   <a href="./LICENSE">
-    <img src="https://img.shields.io/badge/License-MIT-brightgreen" alt="License">
+    <img src="https://img.shields.io/badge/License-MIT-brightgreen" alt="MIT License">
   </a>
 </p>
 
 > Architecture-focused navigation and lightweight C# workflow tools for Godot.
-
+>
 > Evolving toward a lightweight C# IDE inside Godot.
-
-
-> [!WARNING]
-> **Current releases are deprecated**
->
-> All releases prior to **v1.5.0** are now considered deprecated and are no longer recommended for use.
->
-> During the development of v1.5.0, several issues were identified involving file-operation safety, editor-state handling, and assembly-reload stability. Because these issues may cause unexpected behavior or instability in the Godot editor, the existing releases have been reclassified as pre-releases.
->
-> **v1.5.0 is not yet available, but is currently nearing release. It will be the earliest version considered stable and recommended for general use.**
-
 
 ---
 
@@ -52,28 +41,34 @@
 ## Contents
 
 * [About](#about)
-* [Why](#why)
+* [Why?](#why)
 * [Features](#features)
+* [Keyboard Workflow and Shortcuts](#keyboard-workflow-and-shortcuts)
+* [Quick Actions](#quick-actions)
+* [Configuration](#configuration)
 * [Installation](#installation)
 * [Script Templates](#script-templates)
 * [Data Storage](#data-storage)
-* [Known Issues](#known-issues)
-* [Future Ideas](#future-ideas)
+* [Roadmap](#roadmap)
 * [Feedback](#feedback)
+
+<a id="about"></a>
 
 # About
 
-System Explorer is a Godot C# editor plugin that lets you organize and navigate your project from an architectural perspective instead of relying solely on the FileSystem dock.
+System Explorer is a Godot 4.6 C# editor plugin that lets you organize and navigate a project from an architectural perspective instead of relying solely on the FileSystem dock.
 
-Create custom systems and folders, organize scripts and scene links, and navigate large codebases without changing your physical project structure.
+Create systems and virtual folders, organize scripts and scenes, connect scripts to the scenes that use them, and navigate a large codebase without forcing the System Explorer hierarchy to match the physical project structure.
 
-System Explorer also includes optional lightweight IDE-style tools for common C# workflows, such as script formatting and namespace refactoring, directly inside the Godot editor.
+System Explorer also includes optional lightweight C# workflow tools such as script formatting and namespace refactoring directly inside the Godot editor.
 
 ---
 
+<a id="why"></a>
+
 # Why?
 
-Large C# projects often end up with deep folder structures:
+Large C# projects often end up with deep physical folder structures:
 
 ```text
 Game
@@ -83,7 +78,7 @@ Game
             └── Modules
 ```
 
-System Explorer lets you navigate your project from a higher-level architectural perspective instead:
+System Explorer provides a separate architectural view:
 
 ```text
 Core
@@ -93,100 +88,179 @@ Player
 UI
 ```
 
-Organize your code around your game's architecture, not simply where files happen to live on disk.
+The same script or scene can appear where it is architecturally useful without moving the physical file or duplicating the underlying resource.
+
+Organize the project around how its systems relate to each other, not only where files happen to live on disk.
 
 ---
+
+<a id="features"></a>
 
 # Features
 
-## Organization
+## Architecture and Organization
 
-* Create systems and folders
-* Create new scripts or add existing ones
-* Add multiple scripts or scenes in a single operation
-* Rename and remove items
-* Organize systems, folders, scripts, and scenes using drag & drop
-* Lock systems, folders, scripts, and scene links to prevent accidental drag & drop
-* Virtual organization that does not modify your physical project structure
+* Create systems and virtual folders
+* Create new C# scripts or add existing scripts
+* Add multiple scripts or scenes in one operation
+* Place the same script or scene in multiple locations
+* Reorder and organize systems, folders, scripts, and scenes with drag and drop
+* Lock systems, folders, scripts, and scenes against accidental drag-and-drop changes
+* Rename systems, folders, scripts, and scenes through the tree
+* Remove entries virtually or explicitly delete their physical script and scene files
+* Keep the System Explorer hierarchy independent of the physical project structure
 
----
+## Path-Bound Folders
+
+Virtual folders can optionally be bound to physical folders inside the Godot project.
+
+A bound folder follows supported scripts and scenes in its linked project directory while the rest of the System Explorer hierarchy remains virtual. This makes it possible to mirror only the parts of the physical project structure that are useful to the architecture view.
+
+Folder bindings can be added or removed from the folder context menu. Bound folder data is stored separately from the main systems data.
 
 ## Navigation
 
-* Architecture-focused project navigation
 * Filter scripts and scenes across every system
-* Open scripts and directly linked scenes with a single click
-* Follow scripts opened through Godot's Script Editor, FileSystem dock, or scenes
-* Open the physical folder path represented by a System Explorer folder
-* Preserve tree expansion state between editor sessions and common operations
-
----
+* Open scripts and direct scene entries with a single click
+* Double-click a script to open its linked scene
+* Follow scripts opened through System Explorer, Godot's Script Editor, the FileSystem dock, or scenes
+* Open resolved script, scene, and folder paths in the operating system's file manager
+* Navigate the tree with the arrow keys
+* Move between the tree, Filter Items, and System Name without leaving the keyboard
+* Preserve expansion state and the exact selected tree occurrence between editor sessions
+* Recover the plugin's editor integration after C# assembly reloads
 
 ## Scene Integration
 
-Connect your architecture directly to the scenes that use your scripts.
+Connect scripts directly to the scenes that use them.
 
-* Link scripts to their corresponding scenes
-* Add scenes directly to systems and folders
-* Single-click opens a script or direct scene link
-* Double-click a script to open both the script and its linked scene
-* Unlink scene associations
-* Automatic recovery if linked scenes are moved or deleted
+* Link a script to a scene
+* Add standalone scene entries to systems and folders
+* Open a script or scene directly from the tree
+* Double-click a script to open its linked scene
+* Relink or remove missing script and scene references
+* Preserve scene associations when scripts are duplicated or renamed
+* Update direct scene entries and linked-script references when a scene is renamed through System Explorer
 
-Scene links are stored in `systems.json` and persist between editor sessions.
+The same script or scene can appear in multiple systems or folders while still referring to the same physical resource.
 
----
+## Reliable File and Metadata Operations
 
-## Quick Actions
+System Explorer performs validation before operations that affect project files or plugin metadata.
 
-Optional **Quick Actions** add lightweight C# workflow tools directly inside Godot.
+* Validates rename, removal, linking, and drag-and-drop operations before applying changes
+* Handles open and unsaved C# editor buffers carefully
+* Supports case-only renames
+* Handles scripts and scenes located directly in the project root
+* Keeps duplicate entries and linked-scene references synchronized
+* Verifies metadata writes and attempts rollback when an operation cannot be completed
+* Displays clear dialogs when an operation cannot be performed safely
+* Restores shortcuts, signals, tree state, and editor integration after C# assembly reloads
 
-Quick Actions are disabled by default and can be enabled through the plugin's Project Settings.
-
-### Beautify Scripts
-
-System Explorer integrates with the open-source **[CSharpier](https://github.com/belav/csharpier)** formatter.
-
-* Install CSharpier directly from the Godot editor
-* Format individual C# scripts
-* Format every script inside a system or folder
-* Press **Ctrl + B** to format the currently active script
-* Preserve editor focus, caret position, scroll position, and the active script during formatting
-
-### Refactor Namespace
-
-Rename or add namespaces without leaving Godot.
-
-* Change or add the namespace of an individual C# script
-* Run namespace refactoring across an entire system or folder
-* Update related `using` directives and namespace references
-* Preserve the active editor context during batch operations
-
-> Automated refactoring can affect multiple project files. Reviewing changes before committing them is recommended.
+Longer foreground batch operations display a busy cursor to indicate that System Explorer is still processing the operation.
 
 ---
 
-## Workflow
+<a id="keyboard-workflow-and-shortcuts"></a>
 
-Several quality-of-life features help speed up common workflows:
+# Keyboard Workflow and Shortcuts
 
-* Press **Enter** to confirm dialogs and create new systems
-* Click the **+** button inside the System Name field to create a system
-* Context-menu actions organized into **New**, **Add**, and optional **Quick Actions** submenus
-* Project Settings support for plugin options
-* Script tooltips
-* **Double-click** systems and folders to expand or collapse them
-* **Ctrl + Click** expands or collapses systems and folders with a single click
-* **Ctrl + Shift** collapses the entire tree when a system or folder is selected
-* **Middle Mouse Button** while hovering an item locks or unlocks it
-* **Ctrl + L** locks or unlocks the selected item
-* **Ctrl + Delete** opens the delete dialog
-* **Ctrl + B** formats the active script when CSharpier is installed
-* Expansion state and selection are preserved during common operations
+Configurable Godot editor shortcuts and arrow-key navigation.
+
+Shortcuts are registered under:
+
+```text
+Editor Settings → Shortcuts → System Explorer
+```
+
+They can be changed or unbound through Godot's normal shortcut settings. System Explorer also detects when the same shortcut has been assigned to multiple plugin commands and prevents an ambiguous command from running.
+
+| Default shortcut | Action | Context |
+|---|---|---|
+| `Ctrl+B` | Beautify | System Explorer or Script Editor |
+| `Ctrl+S` | New Script | Selected tree item |
+| `Delete` | Remove Selected Item | Selected tree item |
+| Physical key before `1` | Toggle Tree / Script Editor Focus | System Explorer or Script Editor |
+| `Ctrl+T` | Collapse Tree | Selected tree item |
+| `Ctrl+R` | Rename | Selected tree item |
+| `Ctrl+F` | New Folder | Selected tree item |
+| `Ctrl+Alt+S` | Add Scripts | Selected tree item |
+| `Ctrl+Alt+A` | Add Scenes | Selected tree item |
+| `Ctrl+N` | Refactor Namespace | Selected tree item |
+
+The displayed symbol for the focus-toggle key varies by keyboard layout because the shortcut uses the physical key position before `1`.
+
+Except for **Beautify** and **Toggle Tree / Script Editor Focus**, shortcuts are scoped to System Explorer and require a compatible selected tree item.
+
+## Keyboard-First Navigation
+
+Arrow keys can move through visible tree entries, expand or collapse branches, and move between the tree and the input fields above it.
+
+**Toggle Tree / Script Editor Focus** is designed to make a mostly keyboard-driven workflow possible. After selecting and opening a script from System Explorer, the command moves keyboard focus into the active script editor. Pressing it again returns focus to System Explorer and restores the previous tree or input-field context where possible.
+
+The focus transition is functional in v1.5.0, although its visual indication is still subtle. Clearer focus feedback is planned for a future release.
 
 ---
+
+<a id="quick-actions"></a>
+
+# Quick Actions
+
+Quick Actions are optional and disabled by default.
+
+They can be enabled in Godot under:
+
+```text
+Project
+→ Project Settings
+→ General
+→ Addons
+→ System Explorer
+→ Enable Quick Actions
+
+## Beautify
+
+System Explorer integrates with the open-source [CSharpier](https://github.com/belav/csharpier) formatter.
+
+* Format the active C# script from Godot's Script Editor
+* Format an individual script selected in System Explorer
+* Format all scripts inside a selected folder or system
+* Install CSharpier through the prompt shown by System Explorer when it is unavailable
+* Preserve relevant editor focus, caret, scroll, and active-script state during formatting where possible
+
+Use `Ctrl+B` from either System Explorer or the active C# Script Editor when Quick Actions are enabled.
+
+> **Note:** The script must contain valid C# syntax. Beautify cannot format a script that CSharpier is unable to parse.
+
+## Refactor Namespace
+
+Namespace refactoring can be run for a selected script, folder, or system.
+
+It can add or replace namespaces and update related references across the selected scope while protecting open editor buffers and reporting files that could not be updated.
+
+Because namespace refactoring may affect multiple project files, reviewing the result before committing changes is recommended.
+
+---
+
+<a id="configuration"></a>
+
+## Editor Shortcuts
+
+Shortcut bindings are managed under:
+
+```text
+Editor Settings → Shortcuts → System Explorer
+```
+
+Changes and unbound shortcuts are preserved by Godot's Editor Settings.
+
+---
+
+<a id="installation"></a>
 
 # Installation
+
+System Explorer is designed for Godot 4.6 .NET/C# projects.
 
 1. Copy the addon into:
 
@@ -194,11 +268,11 @@ Several quality-of-life features help speed up common workflows:
 addons/system_explorer/
 ```
 
-2. Open the project in Godot.
+2. Open the project in the .NET version of Godot.
 
-3. Make sure the project contains a C# solution/project file.
+3. Make sure the project contains a C# solution and project file.
 
-If the project has not been initialized for C#, create one via:
+If the project has not yet been initialized for C#, create the solution through:
 
 ```text
 Project
@@ -209,7 +283,7 @@ Project
 
 4. Build the C# project.
 
-5. Enable the plugin:
+5. Open:
 
 ```text
 Project
@@ -217,21 +291,23 @@ Project
 → Plugins
 ```
 
-6. Enable System Explorer.
+6. Enable **System Explorer**.
 
-> **Note:** System Explorer is designed for C# projects. A valid Godot C# solution/project file must exist before the plugin can be compiled and used.
+> System Explorer cannot be compiled or used in a project that has not been initialized for C#.
 
 ---
 
+<a id="script-templates"></a>
+
 # Script Templates
 
-New scripts are generated using:
+New scripts are generated from:
 
 ```text
 addons/system_explorer/Resources/script_template.txt
 ```
 
-You can customize this template to match your coding style, namespaces, project structure, or preferred class layout.
+The template can be customized to match your preferred namespaces, coding style, and class layout.
 
 The placeholder:
 
@@ -239,7 +315,7 @@ The placeholder:
 {{CLASS_NAME}}
 ```
 
-is automatically replaced with the script file name.
+is replaced with the new script's file name.
 
 Example:
 
@@ -255,52 +331,61 @@ namespace MyNamespace
 }
 ```
 
-If no template file is found, System Explorer falls back to a built-in default template.
+If the template file does not exist, System Explorer uses a built-in default template.
 
 ---
 
+<a id="data-storage"></a>
+
 # Data Storage
 
-System Explorer stores its configuration in:
+System Explorer stores its architecture data in:
 
 ```text
 addons/system_explorer/Resources/systems.json
 ```
 
-This file stores all System Explorer data, including systems, folders, scripts, scene links, lock states, and plugin state.
+This includes systems, virtual folders, scripts, scenes, linked-scene associations, ordering, and lock states.
 
-It can safely be committed to source control.
+Physical folder bindings are stored separately in:
+
+```text
+addons/system_explorer/Resources/folder_bindings.json
+```
+
+Both files can be committed to source control when the architecture view and folder bindings should be shared with the project.
+
+Local tree expansion and selection state is stored in:
+
+```text
+res://.godot/system_explorer/tree_state.json
+```
+
+This is local editor state inside Godot's generated `.godot` directory and is not intended for source control.
 
 ---
 
-# Known Issues
+<a id="roadmap"></a>
 
-## Godot Editor Cache Warnings
+# Roadmap
 
-In **System Explorer v1.4 and earlier**, deleting scripts from the filesystem through the plugin may occasionally cause Godot to display warnings related to scripts that no longer exist.
+Possible future additions include:
 
-These warnings originate from Godot's internal editor cache and do not affect plugin functionality.
-
-They typically disappear after rebuilding or reopening the project.
-
-> **Fixed for v1.5:** This issue has been resolved in the current [`main`](https://github.com/FootClanSoldier/SystemExplorer/tree/main) branch. Version 1.5 has not yet been released.
-
----
-
-# Future Ideas
-
+* Lightweight C# autocomplete suggestions in Godot's Script Editor
+* Clearer visual feedback when focus moves between System Explorer and the Script Editor
 * System notes and TODO descriptions
-* Customizable keyboard shortcuts
 * Multiple architecture views
-* Custom icons
 * Additional C# workflow and refactoring tools
-* Lightweight autocomplete suggestions in the Script Editor
 * Faster navigation between scripts and the scenes that use them
 
+Roadmap items are ideas rather than guaranteed release commitments.
+
 ---
+
+<a id="feedback"></a>
 
 # Feedback
 
-Feedback, suggestions, bug reports, and feature requests are always welcome.
+Feedback, suggestions, bug reports, and feature requests are welcome.
 
-Future development will primarily be driven by real-world usage and community feedback.
+Future development will primarily be guided by real-world usage and community feedback.
