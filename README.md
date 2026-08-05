@@ -198,9 +198,16 @@ Except for **Beautify** and **Toggle Tree / Script Editor Focus**, shortcuts are
 
 Arrow keys can move through visible tree entries, expand or collapse branches, and move between the tree and the input fields above it.
 
+  <p align="center">
+  <a href="#contents">
+    <img  src="screenshots/navigation.gif" width="200"  alt="">
+  </a>
+<p/>
+
+
 **Toggle Tree / Script Editor Focus** is designed to make a mostly keyboard-driven workflow possible. After selecting and opening a script from System Explorer, the command moves keyboard focus into the active script editor. Pressing it again returns focus to System Explorer and restores the previous tree or input-field context where possible.
 
-The focus transition is functional in v1.5.0, although its visual indication is still subtle. Clearer focus feedback is planned for a future release.
+The focus transition is functional, although its visual indication is still subtle. Clearer focus feedback is planned for a future release.
 
 ---
 
@@ -221,14 +228,13 @@ Project
 → Enable Quick Actions
 ```
 
-
 When enabled, Quick Actions add lightweight C# tools to the System Explorer context menu and shortcut workflow.
 <p align="center">
   <a href="#contents">
     <img  src="screenshots/quick_actions.png" width="400"  alt="">
   </a>
 <p/>
-  
+
 ## Beautify
 
 System Explorer integrates with the open-source [CSharpier](https://github.com/belav/csharpier) formatter.
