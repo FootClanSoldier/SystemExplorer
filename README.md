@@ -219,6 +219,8 @@ Except for **Beautify** and **Toggle Tree / Script Editor Focus**, shortcuts are
 
 Arrow keys can move through visible tree entries, expand or collapse branches, and move between the tree and the input fields above it.
 
+Press `Esc` while editing **System Name** to clear the field. In **Filter Items**, `Esc` clears the active filter while keeping the keyboard workflow inside the filter context.
+
 **Toggle Tree / Script Editor Focus** is designed to make a mostly keyboard-driven workflow possible. After selecting and opening a script from System Explorer, the command moves keyboard focus into the active script editor. Pressing it again returns focus to System Explorer and restores the previous tree or input-field context where possible.
 
 The focus transition is functional, although its visual indication is still subtle. Clearer focus feedback is planned for a future release.
