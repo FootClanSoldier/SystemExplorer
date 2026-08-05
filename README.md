@@ -83,6 +83,20 @@
   <p align="center">
     <em>Optional Quick Actions provide C# formatting and namespace refactoring inside Godot.</em>
   </p>
+  
+<br>
+
+  <p align="center">
+  <img
+    src="screenshots/beautify.gif"
+    width="700"
+    alt="System Explorer Beautify formatting a C# script"
+  >
+</p>
+
+<p align="center">
+  <em>Beautify reformats valid C# code directly inside Godot using CSharpier.</em>
+</p>
 </details>
 
 <a id="contents"></a>
