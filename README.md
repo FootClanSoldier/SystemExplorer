@@ -107,7 +107,7 @@ Organize the project around how its systems relate to each other, not only where
 * Add multiple scripts or scenes in one operation
 * Place the same script or scene in multiple locations
 * Reorder and organize systems, folders, scripts, and scenes with drag and drop
-* Lock systems, folders, scripts, and scenes against accidental drag-and-drop changes
+* Lock or unlock systems, folders, scripts, and scenes with the middle mouse button to prevent accidental drag-and-drop changes
 * Rename systems, folders, scripts, and scenes through the tree
 * Remove entries virtually or explicitly delete their physical script and scene files
 * Keep the System Explorer hierarchy independent of the physical project structure
