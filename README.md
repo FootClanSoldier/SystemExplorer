@@ -112,12 +112,14 @@ Organize the project around how its systems relate to each other, not only where
 * Remove entries virtually or explicitly delete their physical script and scene files
 * Keep the System Explorer hierarchy independent of the physical project structure
 
+<a id="context-menu"></a>
 <p align="center">
-  <img
-    src="screenshots/context_menu.gif"
-    width="400"
-    alt="System Explorer context menu"
-  >
+  <a href="#context-menu">
+    <img
+      src="screenshots/context_menu.gif"
+      width="400"
+      alt="System Explorer context menu">
+  </a>
 </p>
 
 <p align="center">
@@ -241,8 +243,10 @@ Project
 ```
 
 When enabled, Quick Actions add lightweight C# tools to the System Explorer context menu and shortcut workflow.
+
+<a id="#quick-actions"></a>
 <p align="center">
-  <a href="#contents">
+  <a href="#quick-actions">
     <img  src="screenshots/quick_actions.png" width="400"  alt="">
   </a>
 <p/>
