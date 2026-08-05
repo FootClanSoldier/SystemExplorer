@@ -132,6 +132,13 @@ Folder bindings can be added or removed from the folder context menu. Bound fold
 * Preserve expansion state and the exact selected tree occurrence between editor sessions
 * Recover the plugin's editor integration after C# assembly reloads
 
+  <p align="center">
+  <a href="#contents">
+    <img  src="screenshots/navigation.gif" width="200"  alt="">
+  </a>
+<p/>
+
+
 ## Scene Integration
 
 Connect scripts directly to the scenes that use them.
@@ -197,13 +204,6 @@ Except for **Beautify** and **Toggle Tree / Script Editor Focus**, shortcuts are
 ## Keyboard-First Navigation
 
 Arrow keys can move through visible tree entries, expand or collapse branches, and move between the tree and the input fields above it.
-
-  <p align="center">
-  <a href="#contents">
-    <img  src="screenshots/navigation.gif" width="200"  alt="">
-  </a>
-<p/>
-
 
 **Toggle Tree / Script Editor Focus** is designed to make a mostly keyboard-driven workflow possible. After selecting and opening a script from System Explorer, the command moves keyboard focus into the active script editor. Pressing it again returns focus to System Explorer and restores the previous tree or input-field context where possible.
 
