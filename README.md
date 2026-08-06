@@ -1,6 +1,3 @@
-> [!NOTE]
-> **Work in progress:** This README is currently being updated for the upcoming System Explorer v1.5.0 release. Some content may change before the release is published.
-
 <p align="center">
   <a href="https://github.com/FootClanSoldier/SystemExplorer">
     <img src="icon.png" width="300" alt="System Explorer Logo">
@@ -18,7 +15,7 @@
     <img src="https://img.shields.io/badge/C%23-.NET-purple" alt="C# .NET">
   </a>
 
-  <a href="https://github.com/FootClanSoldier/SystemExplorer/releases">
+  <a href="https://github.com/FootClanSoldier/SystemExplorer/releases/tag/v1.5.0">
     <img src="https://img.shields.io/badge/Version-1.5.0-green" alt="Version 1.5.0">
   </a>
 
