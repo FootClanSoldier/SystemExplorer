@@ -210,6 +210,7 @@ public partial class SystemExplorerPlugin
 		failureDetail = "";
 		try
 		{
+			ShutdownAutocomplete();
 			ShutdownScriptEditorSync();
 			ShutdownFolderBindingFilesystemLifecycle();
 			DisconnectNamespaceRefactorDialogSignals();
@@ -477,6 +478,12 @@ public partial class SystemExplorerPlugin
 				return false;
 			}
 
+			if (!EnsureAutocompleteLifecycleCurrent())
+			{
+				failureDetail = "The C# autocomplete ScriptEditor integration could not be restored.";
+				return false;
+			}
+
 			if (!TryEnsureNamespaceRefactorHost(out _))
 			{
 				failureDetail = "The Refactor Namespace managed host could not be restored.";
@@ -501,6 +508,7 @@ public partial class SystemExplorerPlugin
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 		ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload();
+		ResetAutocompleteTransientStateAfterManagedAssemblyReload();
 		CancelPendingScriptRenameEditorRestore();
 		ResetTreeOperationDialogQueuedStateAfterManagedAssemblyReload();
 		ResetUnsafePendingTreeOperationsAfterManagedAssemblyReload();

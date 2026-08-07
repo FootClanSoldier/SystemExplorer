@@ -434,6 +434,7 @@ public sealed class {{CLASS_NAME}}
 		_boundFolderSyncRunning = false;
 		_isScriptEditorSyncDeferredQueued = false;
 		ShutdownTreeOperationDialogs();
+		ShutdownAutocomplete();
 		ShutdownScriptEditorSync();
 		ShutdownFolderBindingFilesystemLifecycle();
 		DisconnectNamespaceRefactorDialogSignals();

@@ -29,17 +29,22 @@ Partials/SystemExplorerPlugin.DockUi.cs
 - Creates exactly one reusable Resources-access EditorFileDialog for folder binding, configured for OpenDir and connected through DirSelected.
 - Invokes the dedicated Refactor Namespace partial to create its plugin-owned dialogs and controls, delegates their idempotent named-callable wiring to that partial, mounts both dialogs directly under _dock as siblings after _createScriptDialog and before the CSharpier dialogs, and creates the initial managed host through the same centralized composition method used by recovery.
 - Owns validation, idempotent Connect/IsConnected/Disconnect coordination, named signal adapters, teardown reference clearing, and the named first-run-note margin callback for dock-owned controls.
-- Handles System Name input behavior, including the inline Enter hint icon and cursor updates, while deferring to the shared editor-operation busy-cursor ownership when a protected foreground operation is active.
+- Handles System Name input behavior, including the inline Enter hint icon, cursor updates, and the explicit keyboard-Escape clear helper that updates the icon and retains ordinary LineEdit editing focus, while deferring to the shared editor-operation busy-cursor ownership when a protected foreground operation is active.
+- Lets only the System Name submit and GUI-input adapters bypass the general managed-state gate for the typed MissingSystemsWithFolderBindings conflict so Enter, right-icon activation, and cursor handling can reach AddCreate.cs's defensive conflict guard; all other managed-state signal gates remain unchanged.
+- Shows the first-run welcome note only when persistent metadata has been successfully loaded for the current managed assembly generation, no typed persistent-load failure is active, _systems is empty, and systems.json is missing.
 
 Partials/SystemExplorerPlugin.EditorReloadLifecycle.cs
-- Owns bounded managed-generation recovery that first reconnects valid existing UI and otherwise tears down and rebuilds the plugin-owned dock integration, reloads architecture metadata plus best-effort persistent tree view state, recreates managed integrations/lifetime state, rebuilds the tree, restores the exact persisted selection without navigation, restores any native busy-cursor marker left by a protected foreground operation, and verifies critical tree/context-menu signals against the current plugin instance before accepting recovery.
+- Owns bounded managed-generation recovery that first reconnects valid existing UI and otherwise tears down and rebuilds the plugin-owned dock integration, reloads architecture metadata plus best-effort persistent tree view state, recreates managed integrations/lifetime state including the C# autocomplete host and editor binding, rebuilds the tree, restores the exact persisted selection without navigation, restores any native busy-cursor marker left by a protected foreground operation, and verifies critical tree/context-menu signals against the current plugin instance before accepting recovery.
 - Owns the per-assembly generation token, initialized-generation marker, reentrancy guard, and deduplicated user-facing failure path used to detect and recover a managed C# assembly reload without interpreting legitimately empty metadata as lost state.
 - Reads systems.json first and folder_bindings.json second into local validated models, then replaces _systems and _folderBindings together only after both read paths succeed; the recovery path is read-only and never invokes save, rollback, or startup folder synchronization.
-- Resets reload-unsafe queued and pending managed operation state, validates the surviving dock/dialog objects including the Shortcut Conflict dialog, hides that dialog during managed reload, and restores dock, TreeOperationDialog, Refactor Namespace, EditorFileSystem, ScriptEditor, and polling-timer integrations idempotently.
+- Classifies the latest atomic persistent-state load as None, General, or MissingSystemsWithFolderBindings, retains that typed status on the plugin instance, hides any stale first-run note on failure, and exposes the exact cross-file conflict to AddCreate.cs and DockUi.cs without parsing diagnostic strings.
+- Detects the specialized cross-file failure only when systems.json is missing and FolderBinding.cs reports structurally valid unknown-system metadata with at least one actual binding, then uses the existing managed-generation deduplication and shared queued tree-operation dialog to show the specific tree-load message instead of the generic reload message.
+- Resets reload-unsafe queued and pending managed operation state plus the runtime-only Toggle Focus return target back to Tree, validates the surviving dock/dialog objects including the Shortcut Conflict dialog, hides that dialog during managed reload, and restores dock, TreeOperationDialog, Refactor Namespace, EditorFileSystem, ScriptEditor, and polling-timer integrations idempotently.
 - Provides the shared named-method Callable helpers that use Godot's actual IsConnected state for defensive Connect and Disconnect behavior across plugin partials.
 
 Partials/SystemExplorerPlugin.TreeOperationDialogs.cs
 - Owns the single reusable plugin-level AcceptDialog used for user-facing technical tree-operation failure, incomplete, and unclear-state results, plus the purely visual fixed-width/wrapped AcceptDialog helpers shared with normal input warnings.
+- Configures that shared queued technical dialog as transient to the currently focused editor window so startup/reload failures remain modal to the correct window when another editor child window, such as Project Settings, is open.
 - Owns the scoped tree-operation context, nested result merging, severity precedence, per-operation deduplication, and the separation between concise user text and DebugLogger technical diagnostics. A finalized active failure presentation can be transferred into an immutable Godot-independent deferred snapshot without keeping the operation context or scope active across deferred frames.
 - Owns deferred and lifecycle-safe popup scheduling, including queued presentation before the dock is mounted, persistent deduplication for automatic folder sync, reload-state invalidation, named-callable signal wiring, and shutdown invalidation of stale deferred callbacks.
 - Enforces close-origin-before-popup ordering through idempotent feature-owned cleanup callbacks and provides the small shared reporting surface used by deeper persistence and recovery helpers without coupling them to originating dialogs.
@@ -57,7 +62,8 @@ Partials/SystemExplorerPlugin.QuickAction.RefactorNamespace.cs
 
 Partials/SystemExplorerPlugin.TreeStatePersistence.cs
 - Owns best-effort project-local persistence of normal system/folder expansion plus the exact selected-item identity in res://.godot/system_explorer/tree_state.json. Selection identity is managed data composed of the owning system name and exact TreeItem metadata; no TreeItem reference is persisted or retained across rebuild/reload.
-- Serializes expansion and nullable selection atomically through one ItemCollapsed/ItemSelected-driven dirty state and the same callback-free frame-pumped save queue, temporary-file write, promote flow, final exit flush, and managed reload/shutdown queue reset.
+- Serializes expansion and nullable selection atomically through one dirty state driven by ItemCollapsed, ItemSelected, and explicit user-caused Tree deselection at the keyboard-navigation control boundary. selected_item is nullable, null represents an actually deselected Tree state, and mouse or LineEdit focus without Tree deselection leaves the persistent identity unchanged; all dirty paths use the same callback-free frame-pumped save queue, temporary-file write, promote flow, final exit flush, and managed reload/shutdown queue reset.
+- Canonicalizes physical res:// paths inside loaded script/scene selected-item metadata through the shared entry normalization before exact well-formedness and validity checks; system and folder identities remain untouched and no alternative-path fallback is introduced.
 - Restores selection only after tree construction, scopes script/scene lookup to the exact owning system or exact ScriptFilterResult occurrence, scrolls the visual selection into view, and suppresses script/scene navigation while applying persistent state. Invalid identities are cleared quietly without blocking expansion or startup; temporarily filter-hidden identities are retained until the normal tree returns, and neither path chooses a physical-path fallback.
 - Exposes pending tree-state process work to EditorProcess.cs so the plugin's single _Process callback remains active until the queued save has waited beyond its first process frame and completed; it creates no tree-state-specific deferred Callable, timer, delegate, or signal-based one-shot callback.
 - Keeps voluntary UI-state load/save failures outside systems.json and folder_bindings.json validation, recovery failure reporting, metadata preflight, popups, and tree-operation rollback.
@@ -71,12 +77,13 @@ Partials/SystemExplorerPlugin.TreeBuilding.cs
 - Applies the bound-folder color and exact physical res:// tooltip only to folders with their own loaded binding; normal folders retain the standard folder color and empty tooltip.
 
 Partials/SystemExplorerPlugin.ScriptFilter.cs
-- Handles script filtering, ordered filter result generation, filter UI icons, clear/search icon behavior, restoring the normal tree after filtering, and preserving the shared editor-operation busy cursor against filter hover/exit cursor updates.
+- Handles script filtering, ordered filter result generation, filter UI icons, clear/search icon behavior, and restoration of the normal tree after filtering; programmatic clear captures the currently selected flat filter-row identity before the text is emptied, gives that exact identity priority over older persisted selection, and reuses the existing reveal/build/exact-restore flow while preserving the shared editor-operation busy cursor against filter hover/exit cursor updates.
 - Provides the ordered ScriptFilterResult projection and centralized direct-child index mapping reused by persistent selection and ScriptEditorSync to map flat filter-tree rows back to exact system/folder/entry/type occurrences.
 - Preserves exact owning-system context when a filter selection becomes the persistent selection, and restores that exact identity when returning to the normal tree instead of using a global first-entry match.
 
 Partials/SystemExplorerPlugin.AddCreate.cs
-- Handles adding systems/folders/scripts/scenes and creating new C# script files from the template.
+- Handles adding systems/folders/scripts/scenes and creating new C# script files from the template; successful Add System and Add Folder rebuilds restore the exact newly created item as selected through PersistentTreeSelection and then defer focus to the hidden tree context without a visual Tree focus frame.
+- Blocks Add System immediately after the non-empty-name check and before validation scope, snapshots, mutation, persistence, rebuild, expansion, or selection work when EditorReloadLifecycle.cs exposes the verified MissingSystemsWithFolderBindings conflict; the guard reuses the existing Add System input-warning dialog and preserves both metadata files and the entered text.
 - Provides the shared selected-item New Folder dialog opener used by keyboard routing and the exact TreeItem-hierarchy target resolver used by both shortcuts and the context menu; system/folder targets create inside themselves while script/direct-scene targets resolve their exact virtual parent without a global first-entry lookup, and filtering blocks dialog opening.
 - Provides shared bool-returning selected-item openers for the existing Add Scripts and Add Scenes EditorFileDialogs; both context-menu routing and TreeShortcutDispatcher use these same validation/opening paths, preserve system/folder/script/direct-scene destination resolution, and reject opening while script filtering is active.
 - Provides the shared validated Create Script dialog opener used by context-menu and shortcut routing; it requires a supported selected System Explorer target, a resolvable selected system, inactive script filtering, and valid tree/dialog instances before opening the existing dialog.
@@ -99,6 +106,14 @@ Partials/SystemExplorerPlugin.ScriptOpening.cs
 - Returns keyboard context to the hidden tree-focus target when the call site requests it, without assigning visual focus to the Tree.
 - Does not own or mutate script caret, selection, or scroll position; those remain entirely owned by Godot's Script Editor state.
 
+Partials/SystemExplorerPlugin.Autocomplete.cs
+- Owns exactly one rebuildable AutocompletePluginHost reference and is the sole SystemExplorerPlugin integration boundary for C# autocomplete.
+- Composes or restores the managed autocomplete feature graph, forwards plugin lifecycle and active-editor events, and retains the plugin instance as the target of reload-safe named Godot signal callables.
+- Contains the named ScriptEditor, TextChanged, CodeCompletionRequested, CodeEdit.GuiInput, EditorFileSystem.FilesystemChanged, and deferred-validation adapters plus the managed-assembly recovery gate and named CallDeferred scheduling required by those adapters.
+- The CodeEdit.GuiInput adapter remains forwarding-only: it runs managed-assembly recovery, restores the host if needed, and forwards the InputEvent without reading the selected option, matching completion actions, decoding metadata, or confirming completion itself.
+- Resolves the global res:// project root on Godot's main thread, forwards the plugin-owned named EditorFileSystem adapter to the managed project-index lifecycle, and injects main-thread DebugLogger forwarding into the host.
+- Does not own ScriptEditor or CodeEdit binding state, completion data, prefix analysis, native option publication, completion-session logic, validation-generation implementation, confirmation policy, theme keys, snapshots, StyleBox manipulation, worker state, cancellation sources, Roslyn parsing, file inventory, or snapshot publication.
+
 Partials/SystemExplorerPlugin.ScriptEditorSync.cs
 - Handles synchronization between Godot's active Script Editor script and the System Explorer tree selection.
 - Defines the in-memory virtual script occurrence identity as exact system name plus full entry, with the normalized physical script path used for validation.
@@ -115,40 +130,42 @@ Partials/SystemExplorerPlugin.ScriptEditorSync.cs
 - Does not mutate system data or persist systems; only updates visual tree selection/expansion defensively.
 
 Partials/SystemExplorerPlugin.Shortcuts.cs
-- Owns ten stable EditorSettings shortcut paths for Beautify, New Script, Remove Selected Item, Toggle Tree / Script Editor Focus, New Folder, Rename, Collapse Tree, Add Scripts, Add Scenes, and Refactor Namespace, registers all ten default definitions through EditorSettings.AddShortcut(...) once per managed assembly generation so Godot can restore original/default metadata while preserving user-modified or intentionally empty events, and retains the display-only lookup surface used by context menus; tree-context routing for the registered commands is owned by TreeShortcutDispatcher.cs.
-- Retains the plugin's single global _Input(...) composition point, delegates hidden-focus Up/Down/Left/Right to TreeKeyboardNavigation.cs before delegating hidden tree-context shortcuts to TreeShortcutDispatcher.cs, and does not individually route tree-scoped commands.
-- Owns only the external active-Script-Editor Beautify route, uses ScriptPathUtility.Normalize(...) plus the verified current Script/ScriptEditorBase/TextEdit identity relation, and protects ordinary unmodified Unicode text entry inside LineEdit and TextEdit controls; selected TreeItem Beautify is owned exclusively by the tree dispatcher.
-- Owns only the external Script Editor to hidden System Explorer tree-context half of Toggle Tree / Script Editor Focus; the Tree to Script Editor half is owned by the tree dispatcher.
+- Owns ten stable EditorSettings shortcut paths for Beautify, New Script, Remove Selected Item, Toggle Tree / Script Editor Focus, New Folder, Rename, Collapse Tree, Add Scripts, Add Scenes, and Refactor Namespace, registers all ten default definitions through EditorSettings.AddShortcut(...) once per managed assembly generation so Godot can restore original/default metadata while preserving user-modified or intentionally empty events, and retains the display-only lookup surface used by context menus; tree-context routing for the registered commands remains owned by TreeShortcutDispatcher.cs.
+- Retains the plugin's single global _Input(...) composition point and invokes TreeKeyboardNavigation.cs's exact-control high-priority dock/filter route before Beautify, Toggle Focus, the existing hidden-tree arrow route, and tree shortcut dispatch so reserved System Name, Filter Items, filtered-tree Escape, and pure arrow events retain priority while modified keys can continue to rebindable shortcut matching.
+- Owns the external active-Script-Editor Beautify route only, uses ScriptPathUtility.Normalize(...) plus the verified current Script/ScriptEditorBase/TextEdit identity relation, and preserves its ordinary unmodified Unicode text-entry guard; selected TreeItem Beautify remains owned exclusively by the tree dispatcher and Beautify is not globally extended to System Name or Filter Items.
+- Owns the short-lived Toggle Focus return-target state for Tree, System Name, and Filter Items. Exact System Name and Filter Items focus can toggle to the current Script Editor and register their return target only after the Script Editor TextEdit actually receives focus; the current Script Editor can then return to that registered control, reactivate a LineEdit with exact focus plus verified IsEditing(), or use a toggle-specific tree return that preserves and scrolls a valid live selection, selects the first visible row through the existing ItemSelected path when selection is absent, and falls back to Filter Items or System Name when the active tree has no visible row.
+- Owns global Toggle Focus shortcut input only for exact System Name, exact Filter Items, and the verified current Script Editor TextEdit. A valid route plus a matching registered Toggle Focus binding calls SetInputAsHandled() before focus mutation and remains consumed even when the focus transition fails, preventing the same event from reaching the LineEdit GUI path or Godot's later shortcut routes; no Toggle Focus text-entry guard is added.
+- Keeps the explicit command-context model: Beautify is available from Tree plus the current Script Editor; Toggle Focus is available from Tree plus the current Script Editor plus exact System Name and Filter Items; every other System Explorer command remains Tree-only. The global Toggle Focus expansion does not broaden HandleGlobalBeautifyShortcut(...), HandleGlobalTreeShortcutDispatch(...), or any other tree-only command.
+- Keeps the Toggle Focus return target runtime-only: it is not written to JSON, is updated only by an explicit successful System Explorer-to-Script-Editor toggle, resets to Tree after any successful return, and is reset to Tree during managed assembly recovery.
 - Provides the shared selected-item Beautify and Remove dialog-opening helpers reused by dispatcher execution and does not handle lock input.
 
 Partials/SystemExplorerPlugin.TreeShortcutDispatcher.cs
-- Owns the single stable registry of ten tree-scoped EditorSettings commands and their non-user-editable display names: Beautify, New Script, Remove Selected Item, Toggle Tree / Script Editor Focus, New Folder, Rename, Collapse Tree, Add Scripts, Add Scenes, and Refactor Namespace.
+- Owns the single stable registry of ten tree-scoped EditorSettings commands and their non-user-editable display names: Beautify, New Script, Remove Selected Item, Toggle Tree / Script Editor Focus, New Folder, Rename, Collapse Tree, Add Scripts, Add Scenes, and Refactor Namespace. It continues to own Beautify's tree route, Toggle Focus's two tree routes, and every other tree-only command.
 - Matches the current user bindings directly through EditorSettings.IsShortcut(...) after one registration ensure per dispatch attempt, honors multiple events and intentionally empty shortcuts, deduplicates command identities, and never selects a winner when one input matches multiple commands.
-- Separates System Explorer ownership of a matching tree-context input from command availability: one or more matches are consumed before execution, a single match remains consumed when its helper returns false, and multiple matches execute nothing while presenting the reusable Shortcut Conflict dialog; Add Scripts, Add Scenes, and Refactor Namespace therefore inherit the same consumption and conflict behavior.
-- Uses the same dispatcher for the exact hidden _focusReleaseTarget and direct Tree.GuiInput routes, consuming through GetViewport().SetInputAsHandled() or _tree.AcceptEvent() respectively while preserving route-specific validation.
+- Separates System Explorer ownership of a matching tree-context input from command availability: one or more matches are consumed before execution, a single match remains consumed when its helper returns false, and multiple matches execute nothing while presenting the reusable Shortcut Conflict dialog. This consume-before-execute architecture is unchanged.
+- Uses the same dispatcher for the exact hidden _focusReleaseTarget and direct Tree.GuiInput routes, consuming through GetViewport().SetInputAsHandled() or _tree.AcceptEvent() respectively while preserving route-specific validation. Both tree Toggle Focus routes register Tree as the transient return target only after a successful current-Script-Editor focus transition.
 - Defensively rejects unmodified Up/Down/Left/Right so reserved navigation keeps absolute priority, while modified arrow combinations remain eligible for normal shortcut matching.
-- Routes each command to one shared bool-returning command helper while preserving filtering rules and external Script Editor special routes; Add Scripts and Add Scenes are functionally blocked while filtering, while Refactor Namespace remains available for a selected filtered script row.
+- Routes each command to one shared bool-returning command helper while preserving filtering rules and external special routes; Add Scripts and Add Scenes are functionally blocked while filtering, while Refactor Namespace remains available for a selected filtered script row. The global input-field Toggle Focus route supplements rather than replaces or broadens this dispatcher.
 - Future shortcuts available in System Explorer tree context must add one command id, one registry definition, and one execution case here instead of creating parallel hidden-global and Tree.GuiInput chains.
 
 Partials/SystemExplorerPlugin.TreeKeyboardNavigation.cs
-- Owns the shared arrow-key navigation algorithm used both by the global hidden _focusReleaseTarget context and by direct Tree.GuiInput when _tree itself has GUI focus.
-- Keeps the global arrow-key proxy restricted to the exact valid hidden focus-release target through the generalized focus predicate shared by hidden tree-context routing.
-- Treats unmodified pressed Up, Down, Left, and Right as reserved core navigation commands with higher priority than every rebindable shortcut, allows key repeat, and treats every recognized arrow command as handled even when navigation reaches a boundary or becomes a no-op.
+- Owns the continuous keyboard-navigation chain between the exact System Name LineEdit, exact Filter Items LineEdit, hidden _focusReleaseTarget tree context, and direct Tree.GuiInput, while retaining the shared visible-TreeItem arrow algorithm for both tree routes.
+- Keeps global input ownership restricted to the exact two dock LineEdits and exact valid hidden focus-release target, reserves unmodified Escape only for those LineEdits and active filter-result tree contexts, and leaves unfiltered hidden/direct Tree Escape available to the normal shortcut dispatcher.
+- Treats unmodified pressed Up, Down, Left, and Right as reserved core navigation commands with higher priority than every rebindable shortcut; one ordinary arrow event crosses at most one control boundary, while each verified boundary transition registers a one-shot continuation for the next matching Echo. That continuation is taken exactly once and can carry a held arrow onward through System Name, Filter Items, and tree context; a successful boundary transition during the continuation registers the next step, matching release or a fresh non-echo press clears stale state, and ordinary TreeItem-to-TreeItem repeat remains unrestricted. Arrow-triggered LineEdit transitions first give the exact target control hidden focus, then explicitly activate editing, and are only registered as successful after both the exact focus owner and IsEditing() have been verified.
 - Leaves Ctrl/Shift/Alt/Meta-modified arrows unhandled so TreeShortcutDispatcher.cs can match them as ordinary user bindings; a user binding can never replace the pure arrow navigation commands.
-- Navigates visible TreeItems without wrap: Up/Down move to the previous/next visible item; Left collapses an expanded item or moves to the previous visible item; Right expands a collapsed item, enters its first child when already expanded, or moves to the next visible item for leaves.
+- Navigates visible TreeItems without wrap: Up moves to the previous visible item or, from the first visible row, activates Filter Items and only after verified LineEdit focus/edit activation deselects the current visual Tree selection, refreshes selection-based lock-icon visibility, and clears the nullable persistent selected-item identity through TreeStatePersistence.cs's existing queued save. Control focus alone is never treated as evidence that Tree selection is empty; Down moves to the next visible item; Left collapses an expanded item or moves to the previous visible item; Right expands a collapsed item, enters its first child when already expanded, or moves to the next visible item for leaves. Filter Items Down preserves an already valid visible Tree selection or otherwise selects and scrolls the first visible row before entering the hidden tree context, and stays in the input when no row exists.
 - Handles a missing selection defensively by letting Down select the first visible item and Up select the last visible item while Left and Right remain consumed no-ops.
-- Selects column 0 and scrolls the item into view without changing the current focus owner, opening scripts/scenes directly, or bypassing the existing ItemSelected navigation and persistence flow; the same behavior naturally applies to the flat script-filter tree.
+- Selects column 0 and scrolls the item into view without opening scripts/scenes directly or bypassing the existing ItemSelected navigation and persistence flow; active-filter Escape from either tree route delegates to ScriptFilter.cs for exact pre-clear identity capture, normal-tree reveal/rebuild/restore, and deferred return to the hidden tree context without _tree.GrabFocus().
 
 Partials/SystemExplorerPlugin.TreeInput.cs
 - Handles Tree.GuiInput and mouse-exit behavior for tree keyboard/mouse input, hover lock icon updates, filtering clicks, double-click scene opening, drag preparation/release, and ordered tree-local keyboard routing.
-- Routes reserved unmodified Up/Down/Left/Right events to TreeKeyboardNavigation.cs first, consumes every recognized tree-local arrow command through _tree.AcceptEvent(), and therefore prevents Godot's built-in Tree or directional-focus navigation from applying a second navigation model.
+- Participates in TreeKeyboardNavigation.cs's shared one-shot control-transition continuation state before active-filter unmodified Escape, reserved Up/Down/Left/Right, and shortcut dispatch; it clears or takes matching transition state without swallowing legitimate repeat events before the shared TreeItem navigation, then consumes every event actually owned by the tree route through _tree.AcceptEvent() to prevent both shortcut conflicts and Godot's built-in Tree or directional-focus navigation from applying a second model.
 - Delegates all rebindable tree-scoped keyboard input, including Tree to Script Editor focus transfer, to TreeShortcutDispatcher.cs after navigation and contains no separate IsEditorShortcut(...) chain.
 - Retains middle-click as the only shortcut-like lock/unlock input and calls ToggleItemLock(item, selectToggledItemAfterBuild: false) without changing the underlying lock mutation safeguards.
 - Contains tree-item input helpers for script/scene detection, selected script/scene click handling, shift-click expansion, and local expand/collapse toggling.
 
 Partials/SystemExplorerPlugin.ContextMenu.cs
-- Handles context menu constants, hidden submenu icon state, context menu construction, submenu direction/icon behavior, and context menu action routing.
-- Always applies available editor icons to context menu and submenu entries while preserving the existing left/right submenu-direction logic and text-only fallback when an icon is unavailable.
+- Handles context menu constants, hidden submenu icon state, context menu construction, submenu direction/icon behavior, and context menu action routing. Available icons are always applied to context menu and submenu items, while the existing left-/right-opening submenu direction logic remains unchanged.
 - Handles pending metadata setup, captures the exact selected script occurrence for remove before the popup takes focus, New/Add/Quick Actions menu composition, Open File Path / Open Folder Path routing, visibility of file-manager actions, and context-specific system/folder/script/scene menu entries.
 - Uses AddCreate.cs's exact selected-TreeItem resolver for the pending New Folder target, so context-menu folder creation follows the clicked virtual occurrence rather than a global first entry match.
 - Displays the current New Script binding on New > Script, the current New Folder binding on New > Folder, and the current Add Scripts, Add Scenes, and Refactor Namespace bindings on Add > Scripts, Add > Scenes, and Quick Actions > Refactor Namespace through the shared display-only shortcut helper; Rename currently has no displayed binding and Collapse Tree is intentionally not added to any context menu.
@@ -168,6 +185,8 @@ Partials/SystemExplorerPlugin.ContextMenu.FileManager.cs
 Partials/SystemExplorerPlugin.FolderBinding.cs
 - Owns folder-binding state keyed by system name and virtual folder path plus the pending folder-context metadata.
 - Owns the non-mutating folder_bindings.json disk-read result and validation against a supplied systems model, plus readable separate JSON serialization/persistence without changing systems.json; normal saves use verified-final-content semantics while physical-mutation preflight can request Persistence.cs's stricter commit-capability verification.
+- Distinguishes structurally invalid binding metadata from a structurally readable UnknownSystemReference, validates every binding value and normalized path before reference classification, and lets later structural errors override earlier unknown-system findings.
+- Tracks normalized system-property duplicates independently with an ordinal HashSet so known, unknown, empty, and non-empty entries share the same duplicate rule, and returns typed unknown-system names plus the total actual binding count beneath them.
 - Owns bind/unbind operations, path normalization and validation, exact binding lookup, the existing local rollback for unbind, and tree rebuild/reselection after successful direct operations.
 - Treats a new binding and any entries added by its first synchronization as one reversible systems/bindings mutation committed through Persistence.cs; failed commits restore both models and do not rebuild the tree.
 - Owns non-mutating identification of script and scene entries whose immediate physical parent directory exactly matches the explicit binding for their current virtual folder.
@@ -245,7 +264,7 @@ Partials/SystemExplorerPlugin.RenameRemove.cs
 
 Partials/SystemExplorerPlugin.EntryHelpers.cs
 - Contains shared helpers for selection lookup, entry mutation, metadata parsing, path/folder utilities, display names, and entry normalization.
-- Contains helpers for script entries, scene entries, linked scene metadata, folder entries, lock markers, and selected filter result updates.
+- Contains helpers for script entries, scene entries, linked scene metadata, folder entries, lock markers, and selected filter result updates; entry normalization defensively canonicalizes safely parsed primary and linked physical res:// paths before existing Distinct processing while preserving virtual paths, locking, type, casing, and order.
 
 Partials/SystemExplorerPlugin.Persistence.cs
 - Handles systems.json disk reads, JSON serialization/deserialization, save, existing operation-specific recovery, save guards, and defensive checks before tree/system mutations; assembly-reload coordination and atomic systems-plus-bindings commit live in EditorReloadLifecycle.cs.
@@ -258,9 +277,9 @@ Partials/SystemExplorerPlugin.Persistence.cs
 - Owns the shared strict metadata-save preflight for operations with physical or otherwise difficult-to-reverse side effects. The preflight routes systems.json and folder_bindings.json through the commit-capability-required save paths, snapshots and restores both in-memory models on failure, replaces generic save reports in the active dialog scope, and leaves each operation's post-mutation rollback/incomplete handling intact.
 
 Partials/SystemExplorerPlugin.Settings.cs
-- Registers and reads the plugin's remaining Project Settings under addons/system_explorer/.
+- Registers and reads the plugin's remaining Project Settings under addons/system_explorer/..
 - Contains the settings-backed choices for Quick Actions and debug state.
-- Provides the central context menu-item helper, which always uses an available editor icon and otherwise falls back to a normal text-only menu item while preserving shortcut display.
+- Provides the existing central context menu-item helper, which always uses an available icon and otherwise falls back to a normal menu item while preserving shortcut display behavior.
 
 Partials/SystemExplorerPlugin.QuickAction.Beautify.cs
 - Handles the Quick Action flow for Beautify Script / Beautify Scripts and retains the full single- and batch-formatting orchestration.
@@ -286,6 +305,287 @@ Partials/SystemExplorerPlugin.QuickAction.CSharpier.cs
 ----------------------------------------------------
 Refactored Classes
 ----------------------------------------------------
+
+## Autocomplete feature classes
+
+Autocomplete/AutocompletePluginHost.cs
+- Defines the internal sealed C# autocomplete facade and composition root under SystemExplorer.Autocomplete without retaining a SystemExplorerPlugin reference.
+- Composes the editor binding, completion graph, theme controller, ProjectTypeCompletionSource, one shared AutocompleteCompletionOptionMetadataCodec, the keyboard AutocompleteCompletionConfirmationBridge plus its AutocompleteProjectTypeConfirmationService/CSharpUsingInsertionPlanner transaction path, one shared CSharpDocumentCompletionContextBuilder and CSharpCompletionContextResolver used by both ranking/index scanning and confirmation-time scope verification, one shared AutocompleteIndexLifetime, the disk project-index channel, the separate active-document overlay channel, the explicit v2 cache JSON codec, and the persistent project-index cache store/write channel.
+- Shares the exact same completion metadata codec instance between AutocompleteCodeEditPresenter encoding and confirmation-bridge decoding, and forwards verified active-CodeEdit GuiInput events to the bridge without interpreting native option dictionaries itself.
+- Provides the project lifecycle with the already-globalized project-root provider; the lifecycle derives the cache path as an ordinary managed string under .godot/system_explorer/autocomplete before any worker request is created.
+- Gives ProjectTypeCompletionSource read-only provider access to both CSharpProjectIndex.CurrentSnapshot and CSharpActiveDocumentIndex.CurrentSnapshot and injects the pure managed CSharpCompletionContextResolver; the active file overlay replaces that file's disk declarations/context while all other project files and verified global usings remain sourced from the project snapshot.
+- Marks active-document state dirty from BeginTextChangedValidation(), captures CodeEdit.Text best effort only after the current editor/path relation has been revalidated on the main thread, and never parses Roslyn or waits for any worker from a Godot callback.
+- Best-effort captures the active buffer after initial lifecycle recovery, script changes, managed integration recovery, and completion requests when the overlay is dirty, missing, or belongs to another script; TextChanged still performs no completion-source query or native republish.
+- Owns the final shared indexing shutdown order: stop the project-index lifecycle and coordinator, stop the active-document lifecycle and coordinator, stop the cachewrite coordinator, call AutocompleteIndexLifetime.Shutdown() exactly once, then continue existing completion, editor-binding, and theme shutdown without waiting for cache I/O.
+- Drains project-build and cachewrite diagnostics through existing main-thread flows and reports only unexpected active-document capture/build failures, avoiding cancellation, stale-revision, and per-keystroke debug spam.
+
+Autocomplete/AutocompleteActiveDocumentIndexLifecycle.cs
+- Defines the Godot-aware main-thread lifecycle for exactly the active C# editor buffer: dirty state, monotonic document revisions, last active/captured normalized script paths, CodeEdit.Text capture, request creation, script-change/reset invalidation, retry-after-failure state, and shutdown.
+- Uses ScriptPathUtility.Normalize(...) before requests, validates the current .cs path and CodeEdit instance, copies the editor text to a plain string on the main thread, and forwards only immutable managed data to CSharpActiveDocumentIndexCoordinator.
+- Coalesces captures through the existing deferred TextChanged validation path, avoids duplicate capture while the same accepted revision is still building, clears dirty state only after coordinator acceptance, and contains no Roslyn parsing, polling, timer, _Process, or completion publication.
+- Invalidates pending/active older revisions before clearing the published overlay on script changes or managed transient reset, so an older worker result cannot republish after the active document has changed.
+
+## Autocomplete indexing classes
+
+Autocomplete/Indexing/AutocompleteIndexLifetime.cs
+- Defines the shared Godot-independent managed lifetime used by the project-index, active-document, and persistent-cache worker channels, owns the shutdown CancellationTokenSource and current AssemblyLoadContext.Unloading registration, rejects new workers after shutdown, and performs idempotent managed cancellation on plugin shutdown or assembly unload.
+- Tracks all active worker loops across all three coordinators so cancellation resources are disposed only after every registered worker has exited; the main thread never waits for that cleanup, and the unload callback never calls Godot or plugin methods.
+- Provides the lifetime-locked publication guard used with each index coordinator's generation/revision checks and supplies linked shutdown cancellation to cache writes; permanent Shutdown() ownership belongs only to AutocompletePluginHost.
+
+Autocomplete/Indexing/AutocompleteProjectIndexLifecycle.cs
+- Defines the main-thread Godot integration for the project index: current EditorFileSystem identity, reload-safe named FilesystemChanged connection, initial-refresh state, main-thread global-root provider, reset, disconnect, and shutdown.
+- Derives the persistent cache path from the already-globalized project root with the managed CSharpProjectIndexCacheFormat helper and forwards only ordinary path strings to the coordinator.
+- Requests the initial task-based build even when the filesystem signal is temporarily unavailable, treats signal/cache-path integration as best effort, and never inventories, reads, parses, loads cache JSON, or builds snapshots itself.
+
+Autocomplete/Indexing/CSharpProjectIndex.cs
+- Owns exactly one current immutable CSharpProjectIndexSnapshot reference.
+- Publishes complete snapshots with Interlocked.Exchange(...) and reads them with Volatile.Read(...), so consumers observe only the previous or next complete snapshot.
+
+Autocomplete/Indexing/CSharpProjectIndexCoordinator.cs
+- Owns the project channel's single controlled Task.Run worker loop, latest requested and published generations, one replaceable pending request, active build cancellation, current worker task/state, and the latest reportable managed build result.
+- Implements latest-request-wins rather than FIFO: a new project refresh replaces the older pending refresh, cooperatively cancels the active generation, and only the newest still-current successful generation may publish.
+- Uses a narrow publication gate so generation mutation cannot race the atomic index exchange while the potentially longer project-state lock is released around publication.
+- Immediately before publishing a cache-enabled current snapshot, marks that generation with CSharpProjectIndexCacheCoordinator so an older prepared cachewrite cannot commit after the newer project generation becomes published; only after actual publication does it create the immutable cachewrite request outside the project-state lock. Stale or failed builds can never request a cachewrite.
+- Combines per-build cancellation with the shared AutocompleteIndexLifetime shutdown cancellation, observes every worker exception inside an outer try/catch/finally, treats superseding cancellation as routine control flow, and permits later refreshes after non-shutdown failures.
+- Its own Shutdown() stops project requests and cancels project work but never permanently shuts the shared AutocompleteIndexLifetime or waits for cache I/O.
+
+Autocomplete/Indexing/CSharpProjectIndexWorker.cs
+- Performs request validation, optional cold-start persistent-cache loading, System.IO inventory, per-file fingerprint comparison, UTF-8 reads, Roslyn syntax scanning, local full-snapshot assembly, and immutable build-result creation entirely inside the coordinator's ThreadPool task.
+- Loads persistent seed entries only when PreviousSnapshot.HasBuiltAtLeastOnce is false, but always completes a current project inventory before building or returning a snapshot.
+- Reuses a persistent seed only after its case-insensitive resource path, length, and UTC last-write ticks match the current descriptor; verified cached data is rehydrated into new immutable runtime entries with the current global path.
+- Reuses unchanged in-memory entries, reparses changed/new files, removes disappeared files after successful inventory, retains only an older in-memory entry after a read/scan failure, and never retains an unverified cache seed after a fingerprint mismatch.
+- Treats missing, corrupt, inaccessible, incompatible, or invalid cache data as best-effort load diagnostics and continues the normal build; it never publishes snapshots, calls Godot, logs, or stores source text in diagnostics.
+
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheFormat.cs
+- Defines the independent persistent-cache format version CurrentVersion=2, the unchanged exact Roslyn syntax parse profile, the single cache filename csharp_project_type_index_v2.json, and managed path composition under <project>/.godot/system_explorer/autocomplete from an already fully qualified project root.
+- Does not inspect, modify, or migrate csharp_project_type_index_v1.json; the old filename is outside the v2 path and any version-1 document presented to the loader is incompatible.
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheDocument.cs
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheFileEntry.cs
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheTypeEntry.cs
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheGlobalUsingEntry.cs
+- Define the persistent cache DTO graph separately from runtime snapshots: version/profile/UTC creation header, per-file resource path/fingerprint/diagnostic data, Roslyn-object-free type metadata, and per-file global-using kind/name/alias/script-path data.
+- DTO instances are constructed and consumed only as plain managed data between the explicit cache JSON codec and CSharpProjectIndexCacheConverter; they are never passed to reflection-based JsonSerializer serialization or deserialization.
+- Persist only global using directives extracted from verified disk files; active-document completion context, active unsaved source text, global physical paths, tokens, syntax trees/nodes, source diagnostics, Godot objects, delegates, plugin references, and worker state are absent.
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheJsonCodec.cs
+- Owns the explicit cache-format-v2 JSON layout and converts only between cache DTO instances and JSON bytes/streams without owning filesystem paths, project fingerprints, workers, generations, publication, or runtime snapshot semantics.
+- Writes every v2 property explicitly with Utf8JsonWriter and reads through JsonDocument plus exact case-sensitive property extraction, required JSON-kind checks, strict integer parsing, defensive collection limits, and cancellation checks through array loops.
+- Never uses typed JsonSerializer, JsonSerializerOptions, JsonTypeInfo, or JsonSerializerContext for the cache DTO graph; read success creates fresh DTO instances that are passed onward to CSharpProjectIndexCacheConverter for existing semantic validation.
+- Is pure managed, Godot-independent, worker-safe, stateless with respect to plugin/project state, and ignores unknown extra object properties while requiring all known v2 properties.
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheConverter.cs
+- Performs explicit runtime-snapshot-to-DTO conversion for writes and defensive DTO-to-new-immutable-runtime-entry conversion for loads.
+- Validates required values, bounded/control-character-free text, res:// C# paths, fingerprints, type/global-using enum values, type/global-using script-path consistency, containing-type collections, required global-using lists, and duplicate file/global-using data before any seed entries are exposed; invalid new data rejects the whole cache through the existing best-effort model.
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexPersistentCacheStore.cs
+- Defines the pure managed System.IO filesystem store with no Godot, plugin, host, editor, completion-source, or debug-logger dependency; load/write paths must be fully qualified and retain the expected .godot/system_explorer/autocomplete directory suffix.
+- Loads defensively on a worker through a bounded 64 MiB cache-size guard and cancellable 64 KiB read steps, delegates explicit v2 JSON parsing to CSharpProjectIndexCacheJsonCodec, then validates format version/profile and invokes CSharpProjectIndexCacheConverter; missing/corrupt/incompatible/inaccessible data is ignored without publishing anything.
+- Prepares writes by converting an already-published immutable snapshot, delegating explicit JSON encoding to CSharpProjectIndexCacheJsonCodec through the existing cancellation-aware bounded UTF-8 buffer, writing that buffer to a unique same-directory generation/GUID temp file with cancellation checks between chunks, and closing it without a physical flush-to-disk barrier; preparation never replaces the public cache file.
+- Never binds plugin-defined cache DTO types through JsonSerializer and never serializes CSharpProjectIndexSnapshot directly; the codec owns JSON structure while the converter retains semantic validation.
+- Exposes only a short final prepared-temp-to-cache File.Replace/File.Move commit plus best-effort prepared-temp discard; the cache coordinator, not the store, owns the lifecycle/generation decision that permits final commit.
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCachePreparedWrite.cs
+- Defines the immutable pure-managed handoff between cache preparation and final commit, containing the generation, normalized cache path, unique temporary path, snapshot file/type counts, and preparation elapsed time without snapshot, Godot, token, worker, or plugin references.
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheCoordinator.cs
+- Owns the cache channel's single controlled Task.Run worker loop, latest published generation revision, one replaceable pending write, active-write cancellation, current worker state, and latest reportable success/failure result.
+- Implements latest-published-snapshot-wins: newer published snapshots replace pending writes and cancel or stale older writes; cancellation/stale flow is non-reportable and no FIFO of snapshots is retained.
+- Runs heavy cache preparation outside the shared lifetime gate, then rechecks shutdown acceptance, the latest project generation marked for publication, the latest requested cache generation, newer pending work, and linked cancellation immediately before entering the final commit gate.
+- Serializes the final cache commit against the project coordinator's pre-publication generation mark with a cache-private commit gate, so an older prepared write either commits before the newer project generation is published or is rejected as stale after the mark; main-thread shutdown does not acquire this gate.
+- Executes only the final File.Replace/File.Move through AutocompleteIndexLifetime.TryRunWhileActive(...), so a managed assembly unload that has already begun denies commit while unload waits only when the short atomic cache commit has already entered the lifetime gate; denied/stale/cancelled prepared writes are discarded best effort.
+- Observes all worker exceptions, never waits for cache-worker completion or heavy preparation from project indexing or the main thread, keeps the project-worker publication ordering limited to the short final commit gate, never persists active-document overlays, and never shuts down the shared AutocompleteIndexLifetime.
+
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheLoadResult.cs
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheWriteRequest.cs
+Autocomplete/Indexing/Persistence/CSharpProjectIndexCacheWriteResult.cs
+- Define bounded managed load/write status, counts, details, immutable published-snapshot write requests, explicit success/cancelled/stale/failed state, and main-thread-drainable diagnostics without cache JSON or source-code content.
+
+Autocomplete/Indexing/ActiveDocument/CSharpActiveDocumentIndexCoordinator.cs
+- Owns the active-buffer channel's separate controlled Task.Run worker loop, latest requested and published revisions, one replaceable pending request, active-build cancellation, worker state, and the latest reportable failure result.
+- Implements latest-request-wins independently of project indexing: each newer accepted revision replaces the older pending revision, cancels or makes an active older revision stale, and only the newest still-current successful revision can publish.
+- Observes worker exceptions, treats cancellation and stale success as routine non-reportable control flow, never blocks the main thread, and stops only its own requests/work during shutdown without permanently shutting the shared AutocompleteIndexLifetime.
+
+Autocomplete/Indexing/ActiveDocument/CSharpActiveDocumentIndexWorker.cs
+- Validates the normalized active .cs resource path, scans the request's in-memory source string exactly once through RoslynProjectTypeScanner.ScanDocument(...), and creates one complete immutable overlay snapshot/build result containing both declarations and completion context inside the coordinator's ThreadPool task.
+- Performs no file reads, directory inventory, Godot access, completion publication, callback, or logging; empty text produces an empty immutable type/context overlay, while recoverable syntax diagnostics still publish the namespace/using context Roslyn could reconstruct.
+
+Autocomplete/Indexing/ActiveDocument/CSharpActiveDocumentIndexRequest.cs
+- Defines the immutable managed active-buffer request containing only monotonic revision, bounded reason text, normalized script path, and the source string copied from CodeEdit on the main thread.
+- Carries no GodotObject, CodeEdit/TextEdit/ScriptEditor/Script, plugin/host reference, delegate, Callable, UI object, or main-thread callback.
+
+Autocomplete/Indexing/ActiveDocument/CSharpActiveDocumentIndexBuildResult.cs
+- Defines immutable succeeded, cancelled, stale, and failed active-document diagnostics containing revision, path, status, elapsed time, type/diagnostic counts, bounded failure detail, and an optional completed snapshot.
+- Never logs or stores source text; normal successes, superseding cancellations, and stale revisions are intentionally not reported per keystroke.
+
+Autocomplete/Indexing/ActiveDocument/CSharpActiveDocumentIndexSnapshot.cs
+- Defines the immutable published overlay snapshot with revision, normalized active script path, defensively copied read-only type list, syntax-diagnostic count, immutable CSharpDocumentCompletionContext for the current unsaved text, and initial-built state.
+- Has a static empty initial instance with an empty completion context; a successful empty type/context result is distinct from the unbuilt state so unsaved removal of the final declaration still suppresses the active file's disk symbols.
+
+Autocomplete/Indexing/ActiveDocument/CSharpActiveDocumentIndex.cs
+- Owns exactly one current CSharpActiveDocumentIndexSnapshot reference, publishes complete snapshots with Interlocked.Exchange(...), reads with Volatile.Read(...), and atomically clears back to the static empty instance.
+
+Autocomplete/Indexing/CSharpProjectIndexBuildRequest.cs
+- Defines the immutable managed worker request containing only generation, reason, already-globalized project root, already-composed global cache path, and the previous immutable snapshot.
+- Carries no GodotObject, plugin/host reference, Callable, UI object, or callback into the plugin.
+
+Autocomplete/Indexing/CSharpProjectIndexBuildResult.cs
+- Defines immutable succeeded, cancelled, stale, and failed build diagnostics including timing, inventory/reuse/reparse/retain/skip counts, type and syntax-diagnostic totals, cache-load status/read/reuse counts, bounded cache/failure details, and at most twenty stable distinct sample type names.
+- Carries a completed snapshot only for a successful build and never stores cache JSON or source-code text.
+
+Autocomplete/Indexing/CSharpProjectIndexSnapshot.cs
+- Defines the immutable published project snapshot with generation, case-insensitive read-only file map, stable read-only flattened type list, a stable immutable aggregate of ordinary global namespace usings from verified disk entries, aggregate counts, and initial-built state.
+- Deduplicates global namespace usings with StringComparer.Ordinal while preserving the first declared casing/path, then sorts them by OrdinalIgnoreCase followed by Ordinal; alias/static global usings remain per-file metadata and do not enter the first ranking aggregate.
+- Defensively copies mutable build collections before exposure and has a static empty initial instance.
+
+Autocomplete/Indexing/CSharpProjectFileInventory.cs
+- Defines the Godot-independent System.IO recursive inventory used only from the worker task.
+- Produces normalized res:// descriptors in stable order, deduplicates paths case-insensitively, excludes .godot, .git, .vs, bin, obj, and addons/system_explorer, and does not traverse reparse points or symbolic directory links.
+- Treats an unreliable overall traversal as a failed build while permitting a valid empty C# project.
+
+Autocomplete/Indexing/CSharpProjectFileDescriptor.cs
+- Defines the immutable normalized resource path, global path, file length, and UTC last-write-tick fingerprint captured by inventory.
+
+Autocomplete/Indexing/CSharpFileIndexEntry.cs
+- Defines one immutable runtime per-file index entry containing resource/global paths, its current fingerprint, read-only scanned type symbols, syntax-diagnostic count, and read-only global using directives extracted by the same Roslyn parse.
+- Persistent DTOs are converted into fresh instances of this runtime type only after validation; retained in-memory entries keep their old fingerprint/global-using data so later builds retry failed changed files.
+
+Autocomplete/Indexing/CSharpProjectTypeSymbol.cs
+- Defines the Roslyn-object-free immutable type declaration snapshot: declared name/casing, namespace, outer-to-inner containing type names, script path, type kind, generic arity, and partial/static/abstract syntax modifiers.
+
+Autocomplete/Indexing/CSharpProjectTypeKind.cs
+- Distinguishes class, struct, interface, enum, record class, and record struct declarations; an unqualified record is represented as record class.
+
+Autocomplete/Indexing/CSharpDocumentTypeScanResult.cs
+- Defines the immutable document-oriented Roslyn scan result containing defensively copied read-only type symbols, non-negative syntax-diagnostic count, CSharpDocumentCompletionContext, and per-file global using directives, without file fingerprints or Roslyn syntax objects.
+
+Autocomplete/Indexing/CSharpSyntaxParseProfile.cs
+- Defines the single shared immutable Roslyn CSharpParseOptions used by project/active-document syntax scanning and confirmation-time using planning: LanguageVersion.Latest, DocumentationMode.Parse, SourceCodeKind.Regular, and TOOLS.
+- Owns the unchanged persistent-cache parse-profile identity string so cache compatibility remains exactly v2 while scanner and confirmation planner cannot silently diverge in syntax configuration.
+
+Autocomplete/Indexing/RoslynProjectTypeScanner.cs
+- Owns the Microsoft.CodeAnalysis.CSharp syntax traversal used concurrently by disk indexing and active-buffer overlay indexing and consumes CSharpSyntaxParseProfile rather than maintaining a private parse profile.
+- ScanDocument(...) parses a supplied script path/source string once, collects top-level/nested type declarations, delegates immutable namespace/using scope construction to the injected CSharpDocumentCompletionContextBuilder, and aggregates per-file global usings from that returned context.
+- Type collection, generic arity, containing-type identity, syntax diagnostics, global-using aggregation, ScanFile(...) wrapping, and Roslyn-object-free result/snapshot behavior remain scanner-owned; the scanner no longer owns context-construction helpers.
+- ScanFile(...) reuses that same document result and only then wraps types/global usings in a fingerprinted CSharpFileIndexEntry; no second active-document parse or duplicate Roslyn traversal exists.
+- Does not create Compilation, SemanticModel, MSBuildWorkspace, metadata references, members, completion items, or retain syntax trees, syntax nodes, tokens, or other Roslyn objects in any result/snapshot.
+
+Autocomplete/Indexing/Context/CSharpDocumentCompletionContextBuilder.cs
+- Builds immutable CSharpDocumentCompletionContext namespace/using scope data from an already parsed CompilationUnitSyntax/SyntaxTree, including compilation-unit usings, block namespaces, file-scoped namespaces, nested full namespace names, using kinds, and zero-based inclusive scope line ranges.
+- Preserves namespace, alias, static, global namespace, global alias, and global static using kinds exactly as the previous scanner-owned context construction did.
+- Is shared by project/active-document scanning and the confirmation-time CSharpUsingInsertionPlanner so both paths use the same syntactic scope model.
+- Has no Godot, worker/task, file-I/O, project-global-using aggregation, persistence, cache, snapshot-publication, or editor-mutation responsibility.
+
+Autocomplete/Indexing/Context/CSharpUsingDirectiveKind.cs
+Autocomplete/Indexing/Context/CSharpUsingDirectiveInfo.cs
+Autocomplete/Indexing/Context/CSharpNamespaceScope.cs
+Autocomplete/Indexing/Context/CSharpDocumentCompletionContext.cs
+Autocomplete/Indexing/Context/CSharpGlobalUsingInfo.cs
+Autocomplete/Indexing/Context/CSharpResolvedCompletionContext.cs
+- Define Roslyn-object-free immutable managed context values for using kind/name/alias/scope ranges, stable namespace scopes, compilation-unit usings, project global namespace usings, and resolved current/imported/global-imported namespace sets.
+- Defensively copy all exposed collections and use Ordinal namespace identity; the active context contains no source text and the project global value contains only namespace plus declaring script path.
+
+Autocomplete/Indexing/Context/CSharpCompletionContextResolver.cs
+- Defines the pure managed Godot- and Roslyn-independent caret-scope resolver used synchronously over already-published immutable values.
+- Selects the innermost containing namespace scope deterministically from zero-based line ranges, combines compilation-unit usings plus all containing namespace-scope usings, and merges project global namespace usings with StringComparer.Ordinal.
+- Treats only Namespace and GlobalNamespace directives as whole-namespace imports; alias/static variants remain preserved metadata but do not expand their target namespace. Missing/stale context returns defensive empty local sets while retaining available verified project global usings.
+
+Autocomplete/AutocompleteEditorBinding.cs
+- Owns the current ScriptEditor and bound C# CodeEdit references plus all reload-safe connection, rebind, validation, cancellation, disconnect, and theme apply/restore behavior.
+- Resolves the active editor only through ScriptEditor.GetCurrentScript(), GetCurrentEditor(), and ScriptEditorBase.GetBaseEditor(); it never matches GetOpenScripts() and GetOpenScriptEditors() by index.
+- Uses injected plugin-owned connect/disconnect delegates and named adapter method names, connects TextChanged before CodeCompletionRequested, rolls TextChanged back if the second critical connection fails, and stores CodeEdit only after both critical baseline connections succeed.
+- After the baseline binding is established, connects Control.GuiInput best effort for the confirmation bridge; GuiInput failure does not invalidate the otherwise healthy autocomplete binding, while disconnect/rebind always attempts to remove GuiInput alongside the two critical signals.
+- Treats a valid non-C# current script as a healthy unbound lifecycle state while returning failure for invalid current-editor/base-editor integration when a valid .cs script is active.
+
+Autocomplete/AutocompleteCompletionCoordinator.cs
+- Owns request orchestration, the deferred validation generation, and the current AutocompleteCompletionSession.
+- Queries registered completion sources only from CodeCompletionRequested, gathers valid source items in source/item order, and performs one native publication only after all sources have completed.
+- Executes each source call, returned-result enumeration, and item copy behind its own exception boundary; a failed source is discarded, logged through the injected DebugState-aware operation delegate with source type, active script path, and exception detail, and cannot stop later sources or escape the Godot signal callback.
+- Uses AutocompleteCompletionMatchPolicy for the initial publish decision and never republishes or re-queries sources from TextChanged.
+- Clears session state when requests are replaced, native completion is cancelled, bindings/lifecycle are invalidated, reload state resets, or shutdown runs.
+
+Autocomplete/AutocompleteCompletionSession.cs
+- Stores a defensive copy of the completion items actually published to the native CodeEdit list.
+- Uses the same injected AutocompleteCompletionMatchPolicy instance as initial publication to decide whether the native list can remain open after TextChanged.
+
+Autocomplete/AutocompleteRequestContext.cs
+- Defines the internal immutable request record containing active script resource path, extracted prefix, and the zero-based caret line/column captured from the same verified CodeEdit state used by prefix extraction.
+- Carries no CodeEdit, source text, Roslyn object, worker handle, or editor callback, keeping completion sources independent of Godot editor ownership.
+
+Autocomplete/AutocompleteCompletionItem.cs
+- Defines the internal immutable completion-item record containing Godot's completion kind, display text, unpadded insertion text, and optional strongly typed AutocompleteCompletionOptionMetadata.
+- Carries completion-session metadata without taking ownership of native publication, ranking, icons, persistence, or editor behavior.
+
+Autocomplete/AutocompletePrefixExtractor.cs
+- Defines the stateless current-line backward identifier-prefix scan used at caret 0 and returns the exact zero-based caret line/column read from that same verified CodeEdit state for completion requests.
+- Preserves the prototype rules for invalid CodeEdit objects, selections, line/column bounds, letters, digits, underscore, and empty prefixes without attempting C# parsing or semantic analysis; deferred TextChanged validation can still use the prefix-only overload.
+
+Autocomplete/AutocompleteCodeEditPresenter.cs
+- Is the sole translation boundary from AutocompleteCompletionItem to CodeEdit.AddCodeCompletionOption(...).
+- Uses the shared AutocompleteCompletionOptionMetadataCodec to encode optional System Explorer metadata into the native option value/default_value channel, while metadata-free items retain the existing three-argument AddCodeCompletionOption(...) path.
+- Applies the existing two-space visual right padding only to display text, preserves unpadded InsertText, adds all options before one final UpdateCodeCompletionOptions(true), and introduces no completion icons.
+
+Autocomplete/Confirmation/AutocompleteCompletionOptionMetadata.cs
+- Defines the small Godot-independent immutable completion-option metadata model and stable Version=2, Owner=SystemExplorer, Source=ProjectType constants.
+- Carries full syntactic item identity, simple name, namespace, namespace/containing-type qualifier, generic arity, current availability/context priority, conservative same-simple-name conflict state, and nested-type state without retaining CodeEdit, GodotObject, Roslyn, snapshot, worker, or plugin references. This metadata version is runtime completion-list data only and is unrelated to persistent cache v2.
+
+Autocomplete/Confirmation/AutocompleteCompletionOptionMetadataCodec.cs
+- Defines the Godot-aware boundary between strongly typed completion metadata and the Variant-compatible Godot.Collections.Dictionary stored in AddCodeCompletionOption(...).value.
+- Encodes metadata version 2 including has_simple_name_conflict and is_nested_type, and defensively decodes default_value only when dictionary shape, field Variant types (including real bool Variants), System Explorer ownership, identity/name, generic arity, and priority range are valid; foreign, version-1, or malformed values return false without throwing.
+
+Autocomplete/Confirmation/AutocompleteCompletionConfirmationBridge.cs
+- Defines the small Godot-aware keyboard confirmation integration for the currently verified CodeEdit and remains the sole owner of confirmation input-action matching, selected native-option lookup, metadata decode/ownership, event takeover, and completion-level diagnostics.
+- Intercepts only pressed InputEventKey events matching ui_text_completion_replace or ui_text_completion_accept with exact action matching, gives replace precedence, reads GetCodeCompletionSelectedIndex() plus GetCodeCompletionOption(...).default_value, and takes ownership only for decoded System Explorer ProjectType metadata.
+- Delegates the project-type confirmation transaction to AutocompleteProjectTypeConfirmationService and calls AcceptEvent() only after that service reports one successful native ConfirmCodeCompletion(...); a failure before successful confirmation leaves the event unaccepted for native fallback.
+- Never parses display text, hardcodes Enter/Tab keycodes, uses TextChanged acceptance heuristics, or intercepts mouse/double-click; native/foreign options and malformed metadata remain entirely Godot-owned.
+
+Autocomplete/Confirmation/AutocompleteProjectTypeConfirmationService.cs
+- Owns conservative project-type confirmation policy after bridge ownership is established: priority 0-3 confirmations remain native-only; automatic using is considered only for priority-4 unique top-level types with a non-empty namespace and exactly one caret.
+- Reads the current zero-based caret line and CodeEdit.Text before native confirmation only for an eligible keyboard confirmation, asks CSharpUsingInsertionPlanner for a fresh caret-aware read-only plan, and falls back to exactly one native ConfirmCodeCompletion(...) for conflicts, nested types, multi-caret, empty namespaces, already-applicable imports/current namespace, unsafe plans, or planner failures.
+- For an Insert plan, opens one outer BeginComplexOperation(), performs native ConfirmCodeCompletion(replace) first, applies only the planner's local TextEdit.InsertText(...) mutation afterward, and closes EndComplexOperation() in finally. A post-confirm insertion/close failure is contained and logged without undoing or repeating native confirmation, and the already successful confirmation remains eligible for AcceptEvent().
+
+Autocomplete/Confirmation/CSharpUsingInsertionPlan.cs
+- Defines the Godot-independent NotRequired / Insert / Unsafe plan model. Insert plans carry target namespace, exact zero-based line/column, minimal insertion text, and inserted-line count; plans never own editor mutation.
+
+Autocomplete/Confirmation/CSharpUsingInsertionPlanner.cs
+- Performs exactly one synchronous, confirmation-time Roslyn syntax parse of the current editor text with CSharpSyntaxParseProfile and returns only a read-only minimal compilation-unit using insertion plan; it has no Godot, project-index, active-document coordinator, worker, Task, persistence, or file-I/O responsibility.
+- Reuses the shared CSharpDocumentCompletionContextBuilder plus CSharpCompletionContextResolver with the current zero-based caret line and an empty project-global-using list, so freshness checks follow the same current-namespace, compilation-unit, containing namespace-scope, parent-scope, file-scoped namespace, and current-document global-using semantics as autocomplete ranking.
+- Returns NotRequired when the target is the freshly resolved current namespace or an applicable ordinary/global namespace import at the caret; alias/static directives remain non-importing for this decision, and usings in unrelated namespace scopes are ignored instead of being searched document-globally.
+- Preserves the document's first observed CRLF/LF/CR line ending, appends after existing compilation-unit usings, otherwise after extern aliases, otherwise after leading header/directive trivia and before the first compilation-unit token. Existing usings are never sorted or rewritten.
+- Uses stable line-boundary insertions where possible and returns Unsafe for ambiguous same-line layouts, invalid caret lines, or invalid namespace text rather than rewriting a wider region. Automatic-using v1 therefore remains intentionally keyboard-only and conservative.
+
+Autocomplete/IAutocompleteCompletionSource.cs
+- Defines the internal completion-source contract that receives AutocompleteRequestContext and returns an ordered read-only completion-item list.
+- Gives sources no CodeEdit access or ownership and introduces no async, caching, ranking, sorting, or deduplication policy.
+
+Autocomplete/ProjectTypeCompletionSource.cs
+- Defines the visible syntax-based project-type completion source with two read-only providers for the latest CSharpProjectIndexSnapshot and CSharpActiveDocumentIndexSnapshot, reading each provider exactly once per completion request and resolving only already-published immutable context.
+- Normalizes the request script path and applies the overlay only after it has built at least once and its non-empty path matches the request path with OrdinalIgnoreCase; it never waits for, refreshes, mutates, inventories, reads, or parses either index.
+- When the overlay applies, replaces the active file's disk declarations and global-usings with overlay declarations/context while preserving verified data from every other project file; a successful empty overlay therefore removes stale active-file declarations/imports without hiding unrelated project data.
+- Deduplicates by full syntactic identity (namespace, outer-to-inner containing types, simple name, generic arity), so partial declarations collapse while equal simple names in distinct namespaces remain separate alternatives.
+- Keeps the existing case-insensitive initial-character candidate group, then ranks active-file types, current-namespace/global-namespace types, ordinary using imports, global using imports, and all remaining project types; every group remains visible and sorting is priority, simple name OrdinalIgnoreCase, simple name Ordinal, then full identity Ordinal.
+- Uses the simple name as InsertText. Direct unambiguous types display only that name; namespace/containing-type qualifier hints are appended only when multiple candidates share the same simple name, independent of the candidate's context priority.
+- Creates per-option AutocompleteCompletionOptionMetadata from the existing full syntactic CreateTypeIdentity(...), CreateQualifier(...), symbol name/namespace/generic arity, unchanged context priority, the existing simpleNameCounts[symbol.Name] > 1 conflict grouping, and symbol.ContainingTypeNames.Count > 0 nested-type state; this is completion-session metadata only and does not alter index or persistent-cache models.
+- Maps enum declarations to Godot's verified native Enum kind and uses Class for classes/records plus struct/interface fallback because no safe dedicated Godot 4.6 kind is used; no custom icons are introduced.
+- If active completion context is absent/stale, immediately falls back to project global usings and the stable project type list without an exception, worker wait, or completion loss.
+
+Autocomplete/AutocompleteCompletionMatchPolicy.cs
+- Owns the shared stateless completion-availability rule used by both initial publication and later session validation.
+- Requires a non-whitespace prefix plus at least one case-insensitive InsertText prefix match that is strictly longer than the current prefix.
+
+Autocomplete/Styling/AutocompleteCodeEditThemeController.cs
+- Owns all native completion theme keys and the complete Apply, Restore, and Reset implementation under SystemExplorer.Autocomplete.Styling.
+- Applies only explicitly configured color, constant, or StyleBoxFlat values, is idempotent for the same editor, restores an older editor before styling a new one, and uses bulk theme override try/finally boundaries.
+- Duplicates an effective StyleBoxFlat only when at least one dormant StyleBox setting is configured and restores exact previous local overrides or removes System Explorer's override when none previously existed.
+
+Autocomplete/Styling/AutocompleteThemeDefinition.cs
+- Defines the internal nullable theme-definition model for supported completion colors, constants, and dormant StyleBoxFlat properties.
+- Null leaves the corresponding Godot value untouched; the host-created default instance configures only transparent completion_existing_color.
+
+Autocomplete/Styling/AutocompleteThemeSnapshot.cs
+- Owns the active styled CodeEdit reference and instance id plus snapshots of only the color, constant, and completion StyleBox overrides actually applied.
+- Records whether each local override previously existed and its exact prior value so restore can distinguish replacement from removal while clearing defensively for invalid editors.
 
 ## Beautify feature classes
 
@@ -340,8 +640,8 @@ EditorIntegration/ScriptEditing/OpenScriptEditorBufferGroup.cs
 
 EditorIntegration/ScriptEditing/ScriptPathUtility.cs
 - Defines the internal stateless ScriptPathUtility under SystemExplorer.EditorIntegration.ScriptEditing.
-- Owns general script-path string normalization by trimming surrounding whitespace, replacing backslashes with forward slashes, and returning an empty string for null.
-- Preserves casing and does not localize or globalize paths.
+- Owns general script-path string normalization by trimming surrounding whitespace, replacing backslashes with forward slashes, returning an empty string for null, and canonicalizing only redundant root separators immediately after the res:// prefix.
+- Preserves casing, leaves later path segments and separators unchanged, and does not localize or globalize paths.
 - Does not validate res://, .cs, or file existence and does not deduplicate collections.
 - Has no Godot, filesystem, editor-buffer, Refactor Namespace, Beautify, CSharpier, tree, or operation-specific dependencies.
 
