@@ -11,7 +11,7 @@ internal sealed class AutocompleteCompletionMatchPolicy
 		string prefix
 	)
 	{
-		if (string.IsNullOrWhiteSpace(prefix) || items == null)
+		if (prefix == null || items == null)
 			return false;
 
 		bool hasAnyMatchingItem = false;
@@ -19,14 +19,16 @@ internal sealed class AutocompleteCompletionMatchPolicy
 
 		foreach (AutocompleteCompletionItem item in items)
 		{
-			string insertText = item?.InsertText ?? "";
+			string matchText = item?.MatchText ?? "";
+			if (string.IsNullOrEmpty(matchText))
+				continue;
 
-			if (!insertText.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+			if (!matchText.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
 				continue;
 
 			hasAnyMatchingItem = true;
 
-			if (insertText.Length > prefix.Length)
+			if (matchText.Length > prefix.Length)
 				hasStrictlyLongerMatchingItem = true;
 		}
 

@@ -72,22 +72,22 @@ internal sealed class AutocompleteActiveDocumentIndexLifecycle
 			);
 	}
 
-	internal void CapturePendingText(
+	internal CSharpActiveDocumentIndexRequest CapturePendingText(
 		CodeEdit codeEdit,
 		string scriptPath,
 		string reason
 	)
 	{
 		if (_shutdown || !IsValidGodotObject(codeEdit))
-			return;
+			return null;
 
 		string normalizedPath = ScriptPathUtility.Normalize(scriptPath);
 		if (!IsCSharpScriptPath(normalizedPath))
-			return;
+			return null;
 
 		PrepareForActiveScriptPath(normalizedPath);
 		if (!NeedsCapture(normalizedPath))
-			return;
+			return null;
 
 		string sourceText;
 
@@ -98,7 +98,7 @@ internal sealed class AutocompleteActiveDocumentIndexLifecycle
 		catch (Exception exception)
 		{
 			LogCaptureFailure(normalizedPath, exception);
-			return;
+			return null;
 		}
 
 		long revision = NextRevision();
@@ -110,13 +110,14 @@ internal sealed class AutocompleteActiveDocumentIndexLifecycle
 		);
 
 		if (!_coordinator.RequestIndex(request))
-			return;
+			return null;
 
 		_lastActiveScriptPath = normalizedPath;
 		_lastCapturedScriptPath = normalizedPath;
 		_lastCapturedRevision = revision;
 		_hasCapturedCurrentBuffer = true;
 		_dirty = false;
+		return request;
 	}
 
 	internal void HandleBuildFailure(CSharpActiveDocumentIndexBuildResult result)

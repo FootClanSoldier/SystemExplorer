@@ -12,10 +12,11 @@ internal sealed record AutocompleteCompletionOptionMetadata(
 	int GenericArity,
 	int AvailabilityPriority,
 	bool HasSimpleNameConflict,
-	bool IsNestedType
+	bool IsNestedType,
+	bool UsesQualifiedInsertion
 )
 {
-	internal const int CurrentVersion = 2;
+	internal const int CurrentVersion = 3;
 	internal const string SystemExplorerOwner = "SystemExplorer";
 	internal const string ProjectTypeSource = "ProjectType";
 }

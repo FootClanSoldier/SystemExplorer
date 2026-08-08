@@ -58,14 +58,18 @@ public partial class SystemExplorerPlugin
 
 	private bool EnsureAutocompleteLifecycleCurrent()
 	{
-		return TryEnsureAutocompleteHost(out AutocompletePluginHost host)
+		bool lifecycleCurrent =
+			TryEnsureAutocompleteHost(out AutocompletePluginHost host)
 			&& host.EnsureLifecycleCurrent();
+		RefreshEditorPluginProcessingState();
+		return lifecycleCurrent;
 	}
 
 	private void ResetAutocompleteTransientStateAfterManagedAssemblyReload()
 	{
 		_autocompleteTextChangedRecoveryQueued = false;
 		_autocompleteHost?.ResetTransientState();
+		RefreshEditorPluginProcessingState();
 	}
 
 	private void ShutdownAutocomplete()
@@ -84,6 +88,8 @@ public partial class SystemExplorerPlugin
 
 		if (TryEnsureAutocompleteHost(out AutocompletePluginHost host))
 			host.HandleScriptChanged();
+
+		RefreshEditorPluginProcessingState();
 	}
 
 	private void OnAutocompleteCodeCompletionRequested()
@@ -93,6 +99,8 @@ public partial class SystemExplorerPlugin
 
 		if (TryEnsureAutocompleteHost(out AutocompletePluginHost host))
 			host.HandleCompletionRequested();
+
+		RefreshEditorPluginProcessingState();
 	}
 
 	private void OnAutocompleteCodeEditGuiInput(InputEvent inputEvent)
@@ -120,6 +128,7 @@ public partial class SystemExplorerPlugin
 		if (host != null)
 		{
 			long generation = host.BeginTextChangedValidation();
+			RefreshEditorPluginProcessingState();
 			CallDeferred(
 				nameof(ValidateAutocompleteAfterTextChangedDeferred),
 				generation
@@ -179,6 +188,60 @@ public partial class SystemExplorerPlugin
 		}
 
 		currentHost.ValidateAfterTextChanged(generation);
+		RefreshEditorPluginProcessingState();
+	}
+
+	private bool HasPendingAutocompleteProcessWork()
+	{
+		try
+		{
+			return _autocompleteHost?.HasPendingCompletionProcessWork() == true;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	private void ProcessPendingAutocompleteProcessWork()
+	{
+		if (!HasPendingAutocompleteProcessWork())
+			return;
+
+		if (
+			_editorOperationShutdownStarted
+			|| !GodotObject.IsInstanceValid(this)
+			|| !IsInsideTree()
+		)
+		{
+			ClearPendingAutocompleteProcessWork();
+			return;
+		}
+
+		if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Process Follow-up"))
+		{
+			ClearPendingAutocompleteProcessWork();
+			return;
+		}
+
+		if (!TryEnsureAutocompleteHost(out AutocompletePluginHost host))
+		{
+			ClearPendingAutocompleteProcessWork();
+			return;
+		}
+
+		host.ProcessPendingCompletionWork();
+	}
+
+	private void ClearPendingAutocompleteProcessWork()
+	{
+		try
+		{
+			_autocompleteHost?.ClearPendingCompletionProcessWork();
+		}
+		catch
+		{
+		}
 	}
 	#endregion
 }

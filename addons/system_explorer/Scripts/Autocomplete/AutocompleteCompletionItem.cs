@@ -8,6 +8,7 @@ internal sealed record AutocompleteCompletionItem(
 	CodeEdit.CodeCompletionKind Kind,
 	string DisplayText,
 	string InsertText,
+	string MatchText,
 	AutocompleteCompletionOptionMetadata Metadata = null
 );
 #endif

@@ -89,7 +89,13 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 				return false;
 
 			codeEdit.AcceptEvent();
-			LogCompletion(metadata, selectedIndex, replace, result.UsingAction);
+			LogCompletion(
+				metadata,
+				selectedIndex,
+				replace,
+				result.EffectiveReplace,
+				result.UsingAction
+			);
 			return true;
 		}
 		catch (Exception exception)
@@ -102,7 +108,8 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 	private void LogCompletion(
 		AutocompleteCompletionOptionMetadata metadata,
 		int selectedIndex,
-		bool replace,
+		bool requestedReplace,
+		bool effectiveReplace,
 		string usingAction
 	)
 	{
@@ -113,7 +120,9 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 				$"Source='{metadata?.Source ?? ""}', "
 					+ $"Name='{metadata?.Name ?? ""}', "
 					+ $"Namespace='{metadata?.NamespaceName ?? ""}', "
-					+ $"SelectedIndex={selectedIndex}, Replace={replace}, "
+					+ $"SelectedIndex={selectedIndex}, "
+					+ $"RequestedReplace={requestedReplace}, "
+					+ $"EffectiveReplace={effectiveReplace}, "
 					+ $"UsingAction='{usingAction ?? ""}'"
 			);
 		}

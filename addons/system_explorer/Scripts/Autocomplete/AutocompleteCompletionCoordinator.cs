@@ -14,6 +14,7 @@ internal sealed class AutocompleteCompletionCoordinator
 	private readonly Action<string, string> _debugLog;
 	private AutocompleteCompletionSession _session;
 	private long _validationGeneration;
+	private bool _isIssuingDormantRecoveryRequest;
 
 	internal AutocompleteCompletionCoordinator(
 		AutocompletePrefixExtractor prefixExtractor,
@@ -32,28 +33,51 @@ internal sealed class AutocompleteCompletionCoordinator
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
 	}
 
-	internal void HandleCompletionRequested(CodeEdit codeEdit, string scriptPath)
+	internal bool HandleCompletionRequested(CodeEdit codeEdit, string scriptPath)
 	{
-		_session = null;
-
 		if (
 			!_prefixExtractor.TryExtract(
 				codeEdit,
 				out string prefix,
 				out int caretLine,
-				out int caretColumn
+				out int caretColumn,
+				out AutocompleteRequestKind kind,
+				out int prefixStartColumn
 			)
 		)
 		{
-			return;
+			_session = null;
+			return false;
 		}
 
 		var request = new AutocompleteRequestContext(
 			scriptPath ?? "",
 			prefix,
 			caretLine,
-			caretColumn
+			caretColumn,
+			kind,
+			prefixStartColumn
 		);
+
+		if (
+			_session != null
+			&& _session.IsCompleteMemberAccessSession
+			&& _session.BelongsToSameAnchor(request)
+		)
+		{
+			if (_session.HasAvailableMatch(request))
+			{
+				_presenter.Publish(codeEdit, _session.PublishedItems);
+				_session.MarkActive();
+				return true;
+			}
+
+			if (_session.MarkDormant())
+				CancelNativeCompletionPreservingSession(codeEdit);
+			return false;
+		}
+
+		_session = null;
 		var completionItems = new List<AutocompleteCompletionItem>();
 
 		foreach (IAutocompleteCompletionSource completionSource in _completionSources)
@@ -90,10 +114,15 @@ internal sealed class AutocompleteCompletionCoordinator
 		}
 
 		if (!_matchPolicy.CanRemainAvailable(completionItems, prefix))
-			return;
+			return false;
 
 		_presenter.Publish(codeEdit, completionItems);
-		_session = new AutocompleteCompletionSession(completionItems, _matchPolicy);
+		_session = new AutocompleteCompletionSession(
+			completionItems,
+			request,
+			_matchPolicy
+		);
+		return true;
 	}
 
 	internal long BeginTextChangedValidation()
@@ -106,21 +135,70 @@ internal sealed class AutocompleteCompletionCoordinator
 		return generation == _validationGeneration;
 	}
 
-	internal void ValidateAfterTextChanged(CodeEdit codeEdit, long generation)
+	internal void ValidateAfterTextChanged(
+		CodeEdit codeEdit,
+		string scriptPath,
+		long generation
+	)
 	{
 		if (!IsValidationCurrent(generation))
 			return;
 
+		AutocompleteCompletionSession session = _session;
 		if (
-			_session != null
-			&& _prefixExtractor.TryExtract(codeEdit, out string prefix)
-			&& _session.CanRemainOpen(prefix)
+			session == null
+			|| !_prefixExtractor.TryExtract(
+				codeEdit,
+				out string prefix,
+				out int caretLine,
+				out int caretColumn,
+				out AutocompleteRequestKind kind,
+				out int prefixStartColumn
+			)
 		)
 		{
+			CancelCompletionAndInvalidateSession(codeEdit);
 			return;
 		}
 
-		CancelCompletion(codeEdit);
+		var request = new AutocompleteRequestContext(
+			scriptPath ?? "",
+			prefix,
+			caretLine,
+			caretColumn,
+			kind,
+			prefixStartColumn
+		);
+
+		if (
+			session.IsCompleteMemberAccessSession
+			&& session.BelongsToSameAnchor(request)
+		)
+		{
+			if (!session.HasAvailableMatch(request))
+			{
+				if (session.MarkDormant())
+					CancelNativeCompletionPreservingSession(codeEdit);
+				return;
+			}
+
+			if (!session.IsDormant)
+				return;
+
+			if (
+				!_isIssuingDormantRecoveryRequest
+				&& session.TryBeginDormantRecoveryRequest()
+			)
+			{
+				RequestDormantCompletionRecovery(codeEdit);
+			}
+			return;
+		}
+
+		if (session.CanRemainOpen(request))
+			return;
+
+		CancelCompletionAndInvalidateSession(codeEdit);
 	}
 
 	internal void InvalidatePendingValidations()
@@ -134,12 +212,37 @@ internal sealed class AutocompleteCompletionCoordinator
 		InvalidatePendingValidations();
 	}
 
-	private void CancelCompletion(CodeEdit codeEdit)
+	private void CancelNativeCompletionPreservingSession(CodeEdit codeEdit)
 	{
-		InvalidatePendingValidations();
-
 		if (IsValidGodotObject(codeEdit))
 			codeEdit.CancelCodeCompletion();
+	}
+
+	private void CancelCompletionAndInvalidateSession(CodeEdit codeEdit)
+	{
+		InvalidatePendingValidations();
+		CancelNativeCompletionPreservingSession(codeEdit);
+	}
+
+	private void RequestDormantCompletionRecovery(CodeEdit codeEdit)
+	{
+		if (_isIssuingDormantRecoveryRequest || !IsValidGodotObject(codeEdit))
+			return;
+
+		_isIssuingDormantRecoveryRequest = true;
+
+		try
+		{
+			codeEdit.RequestCodeCompletion(false);
+		}
+		catch (Exception exception)
+		{
+			LogDormantRecoveryRequestFailure(exception);
+		}
+		finally
+		{
+			_isIssuingDormantRecoveryRequest = false;
+		}
 	}
 
 	private void LogCompletionSourceFailure(
@@ -161,6 +264,21 @@ internal sealed class AutocompleteCompletionCoordinator
 		catch
 		{
 			// Debug logging must never turn an isolated source failure into a callback failure.
+		}
+	}
+
+	private void LogDormantRecoveryRequestFailure(Exception exception)
+	{
+		try
+		{
+			_debugLog(
+				"C# autocomplete dormant member recovery request failed",
+				exception?.ToString() ?? ""
+			);
+		}
+		catch
+		{
+			// Debug logging must never turn a native request failure into a callback failure.
 		}
 	}
 

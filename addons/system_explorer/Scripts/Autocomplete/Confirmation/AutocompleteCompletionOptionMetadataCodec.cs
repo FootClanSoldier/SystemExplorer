@@ -18,6 +18,7 @@ internal sealed class AutocompleteCompletionOptionMetadataCodec
 	private const string AvailabilityPriorityKey = "availability_priority";
 	private const string HasSimpleNameConflictKey = "has_simple_name_conflict";
 	private const string IsNestedTypeKey = "is_nested_type";
+	private const string UsesQualifiedInsertionKey = "uses_qualified_insertion";
 
 	internal Dictionary Encode(AutocompleteCompletionOptionMetadata metadata)
 	{
@@ -37,6 +38,7 @@ internal sealed class AutocompleteCompletionOptionMetadataCodec
 			{ AvailabilityPriorityKey, metadata.AvailabilityPriority },
 			{ HasSimpleNameConflictKey, metadata.HasSimpleNameConflict },
 			{ IsNestedTypeKey, metadata.IsNestedType },
+			{ UsesQualifiedInsertionKey, metadata.UsesQualifiedInsertion },
 		};
 	}
 
@@ -85,6 +87,11 @@ internal sealed class AutocompleteCompletionOptionMetadataCodec
 					out bool hasSimpleNameConflict
 				)
 				|| !TryGetBool(dictionary, IsNestedTypeKey, out bool isNestedType)
+				|| !TryGetBool(
+					dictionary,
+					UsesQualifiedInsertionKey,
+					out bool usesQualifiedInsertion
+				)
 			)
 			{
 				return false;
@@ -110,7 +117,8 @@ internal sealed class AutocompleteCompletionOptionMetadataCodec
 				genericArity,
 				availabilityPriority,
 				hasSimpleNameConflict,
-				isNestedType
+				isNestedType,
+				usesQualifiedInsertion
 			);
 			return true;
 		}

@@ -5,6 +5,8 @@ internal sealed record AutocompleteRequestContext(
 	string ScriptPath,
 	string Prefix,
 	int CaretLine,
-	int CaretColumn
+	int CaretColumn,
+	AutocompleteRequestKind Kind,
+	int PrefixStartColumn
 );
 #endif

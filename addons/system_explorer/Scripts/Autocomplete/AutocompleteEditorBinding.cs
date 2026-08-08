@@ -22,6 +22,7 @@ internal sealed class AutocompleteEditorBinding
 	private readonly string _completionRequestedMethodName;
 	private readonly string _guiInputMethodName;
 	private readonly Action _invalidateCompletionState;
+	private readonly AutocompleteCodeCompletionPrefixController _completionPrefixController;
 	private readonly AutocompleteCodeEditThemeController _themeController;
 
 	private ScriptEditor _scriptEditor;
@@ -36,6 +37,7 @@ internal sealed class AutocompleteEditorBinding
 		string completionRequestedMethodName,
 		string guiInputMethodName,
 		Action invalidateCompletionState,
+		AutocompleteCodeCompletionPrefixController completionPrefixController,
 		AutocompleteCodeEditThemeController themeController
 	)
 	{
@@ -58,6 +60,9 @@ internal sealed class AutocompleteEditorBinding
 		_invalidateCompletionState =
 			invalidateCompletionState
 			?? throw new ArgumentNullException(nameof(invalidateCompletionState));
+		_completionPrefixController =
+			completionPrefixController
+			?? throw new ArgumentNullException(nameof(completionPrefixController));
 		_themeController =
 			themeController ?? throw new ArgumentNullException(nameof(themeController));
 	}
@@ -161,8 +166,22 @@ internal sealed class AutocompleteEditorBinding
 			GuiInputDescription
 		);
 
-		_themeController.Apply(codeEdit);
-		return true;
+		if (!_completionPrefixController.Apply(codeEdit))
+		{
+			DisconnectCodeEdit(cancelCompletion: true);
+			return false;
+		}
+
+		try
+		{
+			_themeController.Apply(codeEdit);
+			return true;
+		}
+		catch
+		{
+			DisconnectCodeEdit(cancelCompletion: true);
+			throw;
+		}
 	}
 
 	internal bool TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath)
@@ -201,6 +220,7 @@ internal sealed class AutocompleteEditorBinding
 		DisconnectScriptEditor();
 		_codeEdit = null;
 		_scriptEditor = null;
+		_completionPrefixController.Reset();
 		_themeController.Reset();
 	}
 
@@ -235,6 +255,7 @@ internal sealed class AutocompleteEditorBinding
 				codeEdit.CancelCodeCompletion();
 		}
 
+		_completionPrefixController.Restore(codeEdit);
 		_themeController.Restore(codeEdit);
 		_codeEdit = null;
 	}

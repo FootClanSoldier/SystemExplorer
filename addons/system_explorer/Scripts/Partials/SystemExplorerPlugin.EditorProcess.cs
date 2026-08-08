@@ -14,6 +14,15 @@ public partial class SystemExplorerPlugin
 			ClearPendingPersistentTreeStateSave();
 		}
 
+		try
+		{
+			ProcessPendingAutocompleteProcessWork();
+		}
+		catch
+		{
+			ClearPendingAutocompleteProcessWork();
+		}
+
 		bool shouldReapplyBusyCursor = false;
 
 		try
@@ -38,7 +47,9 @@ public partial class SystemExplorerPlugin
 	private void RefreshEditorPluginProcessingState(bool busyCursorNeedsProcessing)
 	{
 		TrySetEditorPluginProcessing(
-			busyCursorNeedsProcessing || HasPendingPersistentTreeStateProcessWork()
+			busyCursorNeedsProcessing
+				|| HasPendingPersistentTreeStateProcessWork()
+				|| HasPendingAutocompleteProcessWork()
 		);
 	}
 

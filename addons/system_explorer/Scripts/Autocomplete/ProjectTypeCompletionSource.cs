@@ -40,6 +40,9 @@ internal sealed class ProjectTypeCompletionSource : IAutocompleteCompletionSourc
 		AutocompleteRequestContext request
 	)
 	{
+		if (request == null || request.Kind != AutocompleteRequestKind.Identifier)
+			return EmptyItems;
+
 		CSharpProjectIndexSnapshot projectSnapshot = _projectSnapshotProvider();
 		CSharpActiveDocumentIndexSnapshot activeDocumentSnapshot =
 			_activeDocumentSnapshotProvider();
@@ -133,6 +136,20 @@ internal sealed class ProjectTypeCompletionSource : IAutocompleteCompletionSourc
 		}
 
 		orderedCandidates.Sort(TypeCandidateComparer.Instance);
+		var qualifiedInsertionCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+		foreach (TypeCandidate candidate in orderedCandidates)
+		{
+			string qualifiedInsertion = CreateQualifiedTopLevelInsertion(
+				candidate.Symbol
+			);
+			if (string.IsNullOrWhiteSpace(qualifiedInsertion))
+				continue;
+
+			qualifiedInsertionCounts.TryGetValue(qualifiedInsertion, out int count);
+			qualifiedInsertionCounts[qualifiedInsertion] = count + 1;
+		}
+
 		var completionItems = new List<AutocompleteCompletionItem>(
 			orderedCandidates.Count
 		);
@@ -141,6 +158,20 @@ internal sealed class ProjectTypeCompletionSource : IAutocompleteCompletionSourc
 		{
 			CSharpProjectTypeSymbol symbol = candidate.Symbol;
 			bool hasSimpleNameConflict = simpleNameCounts[symbol.Name] > 1;
+			bool isNestedType = symbol.ContainingTypeNames.Count > 0;
+			string qualifiedInsertion = CreateQualifiedTopLevelInsertion(symbol);
+			bool usesQualifiedInsertion =
+				hasSimpleNameConflict
+				&& !isNestedType
+				&& !string.IsNullOrWhiteSpace(qualifiedInsertion)
+				&& qualifiedInsertionCounts.TryGetValue(
+					qualifiedInsertion,
+					out int qualifiedInsertionCount
+				)
+				&& qualifiedInsertionCount == 1;
+			string insertText = usesQualifiedInsertion
+				? qualifiedInsertion
+				: symbol.Name;
 			string displayText = CreateDisplayText(symbol, hasSimpleNameConflict);
 			string identity = CreateTypeIdentity(symbol);
 			string qualifier = CreateQualifier(symbol);
@@ -155,13 +186,15 @@ internal sealed class ProjectTypeCompletionSource : IAutocompleteCompletionSourc
 				symbol.GenericArity,
 				candidate.Priority,
 				hasSimpleNameConflict,
-				symbol.ContainingTypeNames.Count > 0
+				isNestedType,
+				usesQualifiedInsertion
 			);
 
 			completionItems.Add(
 				new AutocompleteCompletionItem(
 					MapCompletionKind(symbol.Kind),
 					displayText,
+					insertText,
 					symbol.Name,
 					metadata
 				)
@@ -179,7 +212,7 @@ internal sealed class ProjectTypeCompletionSource : IAutocompleteCompletionSourc
 	)
 	{
 		if (
-			type == null
+			!IsSupportedVisibleProjectType(type)
 			|| string.IsNullOrWhiteSpace(type.Name)
 			|| !type.Name.StartsWith(
 				initialCharacter,
@@ -205,6 +238,11 @@ internal sealed class ProjectTypeCompletionSource : IAutocompleteCompletionSourc
 			existing.Symbol = type;
 			existing.BelongsToActiveScript = true;
 		}
+	}
+
+	private static bool IsSupportedVisibleProjectType(CSharpProjectTypeSymbol type)
+	{
+		return type != null && type.ContainingTypeNames.Count == 0;
 	}
 
 	private static IReadOnlyList<CSharpGlobalUsingInfo> CreateEffectiveProjectGlobalUsings(
@@ -328,6 +366,24 @@ internal sealed class ProjectTypeCompletionSource : IAutocompleteCompletionSourc
 		return string.IsNullOrWhiteSpace(qualifier)
 			? symbol.Name
 			: $"{symbol.Name}  {qualifier}";
+	}
+
+	private static string CreateQualifiedTopLevelInsertion(
+		CSharpProjectTypeSymbol symbol
+	)
+	{
+		if (
+			symbol == null
+			|| string.IsNullOrWhiteSpace(symbol.Name)
+			|| symbol.ContainingTypeNames.Count > 0
+		)
+		{
+			return "";
+		}
+
+		return string.IsNullOrWhiteSpace(symbol.NamespaceName)
+			? $"global::{symbol.Name}"
+			: $"global::{symbol.NamespaceName}.{symbol.Name}";
 	}
 
 	private static string CreateQualifier(CSharpProjectTypeSymbol symbol)

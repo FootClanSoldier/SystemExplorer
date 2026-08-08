@@ -31,9 +31,10 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		if (metadata == null)
 			throw new ArgumentNullException(nameof(metadata));
 
+		bool effectiveReplace = replace || metadata.UsesQualifiedInsertion;
 		string usingAction = DetermineEligibilityAction(codeEdit, metadata);
 		if (!string.Equals(usingAction, UsingActionEligible, StringComparison.Ordinal))
-			return ConfirmNativeOnly(codeEdit, replace, usingAction);
+			return ConfirmNativeOnly(codeEdit, effectiveReplace, usingAction);
 
 		CSharpUsingInsertionPlan plan;
 		try
@@ -48,17 +49,17 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		catch (Exception exception)
 		{
 			LogPlannerFailure(metadata, exception);
-			return ConfirmNativeOnly(codeEdit, replace, UsingActionPlannerUnsafe);
+			return ConfirmNativeOnly(codeEdit, effectiveReplace, UsingActionPlannerUnsafe);
 		}
 
 		if (plan == null || plan.Kind == CSharpUsingInsertionPlanKind.Unsafe)
 		{
 			LogPlannerUnsafe(metadata, plan);
-			return ConfirmNativeOnly(codeEdit, replace, UsingActionPlannerUnsafe);
+			return ConfirmNativeOnly(codeEdit, effectiveReplace, UsingActionPlannerUnsafe);
 		}
 
 		if (plan.Kind == CSharpUsingInsertionPlanKind.NotRequired)
-			return ConfirmNativeOnly(codeEdit, replace, UsingActionNotRequired);
+			return ConfirmNativeOnly(codeEdit, effectiveReplace, UsingActionNotRequired);
 
 		return ConfirmWithUsingInsertion(codeEdit, metadata, replace, plan);
 	}
@@ -103,7 +104,8 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 				confirmationSucceeded,
 				confirmationSucceeded
 					? UsingActionFailedAfterConfirmation
-					: UsingActionConfirmationFailed
+					: UsingActionConfirmationFailed,
+				replace
 			);
 		}
 		finally
@@ -125,7 +127,8 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 
 		return new AutocompleteProjectTypeConfirmationResult(
 			confirmationSucceeded,
-			usingAction
+			usingAction,
+			replace
 		);
 	}
 
@@ -136,7 +139,11 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 	)
 	{
 		codeEdit.ConfirmCodeCompletion(replace);
-		return new AutocompleteProjectTypeConfirmationResult(true, usingAction);
+		return new AutocompleteProjectTypeConfirmationResult(
+			true,
+			usingAction,
+			replace
+		);
 	}
 
 	private static string DetermineEligibilityAction(
@@ -267,6 +274,7 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 
 internal sealed record AutocompleteProjectTypeConfirmationResult(
 	bool ConfirmationSucceeded,
-	string UsingAction
+	string UsingAction,
+	bool EffectiveReplace
 );
 #endif
