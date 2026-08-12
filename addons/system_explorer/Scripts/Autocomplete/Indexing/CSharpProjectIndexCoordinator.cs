@@ -9,6 +9,8 @@ namespace SystemExplorer.Autocomplete.Indexing;
 
 internal sealed class CSharpProjectIndexCoordinator
 {
+	private const string WorkerKind = "ProjectIndex";
+
 	private readonly object _sync = new();
 	private readonly object _publicationGate = new();
 	private readonly AutocompleteIndexLifetime _lifetime;
@@ -176,7 +178,7 @@ internal sealed class CSharpProjectIndexCoordinator
 			_workerRunning
 			|| _pendingRequest == null
 			|| _stopAcceptingRequests
-			|| !_lifetime.TryBeginWorker(out CancellationToken shutdownToken)
+			|| !_lifetime.TryBeginWorker(WorkerKind, out CancellationToken shutdownToken)
 		)
 		{
 			return;
@@ -195,7 +197,7 @@ internal sealed class CSharpProjectIndexCoordinator
 			_workerTask = null;
 			_pendingRequest = null;
 			_latestCompletedBuildResult = CreateUnexpectedLoopFailureResult(exception);
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 		}
 	}
 
@@ -276,7 +278,7 @@ internal sealed class CSharpProjectIndexCoordinator
 				}
 			}
 
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 			StartWorkerLoopIfPending();
 		}
 	}

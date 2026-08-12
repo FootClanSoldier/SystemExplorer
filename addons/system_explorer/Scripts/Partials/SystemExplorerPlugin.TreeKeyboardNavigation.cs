@@ -13,7 +13,25 @@ public partial class SystemExplorerPlugin
 		Right,
 	}
 
+	private enum TreeKeyboardNavigationPersistenceKeyState
+	{
+		None = 0,
+		Up = 1 << 0,
+		Down = 1 << 1,
+		Left = 1 << 2,
+		Right = 1 << 3,
+	}
+
 	private Key? _pendingKeyboardControlTransitionKey;
+	private TreeKeyboardNavigationPersistenceKeyState
+		_heldTreeKeyboardNavigationPersistenceKeys;
+
+	private bool IsTreeKeyboardNavigationBurstActive =>
+		_heldTreeKeyboardNavigationPersistenceKeys
+		!= TreeKeyboardNavigationPersistenceKeyState.None;
+
+	private bool IsTreeKeyboardNavigationPersistenceDeferred =>
+		IsTreeKeyboardNavigationBurstActive;
 
 	private bool HandleGlobalDockAndFilteredTreeKeyboardInput(
 		InputEvent inputEvent
@@ -58,6 +76,8 @@ public partial class SystemExplorerPlugin
 
 		if (!handled)
 			return false;
+
+		RegisterTreeKeyboardNavigationPersistenceKey(keyEvent);
 
 		GetViewport().SetInputAsHandled();
 		return true;
@@ -150,7 +170,7 @@ public partial class SystemExplorerPlugin
 				if (keyEvent.Echo && !isTransitionContinuationEcho)
 					return true;
 
-				return TryEnterTreeContextFromScriptFilterInput();
+				return TryEnterTreeContextFromScriptFilterInput(keyEvent);
 
 			default:
 				return false;
@@ -158,7 +178,9 @@ public partial class SystemExplorerPlugin
 	}
 
 
-	private bool TryEnterTreeContextFromScriptFilterInput()
+	private bool TryEnterTreeContextFromScriptFilterInput(
+		InputEventKey keyEvent
+	)
 	{
 		if (!TryGetFirstVisibleTreeItem(out TreeItem firstVisibleItem))
 			return true;
@@ -166,7 +188,10 @@ public partial class SystemExplorerPlugin
 		TreeItem selectedItem = _tree.GetSelected();
 
 		if (!IsVisibleTreeItem(selectedItem))
+		{
+			RegisterTreeKeyboardNavigationPersistenceKey(keyEvent);
 			SelectTreeItemFromKeyboardNavigation(firstVisibleItem);
+		}
 
 		if (TryFocusSystemExplorerHiddenTreeContext(revealDock: false))
 			RegisterKeyboardControlTransition(Key.Down);
@@ -302,8 +327,79 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
+		RegisterTreeKeyboardNavigationPersistenceKey(keyEvent);
 		ApplyTreeKeyboardNavigation(command);
 		return true;
+	}
+
+	private void RegisterTreeKeyboardNavigationPersistenceKey(
+		InputEventKey keyEvent
+	)
+	{
+		if (
+			!IsUnmodifiedPressedKeyEvent(keyEvent)
+			|| !TryGetTreeKeyboardNavigationPersistenceKeyState(
+				keyEvent.Keycode,
+				out TreeKeyboardNavigationPersistenceKeyState keyState
+			)
+		)
+		{
+			return;
+		}
+
+		_heldTreeKeyboardNavigationPersistenceKeys |= keyState;
+	}
+
+	private void ObserveTreeKeyboardNavigationPersistenceRelease(
+		InputEvent inputEvent
+	)
+	{
+		if (
+			inputEvent is not InputEventKey keyEvent
+			|| keyEvent.Pressed
+			|| !TryGetTreeKeyboardNavigationPersistenceKeyState(
+				keyEvent.Keycode,
+				out TreeKeyboardNavigationPersistenceKeyState keyState
+			)
+			|| (_heldTreeKeyboardNavigationPersistenceKeys & keyState)
+				== TreeKeyboardNavigationPersistenceKeyState.None
+		)
+		{
+			return;
+		}
+
+		_heldTreeKeyboardNavigationPersistenceKeys &= ~keyState;
+
+		if (IsTreeKeyboardNavigationBurstActive)
+			return;
+
+		if (_treeStateSaveDirty)
+			QueuePersistentTreeStateSave();
+
+		FlushPendingAutocompleteScriptChangeAfterTreeKeyboardNavigation();
+	}
+
+	private static bool TryGetTreeKeyboardNavigationPersistenceKeyState(
+		Key key,
+		out TreeKeyboardNavigationPersistenceKeyState keyState
+	)
+	{
+		keyState = key switch
+		{
+			Key.Up => TreeKeyboardNavigationPersistenceKeyState.Up,
+			Key.Down => TreeKeyboardNavigationPersistenceKeyState.Down,
+			Key.Left => TreeKeyboardNavigationPersistenceKeyState.Left,
+			Key.Right => TreeKeyboardNavigationPersistenceKeyState.Right,
+			_ => TreeKeyboardNavigationPersistenceKeyState.None,
+		};
+
+		return keyState != TreeKeyboardNavigationPersistenceKeyState.None;
+	}
+
+	private void ResetTreeKeyboardNavigationPersistenceDeferral()
+	{
+		_heldTreeKeyboardNavigationPersistenceKeys =
+			TreeKeyboardNavigationPersistenceKeyState.None;
 	}
 
 	private void ApplyTreeKeyboardNavigation(

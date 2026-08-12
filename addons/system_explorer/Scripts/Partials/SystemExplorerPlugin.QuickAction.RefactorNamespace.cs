@@ -232,19 +232,50 @@ public partial class SystemExplorerPlugin
 		if (!IsEditorOperationAccessValid(operation))
 			return;
 
-		SceneTree tree = GetTree();
+		long quiescenceToken = BeginNamespaceRefactorAutocompleteQuiescence(
+			operation.OperationName
+		);
+		try
+		{
+			LogNamespaceRefactorForegroundBoundary(
+				"BeforeProcessFrameAwait",
+				quiescenceToken
+			);
 
-		if (tree == null || !GodotObject.IsInstanceValid(tree))
-			return;
+			SceneTree tree = GetTree();
 
-		await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+			if (tree == null || !GodotObject.IsInstanceValid(tree))
+				return;
 
-		operation.CancellationToken.ThrowIfCancellationRequested();
+			await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
 
-		if (!IsEditorOperationAccessValid(operation))
-			return;
+			LogNamespaceRefactorForegroundBoundary(
+				"AfterProcessFrameAwait",
+				quiescenceToken
+			);
 
-		operationBody();
+			operation.CancellationToken.ThrowIfCancellationRequested();
+
+			if (!IsEditorOperationAccessValid(operation))
+				return;
+
+			operationBody();
+		}
+		finally
+		{
+			ScheduleNamespaceRefactorAutocompleteQuiescenceRelease(quiescenceToken);
+		}
+	}
+
+	private void LogNamespaceRefactorForegroundBoundary(
+		string phase,
+		long quiescenceToken
+	)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"Namespace Refactor foreground boundary",
+			$"Phase='{phase}', QuiescenceActive='{_namespaceRefactorAutocompleteQuiescenceActive}', QuiescenceToken='{quiescenceToken}'"
+		);
 	}
 
 	private NamespaceRefactorPluginHost CreateNamespaceRefactorHost()

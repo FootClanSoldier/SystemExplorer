@@ -75,7 +75,8 @@ internal sealed class AutocompleteActiveDocumentIndexLifecycle
 	internal CSharpActiveDocumentIndexRequest CapturePendingText(
 		CodeEdit codeEdit,
 		string scriptPath,
-		string reason
+		string reason,
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null
 	)
 	{
 		if (_shutdown || !IsValidGodotObject(codeEdit))
@@ -93,6 +94,11 @@ internal sealed class AutocompleteActiveDocumentIndexLifecycle
 
 		try
 		{
+			InvokeDiagnosticPhase(
+				diagnosticPhase,
+				"ReadActiveCodeEditText",
+				codeEdit
+			);
 			sourceText = codeEdit.Text ?? "";
 		}
 		catch (Exception exception)
@@ -221,6 +227,22 @@ internal sealed class AutocompleteActiveDocumentIndexLifecycle
 		}
 
 		return _revision;
+	}
+
+	private static void InvokeDiagnosticPhase(
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase,
+		string phase,
+		CodeEdit codeEdit
+	)
+	{
+		try
+		{
+			diagnosticPhase?.Invoke(phase ?? "", null, codeEdit);
+		}
+		catch
+		{
+			// Diagnostic observation must not affect active-document capture.
+		}
 	}
 
 	private void LogCaptureFailure(string scriptPath, Exception exception)

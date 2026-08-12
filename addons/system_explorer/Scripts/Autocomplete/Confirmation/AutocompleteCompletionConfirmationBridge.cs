@@ -28,8 +28,14 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
 	}
 
-	internal bool TryHandleGuiInput(CodeEdit codeEdit, InputEvent inputEvent)
+	internal bool TryHandleGuiInput(
+		CodeEdit codeEdit,
+		InputEvent inputEvent,
+		out AutocompleteDeferredUsingInsertionCandidate deferredUsingInsertionCandidate
+	)
 	{
+		deferredUsingInsertionCandidate = null;
+
 		if (codeEdit == null || inputEvent == null)
 			return false;
 		if (inputEvent is not InputEventKey keyEvent)
@@ -96,10 +102,22 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 				result.EffectiveReplace,
 				result.UsingAction
 			);
+
+			if (result.DeferredUsingInsertionPlan != null)
+			{
+				deferredUsingInsertionCandidate =
+					new AutocompleteDeferredUsingInsertionCandidate(
+						metadata.Name ?? "",
+						metadata.NamespaceName ?? "",
+						result.DeferredUsingInsertionPlan
+					);
+			}
+
 			return true;
 		}
 		catch (Exception exception)
 		{
+			deferredUsingInsertionCandidate = null;
 			LogFailure(exception, confirmationSucceeded);
 			return confirmationSucceeded;
 		}

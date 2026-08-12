@@ -186,13 +186,23 @@ public partial class SystemExplorerPlugin
 
 	private void OnScriptEditorScriptChanged(Script script)
 	{
-		if (!EnsureManagedAssemblyStateCurrent("Script Editor Changed"))
-			return;
+		EnterAutocompleteScriptEditorChangedCallbackScope();
+		try
+		{
+			LogScriptEditorCallbackEntry("ScriptEditorSyncScriptChanged", script);
 
-		if (!_followActiveScript || IsScriptEditorSyncSuppressed())
-			return;
+			if (!EnsureManagedAssemblyStateCurrent("Script Editor Changed"))
+				return;
 
-		QueueScriptEditorSyncToActiveScript();
+			if (!_followActiveScript || IsScriptEditorSyncSuppressed())
+				return;
+
+			QueueScriptEditorSyncToActiveScript();
+		}
+		finally
+		{
+			ExitAutocompleteScriptEditorChangedCallbackScope();
+		}
 	}
 
 	private void OnScriptEditorSyncPollTimerTimeout()

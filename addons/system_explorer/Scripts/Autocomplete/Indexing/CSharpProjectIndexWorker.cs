@@ -236,14 +236,13 @@ internal sealed class CSharpProjectIndexWorker
 	{
 		entry = null;
 		failureDetail = "";
+		string sourceText;
 
 		try
 		{
 			cancellationToken.ThrowIfCancellationRequested();
-			string sourceText = File.ReadAllText(file.GlobalPath, Encoding.UTF8);
+			sourceText = File.ReadAllText(file.GlobalPath, Encoding.UTF8);
 			cancellationToken.ThrowIfCancellationRequested();
-			entry = _typeScanner.ScanFile(file, sourceText, cancellationToken);
-			return true;
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
 		{
@@ -251,12 +250,34 @@ internal sealed class CSharpProjectIndexWorker
 		}
 		catch (Exception exception) when (IsExpectedFileReadException(exception))
 		{
-			failureDetail = CreateFileFailureDetail(file.ResourcePath, exception);
+			failureDetail = CreateFileReadFailureDetail(file.ResourcePath, exception);
 			return false;
 		}
 		catch (Exception exception)
 		{
-			failureDetail = CreateFileFailureDetail(file.ResourcePath, exception);
+			failureDetail = CreateUnexpectedFileReadFailureDetail(
+				file.ResourcePath,
+				exception
+			);
+			return false;
+		}
+
+		try
+		{
+			entry = _typeScanner.ScanFile(file, sourceText, cancellationToken);
+			return true;
+		}
+		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+		{
+			throw;
+		}
+		catch (Exception exception)
+		{
+			failureDetail = CreateUnexpectedScanFailureDetail(
+				file.ResourcePath,
+				sourceText,
+				exception
+			);
 			return false;
 		}
 	}
@@ -371,12 +392,51 @@ internal sealed class CSharpProjectIndexWorker
 		);
 	}
 
-	private static string CreateFileFailureDetail(
+	private static string CreateFileReadFailureDetail(
 		string resourcePath,
 		Exception exception
 	)
 	{
-		return $"{resourcePath}: {CreateExceptionDetail("File indexing failed", exception)}";
+		return $"{resourcePath}: Phase='ReadFile', {CreateExceptionDetail("File indexing failed", exception)}";
+	}
+
+	private static string CreateUnexpectedFileReadFailureDetail(
+		string resourcePath,
+		Exception exception
+	)
+	{
+		string exceptionDetail = NormalizeSingleLine(
+			exception?.ToString(),
+			maximumLength: 1200,
+			fallback: "Exception details unavailable."
+		);
+		return NormalizeSingleLine(
+			$"{resourcePath}: Phase='ReadFile', Unexpected file read failure, Exception='{exceptionDetail}'",
+			maximumLength: 1600,
+			fallback: $"{resourcePath}: Phase='ReadFile', Unexpected file read failure."
+		);
+	}
+
+	private static string CreateUnexpectedScanFailureDetail(
+		string resourcePath,
+		string sourceText,
+		Exception exception
+	)
+	{
+		string runtimeContext = CSharpRoslynRuntimeDiagnostics.CreateParseFailureContext(
+			sourceText,
+			CSharpSyntaxParseProfile.ParseOptions
+		);
+		string exceptionDetail = NormalizeSingleLine(
+			exception?.ToString(),
+			maximumLength: 4000,
+			fallback: "Exception details unavailable."
+		);
+		return NormalizeSingleLine(
+			$"{resourcePath}: Phase='ScanFile', {runtimeContext}, Exception='{exceptionDetail}'",
+			maximumLength: 2600,
+			fallback: $"{resourcePath}: Phase='ScanFile', Unexpected scan failure."
+		);
 	}
 
 	private static string CreateExceptionDetail(string prefix, Exception exception)
@@ -387,6 +447,25 @@ internal sealed class CSharpProjectIndexWorker
 			message = message.Substring(0, 400);
 
 		return $"{prefix}: {exception?.GetType().Name ?? "Exception"}: {message}";
+	}
+
+	private static string NormalizeSingleLine(
+		string detail,
+		int maximumLength,
+		string fallback
+	)
+	{
+		if (string.IsNullOrWhiteSpace(detail))
+			return fallback;
+
+		string normalized = detail
+			.Replace('\r', ' ')
+			.Replace('\n', ' ')
+			.Replace('\t', ' ')
+			.Trim();
+		return normalized.Length <= maximumLength
+			? normalized
+			: normalized.Substring(0, maximumLength);
 	}
 }
 #endif

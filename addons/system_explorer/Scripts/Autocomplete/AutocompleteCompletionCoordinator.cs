@@ -12,6 +12,7 @@ internal sealed class AutocompleteCompletionCoordinator
 	private readonly AutocompleteCompletionMatchPolicy _matchPolicy;
 	private readonly IReadOnlyList<IAutocompleteCompletionSource> _completionSources;
 	private readonly Action<string, string> _debugLog;
+	private readonly bool _cancelNativeCompletionOnTextChangedValidation;
 	private AutocompleteCompletionSession _session;
 	private long _validationGeneration;
 	private bool _isIssuingDormantRecoveryRequest;
@@ -21,7 +22,8 @@ internal sealed class AutocompleteCompletionCoordinator
 		AutocompleteCodeEditPresenter presenter,
 		AutocompleteCompletionMatchPolicy matchPolicy,
 		IReadOnlyList<IAutocompleteCompletionSource> completionSources,
-		Action<string, string> debugLog
+		Action<string, string> debugLog,
+		bool cancelNativeCompletionOnTextChangedValidation
 	)
 	{
 		_prefixExtractor =
@@ -31,6 +33,8 @@ internal sealed class AutocompleteCompletionCoordinator
 		_completionSources =
 			completionSources ?? throw new ArgumentNullException(nameof(completionSources));
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
+		_cancelNativeCompletionOnTextChangedValidation =
+			cancelNativeCompletionOnTextChangedValidation;
 	}
 
 	internal bool HandleCompletionRequested(CodeEdit codeEdit, string scriptPath)
@@ -157,7 +161,10 @@ internal sealed class AutocompleteCompletionCoordinator
 			)
 		)
 		{
-			CancelCompletionAndInvalidateSession(codeEdit);
+			CancelCompletionAndInvalidateSessionFromTextChangedValidation(
+				codeEdit,
+				"InvalidOrMissingSessionOrPrefix"
+			);
 			return;
 		}
 
@@ -178,7 +185,12 @@ internal sealed class AutocompleteCompletionCoordinator
 			if (!session.HasAvailableMatch(request))
 			{
 				if (session.MarkDormant())
-					CancelNativeCompletionPreservingSession(codeEdit);
+				{
+					CancelNativeCompletionFromTextChangedValidation(
+						codeEdit,
+						"CompleteMemberSessionBecameDormant"
+					);
+				}
 				return;
 			}
 
@@ -198,7 +210,10 @@ internal sealed class AutocompleteCompletionCoordinator
 		if (session.CanRemainOpen(request))
 			return;
 
-		CancelCompletionAndInvalidateSession(codeEdit);
+		CancelCompletionAndInvalidateSessionFromTextChangedValidation(
+			codeEdit,
+			"OrdinarySessionCannotRemainOpen"
+		);
 	}
 
 	internal void InvalidatePendingValidations()
@@ -218,10 +233,30 @@ internal sealed class AutocompleteCompletionCoordinator
 			codeEdit.CancelCodeCompletion();
 	}
 
-	private void CancelCompletionAndInvalidateSession(CodeEdit codeEdit)
+	private void CancelCompletionAndInvalidateSessionFromTextChangedValidation(
+		CodeEdit codeEdit,
+		string reason
+	)
 	{
 		InvalidatePendingValidations();
-		CancelNativeCompletionPreservingSession(codeEdit);
+		CancelNativeCompletionFromTextChangedValidation(codeEdit, reason);
+	}
+
+	private void CancelNativeCompletionFromTextChangedValidation(
+		CodeEdit codeEdit,
+		string reason
+	)
+	{
+		if (_cancelNativeCompletionOnTextChangedValidation)
+		{
+			CancelNativeCompletionPreservingSession(codeEdit);
+			return;
+		}
+
+		if (!IsValidGodotObject(codeEdit))
+			return;
+
+		LogTextChangedValidationNativeCancellationSuppressed(reason);
 	}
 
 	private void RequestDormantCompletionRecovery(CodeEdit codeEdit)
@@ -264,6 +299,21 @@ internal sealed class AutocompleteCompletionCoordinator
 		catch
 		{
 			// Debug logging must never turn an isolated source failure into a callback failure.
+		}
+	}
+
+	private void LogTextChangedValidationNativeCancellationSuppressed(string reason)
+	{
+		try
+		{
+			_debugLog(
+				"C# autocomplete TextChanged validation native completion cancellation suppressed",
+				$"Reason='{reason ?? ""}', Enabled='False', Mode='DiagnosticIsolation', Scope='AutocompleteCompletionCoordinator.ValidateAfterTextChanged', NativeCall='Suppressed', ManagedStateTransitionRetained='True'"
+			);
+		}
+		catch
+		{
+			// Debug logging must never turn a diagnostic cancellation isolation into a callback failure.
 		}
 	}
 

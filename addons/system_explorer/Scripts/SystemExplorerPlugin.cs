@@ -463,6 +463,13 @@ public sealed class {{CLASS_NAME}}
 		_managedAssemblyRecoveryReason = "";
 		_editorOperationLifetime?.Dispose();
 		_editorOperationLifetime = null;
+
+		if (_debugLogger != null)
+		{
+			_debugLogger.Log("System Explorer debug logging shutdown completed.");
+			_debugLogger.Dispose();
+			_debugLogger = null;
+		}
 	}
 
 	#endregion

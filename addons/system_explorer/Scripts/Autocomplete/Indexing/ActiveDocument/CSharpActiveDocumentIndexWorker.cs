@@ -23,6 +23,8 @@ internal sealed class CSharpActiveDocumentIndexWorker
 	{
 		ArgumentNullException.ThrowIfNull(request);
 		var stopwatch = Stopwatch.StartNew();
+		string failurePhase = "ValidateRequest";
+		string sourceText = request.SourceText ?? "";
 
 		try
 		{
@@ -39,13 +41,15 @@ internal sealed class CSharpActiveDocumentIndexWorker
 				);
 			}
 
+			failurePhase = "ScanDocument";
 			CSharpDocumentTypeScanResult scanResult = _typeScanner.ScanDocument(
 				scriptPath,
-				request.SourceText ?? "",
+				sourceText,
 				cancellationToken
 			);
 			cancellationToken.ThrowIfCancellationRequested();
 
+			failurePhase = "CreateSnapshot";
 			var snapshot = new CSharpActiveDocumentIndexSnapshot(
 				request.Revision,
 				scriptPath,
@@ -89,7 +93,7 @@ internal sealed class CSharpActiveDocumentIndexWorker
 				request,
 				ScriptPathUtility.Normalize(request.ScriptPath),
 				stopwatch,
-				CreateExceptionDetail("Unexpected active-document index failure", exception)
+				CreateUnexpectedFailureDetail(failurePhase, sourceText, exception)
 			);
 		}
 	}
@@ -124,14 +128,47 @@ internal sealed class CSharpActiveDocumentIndexWorker
 			&& scriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
 	}
 
-	private static string CreateExceptionDetail(string prefix, Exception exception)
+	private static string CreateUnexpectedFailureDetail(
+		string failurePhase,
+		string sourceText,
+		Exception exception
+	)
 	{
-		string message = exception?.Message ?? "Unknown error.";
-		message = message.Replace('\r', ' ').Replace('\n', ' ').Trim();
-		if (message.Length > 500)
-			message = message.Substring(0, 500);
+		string runtimeContext = CSharpRoslynRuntimeDiagnostics.CreateParseFailureContext(
+			sourceText,
+			CSharpSyntaxParseProfile.ParseOptions
+		);
+		string exceptionDetail = NormalizeSingleLine(
+			exception?.ToString(),
+			maximumLength: 4000,
+			fallback: "Exception details unavailable."
+		);
 
-		return $"{prefix}: {exception?.GetType().Name ?? "Exception"}: {message}";
+		return NormalizeSingleLine(
+			$"Unexpected active-document index failure: Phase='{failurePhase}', "
+				+ $"{runtimeContext}, Exception='{exceptionDetail}'",
+			maximumLength: 2600,
+			fallback: "Unexpected active-document index failure."
+		);
+	}
+
+	private static string NormalizeSingleLine(
+		string detail,
+		int maximumLength,
+		string fallback
+	)
+	{
+		if (string.IsNullOrWhiteSpace(detail))
+			return fallback;
+
+		string normalized = detail
+			.Replace('\r', ' ')
+			.Replace('\n', ' ')
+			.Replace('\t', ' ')
+			.Trim();
+		return normalized.Length <= maximumLength
+			? normalized
+			: normalized.Substring(0, maximumLength);
 	}
 }
 #endif

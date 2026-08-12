@@ -56,6 +56,9 @@ internal sealed class CSharpSemanticMemberWorker
 			request.ActiveDocument?.ScriptPath
 		);
 		bool baseCompilationBuilt = false;
+		string failurePhase = "ValidateRequest";
+		string activeSourceText = request.ActiveDocument?.SourceText ?? "";
+		CSharpParseOptions activeParseOptions = null;
 
 		try
 		{
@@ -77,6 +80,7 @@ internal sealed class CSharpSemanticMemberWorker
 				);
 			}
 
+			failurePhase = "BuildBaseCompilation";
 			if (!HasBaseFor(request.ProjectStateVersion, projectGeneration))
 			{
 				BuildBaseCompilation(request, cancellationToken);
@@ -84,6 +88,7 @@ internal sealed class CSharpSemanticMemberWorker
 			}
 
 			cancellationToken.ThrowIfCancellationRequested();
+			failurePhase = "ValidateActiveDocument";
 
 			if (request.ActiveDocument == null)
 			{
@@ -117,14 +122,18 @@ internal sealed class CSharpSemanticMemberWorker
 				);
 			}
 
+			failurePhase = "ParseActiveDocument";
+			activeSourceText = request.ActiveDocument.SourceText ?? "";
+			activeParseOptions = CSharpSyntaxParseProfile.ParseOptions;
 			SyntaxTree activeTree = CSharpSyntaxTree.ParseText(
-				request.ActiveDocument.SourceText ?? "",
-				CSharpSyntaxParseProfile.ParseOptions,
+				activeSourceText,
+				activeParseOptions,
 				scriptPath,
 				cancellationToken: cancellationToken
 			);
 			cancellationToken.ThrowIfCancellationRequested();
 
+			failurePhase = "ComposeActiveCompilation";
 			CSharpCompilation activeCompilation = _baseCompilation;
 			if (
 				_baseTreesByResourcePath.TryGetValue(
@@ -144,6 +153,7 @@ internal sealed class CSharpSemanticMemberWorker
 			}
 
 			cancellationToken.ThrowIfCancellationRequested();
+			failurePhase = "CreateSemanticModel";
 			SemanticModel semanticModel = activeCompilation.GetSemanticModel(
 				activeTree,
 				ignoreAccessibility: false
@@ -151,6 +161,7 @@ internal sealed class CSharpSemanticMemberWorker
 			CompilationUnitSyntax root = (CompilationUnitSyntax)activeTree.GetRoot(
 				cancellationToken
 			);
+			failurePhase = "CreateProjectSourcePathSet";
 			var projectSourcePaths = new HashSet<string>(
 				request.ProjectSnapshot.FilesByResourcePath.Keys
 					.Select(ScriptPathUtility.Normalize)
@@ -164,6 +175,7 @@ internal sealed class CSharpSemanticMemberWorker
 			var memberAccesses = new List<CSharpSemanticMemberAccess>();
 			int memberCount = 0;
 
+			failurePhase = "TraverseMemberAccesses";
 			foreach (
 				MemberAccessExpressionSyntax memberAccess in root
 					.DescendantNodes()
@@ -179,6 +191,7 @@ internal sealed class CSharpSemanticMemberWorker
 				if (memberAccess.Name == null)
 					continue;
 
+				failurePhase = "ResolveMemberAccessPosition";
 				if (
 					!TryGetMemberAccessPosition(
 						memberAccess,
@@ -189,47 +202,57 @@ internal sealed class CSharpSemanticMemberWorker
 					)
 				)
 				{
+					failurePhase = "TraverseMemberAccesses";
 					continue;
 				}
 
-				SymbolInfo receiverSymbolInfo = semanticModel.GetSymbolInfo(
-					memberAccess.Expression,
-					cancellationToken
-				);
-				if (IsTypeReceiver(receiverSymbolInfo.Symbol))
-					continue;
-
-				TypeInfo receiverTypeInfo = semanticModel.GetTypeInfo(
-					memberAccess.Expression,
-					cancellationToken
-				);
-				INamedTypeSymbol receiverType =
-					receiverTypeInfo.Type as INamedTypeSymbol
-					?? receiverTypeInfo.ConvertedType as INamedTypeSymbol;
-
+				failurePhase = "ResolveReceiver.GetSymbolInfo";
 				if (
-					receiverType == null
-					|| receiverType.TypeKind == TypeKind.Error
+					!TryResolveReceiver(
+						semanticModel,
+						memberAccess.Expression,
+						cancellationToken,
+						ref failurePhase,
+						out INamedTypeSymbol receiverType,
+						out ReceiverMode receiverMode
+					)
+				)
+				{
+					failurePhase = "TraverseMemberAccesses";
+					continue;
+				}
+
+				failurePhase = "ValidateReceiver";
+				if (
+					receiverType.TypeKind == TypeKind.Error
 					|| !IsProjectSourceType(receiverType, projectSourcePaths)
 				)
 				{
+					failurePhase = "TraverseMemberAccesses";
 					continue;
 				}
 
+				failurePhase = "LookupSymbols";
 				int lookupPosition = memberNamePosition;
 				IEnumerable<ISymbol> lookupSymbols = semanticModel.LookupSymbols(
 					lookupPosition,
 					container: receiverType,
 					includeReducedExtensionMethods: false
 				);
+				failurePhase = "CreateMembers";
 				IReadOnlyList<CSharpSemanticMemberSymbol> members = CreateMembers(
 					receiverType,
+					receiverMode,
 					lookupSymbols,
+					projectSourcePaths,
 					cancellationToken
 				);
 
 				if (members.Count == 0)
+				{
+					failurePhase = "TraverseMemberAccesses";
 					continue;
+				}
 
 				memberCount += members.Count;
 				memberAccesses.Add(
@@ -242,9 +265,11 @@ internal sealed class CSharpSemanticMemberWorker
 						members
 					)
 				);
+				failurePhase = "TraverseMemberAccesses";
 			}
 
 			cancellationToken.ThrowIfCancellationRequested();
+			failurePhase = "CreateSnapshot";
 			var snapshot = new CSharpSemanticMemberIndexSnapshot(
 				projectGeneration,
 				activeRevision,
@@ -297,7 +322,14 @@ internal sealed class CSharpSemanticMemberWorker
 				scriptPath,
 				stopwatch,
 				baseCompilationBuilt,
-				CreateExceptionDetail("Unexpected semantic member build failure", exception)
+				CreateUnexpectedFailureDetail(
+					failurePhase,
+					request,
+					projectGeneration,
+					activeSourceText,
+					activeParseOptions,
+					exception
+				)
 			);
 		}
 	}
@@ -470,11 +502,18 @@ internal sealed class CSharpSemanticMemberWorker
 
 	private static IReadOnlyList<CSharpSemanticMemberSymbol> CreateMembers(
 		INamedTypeSymbol receiverType,
+		ReceiverMode receiverMode,
 		IEnumerable<ISymbol> lookupSymbols,
+		HashSet<string> projectSourcePaths,
 		CancellationToken cancellationToken
 	)
 	{
-		INamedTypeSymbol receiverDefinition = receiverType.OriginalDefinition;
+		HashSet<ISymbol> allowedContainingTypes =
+			CreateAllowedProjectSourceContainingTypes(
+				receiverType,
+				projectSourcePaths,
+				cancellationToken
+			);
 		var membersByIdentity = new Dictionary<string, MutableMember>(StringComparer.Ordinal);
 
 		foreach (ISymbol symbol in lookupSymbols ?? Array.Empty<ISymbol>())
@@ -482,13 +521,12 @@ internal sealed class CSharpSemanticMemberWorker
 			cancellationToken.ThrowIfCancellationRequested();
 			if (
 				symbol == null
-				|| symbol.IsStatic
+				|| !IsMemberStaticStateAllowed(symbol, receiverMode)
 				|| symbol.IsImplicitlyDeclared
 				|| string.IsNullOrWhiteSpace(symbol.Name)
 				|| symbol.ContainingType == null
-				|| !SymbolEqualityComparer.Default.Equals(
-					symbol.ContainingType.OriginalDefinition,
-					receiverDefinition
+				|| !allowedContainingTypes.Contains(
+					symbol.ContainingType.OriginalDefinition
 				)
 			)
 			{
@@ -527,6 +565,31 @@ internal sealed class CSharpSemanticMemberWorker
 			.ToArray();
 	}
 
+	private static HashSet<ISymbol> CreateAllowedProjectSourceContainingTypes(
+		INamedTypeSymbol receiverType,
+		HashSet<string> projectSourcePaths,
+		CancellationToken cancellationToken
+	)
+	{
+		var allowedTypes = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
+		for (INamedTypeSymbol type = receiverType; type != null; type = type.BaseType)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			if (IsProjectSourceType(type, projectSourcePaths))
+				allowedTypes.Add(type.OriginalDefinition);
+		}
+
+		foreach (INamedTypeSymbol interfaceType in receiverType.AllInterfaces)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			if (IsProjectSourceType(interfaceType, projectSourcePaths))
+				allowedTypes.Add(interfaceType.OriginalDefinition);
+		}
+
+		return allowedTypes;
+	}
+
 	private static bool TryGetMemberKind(
 		ISymbol symbol,
 		out CSharpSemanticMemberKind kind
@@ -535,7 +598,9 @@ internal sealed class CSharpSemanticMemberWorker
 		switch (symbol)
 		{
 			case IMethodSymbol method
-				when method.MethodKind == MethodKind.Ordinary && method.Arity == 0:
+				when method.MethodKind == MethodKind.Ordinary
+					&& method.Arity == 0
+					&& !method.IsExtensionMethod:
 				kind = CSharpSemanticMemberKind.Method;
 				return true;
 			case IPropertySymbol property when !property.IsIndexer:
@@ -553,20 +618,75 @@ internal sealed class CSharpSemanticMemberWorker
 		}
 	}
 
-	private static bool IsTypeReceiver(ISymbol symbol)
+	private static bool TryResolveReceiver(
+		SemanticModel semanticModel,
+		ExpressionSyntax receiverExpression,
+		CancellationToken cancellationToken,
+		ref string failurePhase,
+		out INamedTypeSymbol receiverType,
+		out ReceiverMode receiverMode
+	)
 	{
-		if (symbol is INamedTypeSymbol)
-			return true;
+		failurePhase = "ResolveReceiver.GetSymbolInfo";
+		SymbolInfo receiverSymbolInfo = semanticModel.GetSymbolInfo(
+			receiverExpression,
+			cancellationToken
+		);
 
-		return symbol is IAliasSymbol alias && alias.Target is INamedTypeSymbol;
+		failurePhase = "ResolveReceiver.TypeReceiverCheck";
+		if (TryGetTypeReceiver(receiverSymbolInfo.Symbol, out receiverType))
+		{
+			receiverMode = ReceiverMode.Type;
+			return true;
+		}
+
+		failurePhase = "ResolveReceiver.GetTypeInfo";
+		TypeInfo receiverTypeInfo = semanticModel.GetTypeInfo(
+			receiverExpression,
+			cancellationToken
+		);
+		receiverType =
+			receiverTypeInfo.Type as INamedTypeSymbol
+			?? receiverTypeInfo.ConvertedType as INamedTypeSymbol;
+		receiverMode = ReceiverMode.Instance;
+		return receiverType != null;
+	}
+
+	private static bool TryGetTypeReceiver(
+		ISymbol symbol,
+		out INamedTypeSymbol receiverType
+	)
+	{
+		if (symbol is INamedTypeSymbol namedType)
+		{
+			receiverType = namedType;
+			return true;
+		}
+
+		if (symbol is IAliasSymbol alias && alias.Target is INamedTypeSymbol aliasedType)
+		{
+			receiverType = aliasedType;
+			return true;
+		}
+
+		receiverType = null;
+		return false;
+	}
+
+	private static bool IsMemberStaticStateAllowed(
+		ISymbol symbol,
+		ReceiverMode receiverMode
+	)
+	{
+		return receiverMode == ReceiverMode.Type ? symbol.IsStatic : !symbol.IsStatic;
 	}
 
 	private static bool IsProjectSourceType(
-		INamedTypeSymbol receiverType,
+		INamedTypeSymbol type,
 		HashSet<string> projectSourcePaths
 	)
 	{
-		INamedTypeSymbol definition = receiverType.OriginalDefinition;
+		INamedTypeSymbol definition = type.OriginalDefinition;
 
 		foreach (Location location in definition.Locations)
 		{
@@ -651,10 +771,120 @@ internal sealed class CSharpSemanticMemberWorker
 			&& scriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
 	}
 
-	private static string CreateExceptionDetail(string prefix, Exception exception)
+	private string CreateUnexpectedFailureDetail(
+		string failurePhase,
+		CSharpSemanticMemberBuildRequest request,
+		long requestedProjectGeneration,
+		string activeSourceText,
+		CSharpParseOptions activeParseOptions,
+		Exception exception
+	)
 	{
-		return $"{prefix}: {exception?.GetType().Name ?? "Exception"}: "
-			+ NormalizeMessage(exception?.Message);
+		const int maximumFailureDetailLength = 5000;
+		const int maximumContextLength = 1900;
+		const int preferredExceptionLength = 3000;
+
+		long cachedBaseProjectStateVersion = Volatile.Read(ref _baseProjectStateVersion);
+		long cachedBaseProjectGeneration = Volatile.Read(ref _baseProjectGeneration);
+		Dictionary<string, SyntaxTree> baseTreesByResourcePath = _baseTreesByResourcePath;
+		bool hasBaseForCurrentRequest = HasBaseFor(
+			request.ProjectStateVersion,
+			requestedProjectGeneration
+		);
+		CSharpParseOptions diagnosticParseOptions =
+			activeParseOptions ?? CSharpSyntaxParseProfile.ParseOptions;
+		string runtimeContext = CSharpRoslynRuntimeDiagnostics.CreateParseFailureContext(
+			activeSourceText,
+			diagnosticParseOptions
+		);
+		string context = NormalizeSingleLine(
+			$"Unexpected semantic member build failure: Phase='{failurePhase}', "
+				+ $"RequestedProjectStateVersion={request.ProjectStateVersion}, "
+				+ $"RequestedProjectGeneration={requestedProjectGeneration}, "
+				+ $"CachedBaseProjectStateVersion={cachedBaseProjectStateVersion}, "
+				+ $"CachedBaseProjectGeneration={cachedBaseProjectGeneration}, "
+				+ $"HasBaseForCurrentRequest={hasBaseForCurrentRequest}, "
+				+ $"BaseCompilationNull={_baseCompilation == null}, "
+				+ $"BaseTreeCount={baseTreesByResourcePath?.Count ?? -1}, "
+				+ runtimeContext,
+			maximumLength: maximumContextLength,
+			fallback: "Unexpected semantic member build failure."
+		);
+		const string exceptionPrefix = ", Exception='";
+		const string exceptionSuffix = "'";
+		int availableExceptionLength = Math.Max(
+			500,
+			maximumFailureDetailLength
+				- context.Length
+				- exceptionPrefix.Length
+				- exceptionSuffix.Length
+		);
+		int exceptionLength = Math.Min(
+			preferredExceptionLength,
+			availableExceptionLength
+		);
+		string exceptionDetail = NormalizeSingleLineHeadAndTail(
+			exception?.ToString(),
+			exceptionLength,
+			fallback: "Exception details unavailable."
+		);
+
+		string detail = $"{context}{exceptionPrefix}{exceptionDetail}{exceptionSuffix}";
+		return detail.Length <= maximumFailureDetailLength
+			? detail
+			: NormalizeSingleLineHeadAndTail(
+				detail,
+				maximumFailureDetailLength,
+				"Unexpected semantic member build failure."
+			);
+	}
+
+	private static string NormalizeSingleLine(
+		string detail,
+		int maximumLength,
+		string fallback
+	)
+	{
+		if (string.IsNullOrWhiteSpace(detail))
+			return fallback;
+
+		string normalized = detail
+			.Replace('\r', ' ')
+			.Replace('\n', ' ')
+			.Replace('\t', ' ')
+			.Trim();
+		return normalized.Length <= maximumLength
+			? normalized
+			: normalized.Substring(0, maximumLength);
+	}
+
+	private static string NormalizeSingleLineHeadAndTail(
+		string detail,
+		int maximumLength,
+		string fallback
+	)
+	{
+		if (string.IsNullOrWhiteSpace(detail))
+			return fallback;
+
+		string normalized = detail
+			.Replace('\r', ' ')
+			.Replace('\n', ' ')
+			.Replace('\t', ' ')
+			.Trim();
+		if (normalized.Length <= maximumLength)
+			return normalized;
+
+		const string truncationMarker = " ... <truncated> ... ";
+		if (maximumLength <= truncationMarker.Length + 2)
+			return normalized.Substring(0, Math.Max(0, maximumLength));
+
+		int remainingLength = maximumLength - truncationMarker.Length;
+		int headLength = (remainingLength * 55) / 100;
+		int tailLength = remainingLength - headLength;
+		return normalized.Substring(0, headLength)
+			+ truncationMarker
+			+ normalized.Substring(normalized.Length - tailLength, tailLength);
 	}
 
 	private static string NormalizeMessage(string message)
@@ -664,6 +894,12 @@ internal sealed class CSharpSemanticMemberWorker
 
 		string normalized = message.Replace('\r', ' ').Replace('\n', ' ').Trim();
 		return normalized.Length <= 500 ? normalized : normalized.Substring(0, 500);
+	}
+
+	private enum ReceiverMode
+	{
+		Instance,
+		Type,
 	}
 
 	private sealed class MutableMember

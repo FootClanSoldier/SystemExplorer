@@ -8,6 +8,8 @@ namespace SystemExplorer.Autocomplete.Indexing.Persistence;
 
 internal sealed class CSharpProjectIndexCacheCoordinator
 {
+	private const string WorkerKind = "ProjectIndexCache";
+
 	private readonly object _sync = new();
 	private readonly object _commitGate = new();
 	private readonly AutocompleteIndexLifetime _lifetime;
@@ -145,7 +147,7 @@ internal sealed class CSharpProjectIndexCacheCoordinator
 			_workerRunning
 			|| _pendingRequest == null
 			|| _stopAcceptingRequests
-			|| !_lifetime.TryBeginWorker(out CancellationToken shutdownToken)
+			|| !_lifetime.TryBeginWorker(WorkerKind, out CancellationToken shutdownToken)
 		)
 		{
 			return;
@@ -164,7 +166,7 @@ internal sealed class CSharpProjectIndexCacheCoordinator
 			_workerTask = null;
 			_pendingRequest = null;
 			_latestReportableWriteResult = CreateUnexpectedLoopFailureResult(exception);
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 		}
 	}
 
@@ -267,7 +269,7 @@ internal sealed class CSharpProjectIndexCacheCoordinator
 				}
 			}
 
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 			StartWorkerLoopIfPending();
 		}
 	}

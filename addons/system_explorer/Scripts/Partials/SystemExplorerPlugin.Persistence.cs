@@ -1905,11 +1905,6 @@ public partial class SystemExplorerPlugin
 				$"Status={diskReadResult.Status}, Detail='{diskReadResult.FailureDetail}'"
 			);
 
-			if (DebugState)
-				GD.PushError(
-					$"[SystemExplorer] Recovery failed. Reason='{reason}', Required='{requiredSystemName}', Status='{diskReadResult.Status}'."
-				);
-
 			return false;
 		}
 
@@ -1924,11 +1919,6 @@ public partial class SystemExplorerPlugin
 				"Recovery From Disk failed: required system missing on disk",
 				requiredSystemName
 			);
-
-			if (DebugState)
-				GD.PushError(
-					$"[SystemExplorer] Recovery failed. Required system '{requiredSystemName}' was not found on disk. Reason='{reason}'."
-				);
 
 			return false;
 		}
@@ -1950,13 +1940,6 @@ public partial class SystemExplorerPlugin
 		else
 		{
 			DebugLogger.LogOperation("Recovery From Disk Completed", $"{_systems.Count} systems");
-		}
-
-		if (DebugState)
-		{
-			GD.PushWarning(
-				$"[SystemExplorer] Recovery successful. Reason='{reason}', Required='{requiredSystemName}', Recovered Systems={_systems.Count}"
-			);
 		}
 
 		DebugLogStateSnapshot("Recovered From Disk");

@@ -236,6 +236,9 @@ public partial class SystemExplorerPlugin
 		if (_isRestoringOrRebuildingPersistentTreeState)
 			return;
 
+		if (IsTreeKeyboardNavigationPersistenceDeferred)
+			return;
+
 		if (!IsValidGodotObject(this))
 		{
 			ClearPendingPersistentTreeStateSave();
@@ -371,10 +374,23 @@ public partial class SystemExplorerPlugin
 				throw new InvalidOperationException($"Promoting the temporary tree-state file failed with '{renameError}'.");
 
 			_lastTreeStateSaveFailure = "";
-			DebugLogger.LogOperation(
-				"Persistent tree view state saved",
-				BuildPersistentTreeStateLogDetail(reason, orderedExpandedItems.Count, selectedItem)
-			);
+			if (
+				!string.Equals(
+					reason,
+					"Frame-pumped tree view state change",
+					StringComparison.Ordinal
+				)
+			)
+			{
+				DebugLogger.LogOperation(
+					"Persistent tree view state saved",
+					BuildPersistentTreeStateLogDetail(
+						reason,
+						orderedExpandedItems.Count,
+						selectedItem
+					)
+				);
+			}
 		}
 		catch (Exception exception)
 		{
@@ -947,6 +963,7 @@ public partial class SystemExplorerPlugin
 
 	private void PrepareTreeStatePersistenceForManagedAssemblyRecovery()
 	{
+		ResetTreeKeyboardNavigationPersistenceDeferral();
 		ClearPendingPersistentTreeStateSave();
 		_treeStatePersistenceShutdown = false;
 		_isRestoringOrRebuildingPersistentTreeState = false;
@@ -958,6 +975,7 @@ public partial class SystemExplorerPlugin
 		if (!_treeStatePersistenceShutdown && IsValidGodotObject(_tree))
 			SavePersistentTreeStateBestEffort("Plugin Exit");
 
+		ResetTreeKeyboardNavigationPersistenceDeferral();
 		_treeStatePersistenceShutdown = true;
 		_isRestoringOrRebuildingPersistentTreeState = false;
 		ClearPendingPersistentTreeStateSave();

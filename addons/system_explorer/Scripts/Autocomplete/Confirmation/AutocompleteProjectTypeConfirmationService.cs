@@ -8,16 +8,28 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 {
 	private readonly CSharpUsingInsertionPlanner _usingInsertionPlanner;
 	private readonly Action<string, string> _debugLog;
+	private readonly bool _automaticUsingInsertTextExecutionEnabled;
+	private readonly bool _automaticUsingDeferInsertTextAfterGuiInputEnabled;
+	private readonly bool _automaticUsingComplexOperationWrapperEnabled;
 
 	internal AutocompleteProjectTypeConfirmationService(
 		CSharpUsingInsertionPlanner usingInsertionPlanner,
-		Action<string, string> debugLog
+		Action<string, string> debugLog,
+		bool automaticUsingInsertTextExecutionEnabled,
+		bool automaticUsingDeferInsertTextAfterGuiInputEnabled,
+		bool automaticUsingComplexOperationWrapperEnabled
 	)
 	{
 		_usingInsertionPlanner =
 			usingInsertionPlanner
 			?? throw new ArgumentNullException(nameof(usingInsertionPlanner));
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
+		_automaticUsingInsertTextExecutionEnabled =
+			automaticUsingInsertTextExecutionEnabled;
+		_automaticUsingDeferInsertTextAfterGuiInputEnabled =
+			automaticUsingDeferInsertTextAfterGuiInputEnabled;
+		_automaticUsingComplexOperationWrapperEnabled =
+			automaticUsingComplexOperationWrapperEnabled;
 	}
 
 	internal AutocompleteProjectTypeConfirmationResult Confirm(
@@ -61,10 +73,112 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		if (plan.Kind == CSharpUsingInsertionPlanKind.NotRequired)
 			return ConfirmNativeOnly(codeEdit, effectiveReplace, UsingActionNotRequired);
 
-		return ConfirmWithUsingInsertion(codeEdit, metadata, replace, plan);
+		if (!_automaticUsingInsertTextExecutionEnabled)
+		{
+			return ConfirmNativeOnly(
+				codeEdit,
+				replace,
+				UsingActionAutomaticUsingMutationIsolated
+			);
+		}
+
+		if (_automaticUsingDeferInsertTextAfterGuiInputEnabled)
+			return ConfirmWithDeferredUsingInsertion(codeEdit, metadata, replace, plan);
+
+		return _automaticUsingComplexOperationWrapperEnabled
+			? ConfirmWithUsingInsertionComplexOperation(codeEdit, metadata, replace, plan)
+			: ConfirmWithUsingInsertionWithoutComplexOperation(
+				codeEdit,
+				metadata,
+				replace,
+				plan
+			);
 	}
 
-	private AutocompleteProjectTypeConfirmationResult ConfirmWithUsingInsertion(
+	private AutocompleteProjectTypeConfirmationResult ConfirmWithDeferredUsingInsertion(
+		CodeEdit codeEdit,
+		AutocompleteCompletionOptionMetadata metadata,
+		bool replace,
+		CSharpUsingInsertionPlan plan
+	)
+	{
+		bool confirmationSucceeded = false;
+
+		try
+		{
+			codeEdit.ConfirmCodeCompletion(replace);
+			confirmationSucceeded = true;
+		}
+		catch (Exception exception)
+		{
+			LogConfirmationFailure(metadata, confirmationSucceeded, exception);
+			return new AutocompleteProjectTypeConfirmationResult(
+				false,
+				UsingActionConfirmationFailed,
+				replace
+			);
+		}
+
+		return new AutocompleteProjectTypeConfirmationResult(
+			true,
+			UsingActionDeferredInsertPending,
+			replace,
+			plan
+		);
+	}
+
+	private AutocompleteProjectTypeConfirmationResult ConfirmWithUsingInsertionWithoutComplexOperation(
+		CodeEdit codeEdit,
+		AutocompleteCompletionOptionMetadata metadata,
+		bool replace,
+		CSharpUsingInsertionPlan plan
+	)
+	{
+		bool confirmationSucceeded = false;
+
+		try
+		{
+			codeEdit.ConfirmCodeCompletion(replace);
+			confirmationSucceeded = true;
+		}
+		catch (Exception exception)
+		{
+			LogConfirmationFailure(metadata, confirmationSucceeded, exception);
+			return new AutocompleteProjectTypeConfirmationResult(
+				false,
+				UsingActionConfirmationFailed,
+				replace
+			);
+		}
+
+		try
+		{
+			LogInsertTextBoundary(metadata, plan, "Begin");
+			codeEdit.InsertText(
+				plan.InsertionText,
+				plan.InsertLine,
+				plan.InsertColumn
+			);
+			LogInsertTextBoundary(metadata, plan, "Returned");
+
+			return new AutocompleteProjectTypeConfirmationResult(
+				true,
+				UsingActionInsertedWithoutComplexOperation,
+				replace
+			);
+		}
+		catch (Exception exception)
+		{
+			LogInsertionFailure(metadata, plan, exception);
+			return new AutocompleteProjectTypeConfirmationResult(
+				true,
+				UsingActionFailedAfterConfirmation,
+				replace
+			);
+		}
+	}
+
+	private AutocompleteProjectTypeConfirmationResult ConfirmWithUsingInsertionComplexOperation(
 		CodeEdit codeEdit,
 		AutocompleteCompletionOptionMetadata metadata,
 		bool replace,
@@ -129,6 +243,86 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			confirmationSucceeded,
 			usingAction,
 			replace
+		);
+	}
+
+	internal AutocompleteDeferredUsingInsertionApplyResult ApplyDeferredUsingInsertion(
+		CodeEdit codeEdit,
+		AutocompleteDeferredUsingInsertionRequest request,
+		AutocompleteDeferredUsingInsertionExecutionContext executionContext
+	)
+	{
+		if (codeEdit == null)
+			throw new ArgumentNullException(nameof(codeEdit));
+		if (request == null)
+			throw new ArgumentNullException(nameof(request));
+		if (executionContext == null)
+			throw new ArgumentNullException(nameof(executionContext));
+
+		CSharpUsingInsertionPlan plan = request.Plan;
+		if (plan == null || plan.Kind != CSharpUsingInsertionPlanKind.Insert)
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"InvalidPlan",
+				executionContext.CurrentCodeEditNativeInstanceId,
+				executionContext.CurrentScriptPath
+			);
+		}
+
+		try
+		{
+			LogDeferredInsertTextBoundary(request, executionContext, "Begin");
+			codeEdit.InsertText(
+				plan.InsertionText,
+				plan.InsertLine,
+				plan.InsertColumn
+			);
+			LogDeferredInsertTextBoundary(request, executionContext, "Returned");
+			return AutocompleteDeferredUsingInsertionApplyResult.Success(
+				executionContext.CurrentCodeEditNativeInstanceId,
+				executionContext.CurrentScriptPath
+			);
+		}
+		catch (Exception exception)
+		{
+			LogDeferredInsertionFailure(request, executionContext, exception);
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				UsingActionFailedAfterConfirmationDeferred,
+				executionContext.CurrentCodeEditNativeInstanceId,
+				executionContext.CurrentScriptPath
+			);
+		}
+	}
+
+	private void LogInsertTextBoundary(
+		AutocompleteCompletionOptionMetadata metadata,
+		CSharpUsingInsertionPlan plan,
+		string phase
+	)
+	{
+		LogDiagnostic(
+			"C# autocomplete automatic using InsertText boundary",
+			metadata,
+			$"Phase='{phase ?? ""}', InsertLine={plan?.InsertLine ?? -1}, "
+				+ $"InsertColumn={plan?.InsertColumn ?? -1}, "
+				+ $"InsertionTextLength={plan?.InsertionText?.Length ?? 0}"
+		);
+	}
+
+	private void LogDeferredInsertTextBoundary(
+		AutocompleteDeferredUsingInsertionRequest request,
+		AutocompleteDeferredUsingInsertionExecutionContext executionContext,
+		string phase
+	)
+	{
+		CSharpUsingInsertionPlan plan = request?.Plan;
+		LogDeferredDiagnostic(
+			"C# autocomplete automatic using deferred InsertText boundary",
+			request,
+			executionContext,
+			$"Phase='{phase ?? ""}', InsertLine='{plan?.InsertLine ?? -1}', "
+				+ $"InsertColumn='{plan?.InsertColumn ?? -1}', "
+				+ $"InsertionTextLength='{plan?.InsertionText?.Length ?? 0}'"
 		);
 	}
 
@@ -213,6 +407,24 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		);
 	}
 
+	private void LogDeferredInsertionFailure(
+		AutocompleteDeferredUsingInsertionRequest request,
+		AutocompleteDeferredUsingInsertionExecutionContext executionContext,
+		Exception exception
+	)
+	{
+		CSharpUsingInsertionPlan plan = request?.Plan;
+		LogDeferredDiagnostic(
+			"C# autocomplete automatic using deferred InsertText failed after confirmation",
+			request,
+			executionContext,
+			$"UsingAction='{UsingActionFailedAfterConfirmationDeferred}', "
+				+ $"InsertLine='{plan?.InsertLine ?? -1}', InsertColumn='{plan?.InsertColumn ?? -1}', "
+				+ $"InsertionTextLength='{plan?.InsertionText?.Length ?? 0}', "
+				+ $"ExceptionType='{exception?.GetType().FullName ?? ""}', Exception='{exception}'"
+		);
+	}
+
 	private void LogConfirmationFailure(
 		AutocompleteCompletionOptionMetadata metadata,
 		bool confirmationSucceeded,
@@ -260,14 +472,47 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		}
 	}
 
+	private void LogDeferredDiagnostic(
+		string operation,
+		AutocompleteDeferredUsingInsertionRequest request,
+		AutocompleteDeferredUsingInsertionExecutionContext executionContext,
+		string detail
+	)
+	{
+		try
+		{
+			_debugLog(
+				operation,
+				$"Name='{request?.CompletionName ?? ""}', Namespace='{request?.NamespaceName ?? ""}', "
+					+ $"ExpectedCodeEditNativeInstanceId='{request?.CodeEditNativeInstanceId ?? 0UL}', "
+					+ $"CurrentCodeEditNativeInstanceId='{executionContext?.CurrentCodeEditNativeInstanceId ?? 0UL}', "
+					+ $"ScriptPath='{request?.ScriptPath ?? ""}', "
+					+ $"HostInstanceToken='{executionContext?.HostInstanceToken ?? 0}', "
+					+ $"ManagedAssemblyGeneration='{executionContext?.ManagedAssemblyGeneration ?? ""}', "
+					+ $"GuiInputCallbackDepth='{executionContext?.GuiInputCallbackDepth ?? -1}', {detail}"
+			);
+		}
+		catch
+		{
+			// Diagnostics must never escape a deferred CodeEdit mutation boundary.
+		}
+	}
+
 	internal const string UsingActionNotRequired = "NotRequired";
 	internal const string UsingActionInserted = "Inserted";
+	internal const string UsingActionInsertedWithoutComplexOperation =
+		"InsertedWithoutComplexOperation";
+	internal const string UsingActionDeferredInsertPending = "DeferredInsertPending";
+	internal const string UsingActionAutomaticUsingMutationIsolated =
+		"AutomaticUsingMutationIsolated";
 	internal const string UsingActionSkippedConflict = "SkippedConflict";
 	internal const string UsingActionSkippedNestedType = "SkippedNestedType";
 	internal const string UsingActionSkippedMultiCaret = "SkippedMultiCaret";
 	internal const string UsingActionSkippedEmptyNamespace = "SkippedEmptyNamespace";
 	internal const string UsingActionPlannerUnsafe = "PlannerUnsafe";
 	internal const string UsingActionFailedAfterConfirmation = "FailedAfterConfirmation";
+	internal const string UsingActionFailedAfterConfirmationDeferred =
+		"FailedAfterConfirmationDeferred";
 	internal const string UsingActionConfirmationFailed = "ConfirmationFailed";
 	private const string UsingActionEligible = "Eligible";
 }
@@ -275,6 +520,7 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 internal sealed record AutocompleteProjectTypeConfirmationResult(
 	bool ConfirmationSucceeded,
 	string UsingAction,
-	bool EffectiveReplace
+	bool EffectiveReplace,
+	CSharpUsingInsertionPlan DeferredUsingInsertionPlan = null
 );
 #endif

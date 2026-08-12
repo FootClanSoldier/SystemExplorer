@@ -40,7 +40,7 @@ internal sealed class CSharpSemanticMemberBuildResult
 		MetadataReferenceFailureCount = Math.Max(0, metadataReferenceFailureCount);
 		ProjectFingerprintMismatchCount = Math.Max(0, projectFingerprintMismatchCount);
 		DiagnosticDetail = NormalizeDetail(diagnosticDetail, 1000);
-		FailureDetail = NormalizeDetail(failureDetail, 1000);
+		FailureDetail = NormalizeDetail(failureDetail, 5000);
 		Snapshot = snapshot;
 	}
 

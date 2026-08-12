@@ -40,10 +40,22 @@ internal sealed class AutocompletePluginHost
 	private readonly ProjectMemberCompletionSource _projectMemberCompletionSource;
 	private readonly AutocompleteCompletionOptionMetadataCodec _metadataCodec;
 	private readonly AutocompleteCompletionConfirmationBridge _confirmationBridge;
+	private readonly AutocompleteProjectTypeConfirmationService _projectTypeConfirmationService;
+	private readonly string _managedAssemblyGeneration;
+	private readonly bool _semanticMemberPipelineEnabled;
+	private readonly bool _cancelNativeCompletionOnRebind;
+	private readonly bool _activeDocumentSyntaxOverlayEnabled;
+	private readonly bool _cancelNativeCompletionOnTextChangedValidation;
+	private readonly bool _automaticUsingInsertTextExecutionEnabled;
+	private readonly bool _automaticUsingDeferInsertTextAfterGuiInputEnabled;
+	private readonly bool _automaticUsingComplexOperationWrapperEnabled;
 	private readonly Action<string, string> _debugLog;
+	private readonly Func<bool> _debugEnabled;
+	private readonly Func<long> _hostInstanceTokenProvider;
 	private bool _isIssuingForcedMemberCompletionRequest;
 
 	internal AutocompletePluginHost(
+		string managedAssemblyGeneration,
 		Func<ScriptEditor> scriptEditorProvider,
 		Func<EditorFileSystem> resourceFilesystemProvider,
 		Func<string> globalProjectRootProvider,
@@ -54,31 +66,66 @@ internal sealed class AutocompletePluginHost
 		string completionRequestedMethodName,
 		string guiInputMethodName,
 		string filesystemChangedMethodName,
-		Action<string, string> debugLog
+		Action<string, string> debugLog,
+		Action<string, string> persistentWorkerDiagnosticLog,
+		Func<bool> debugEnabled,
+		Func<long> hostInstanceTokenProvider,
+		bool semanticMemberPipelineEnabled,
+		bool cancelNativeCompletionOnRebind,
+		bool activeDocumentSyntaxOverlayEnabled,
+		bool cancelNativeCompletionOnTextChangedValidation,
+		bool automaticUsingInsertTextExecutionEnabled,
+		bool automaticUsingDeferInsertTextAfterGuiInputEnabled,
+		bool automaticUsingComplexOperationWrapperEnabled
 	)
 	{
+		_managedAssemblyGeneration = !string.IsNullOrWhiteSpace(managedAssemblyGeneration)
+			? managedAssemblyGeneration
+			: throw new ArgumentException(
+				"Managed assembly generation is required.",
+				nameof(managedAssemblyGeneration)
+			);
+		_semanticMemberPipelineEnabled = semanticMemberPipelineEnabled;
+		_cancelNativeCompletionOnRebind = cancelNativeCompletionOnRebind;
+		_activeDocumentSyntaxOverlayEnabled = activeDocumentSyntaxOverlayEnabled;
+		_cancelNativeCompletionOnTextChangedValidation =
+			cancelNativeCompletionOnTextChangedValidation;
+		_automaticUsingInsertTextExecutionEnabled =
+			automaticUsingInsertTextExecutionEnabled;
+		_automaticUsingDeferInsertTextAfterGuiInputEnabled =
+			automaticUsingDeferInsertTextAfterGuiInputEnabled;
+		_automaticUsingComplexOperationWrapperEnabled =
+			automaticUsingComplexOperationWrapperEnabled;
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
+		_debugEnabled = debugEnabled ?? throw new ArgumentNullException(nameof(debugEnabled));
+		_hostInstanceTokenProvider =
+			hostInstanceTokenProvider
+			?? throw new ArgumentNullException(nameof(hostInstanceTokenProvider));
+		Trace("C# autocomplete host constructor begin");
 		_prefixExtractor = new AutocompletePrefixExtractor();
 		_metadataCodec = new AutocompleteCompletionOptionMetadataCodec();
 		_presenter = new AutocompleteCodeEditPresenter(_metadataCodec);
 		var completionContextBuilder = new CSharpDocumentCompletionContextBuilder();
 		var completionContextResolver = new CSharpCompletionContextResolver();
-		var projectTypeConfirmationService = new AutocompleteProjectTypeConfirmationService(
+		_projectTypeConfirmationService = new AutocompleteProjectTypeConfirmationService(
 			new CSharpUsingInsertionPlanner(
 				completionContextBuilder,
 				completionContextResolver
 			),
-			_debugLog
+			_debugLog,
+			_automaticUsingInsertTextExecutionEnabled,
+			_automaticUsingDeferInsertTextAfterGuiInputEnabled,
+			_automaticUsingComplexOperationWrapperEnabled
 		);
 		_confirmationBridge = new AutocompleteCompletionConfirmationBridge(
 			_metadataCodec,
-			projectTypeConfirmationService,
+			_projectTypeConfirmationService,
 			_debugLog
 		);
 		_matchPolicy = new AutocompleteCompletionMatchPolicy();
 		_memberCompletionFollowUp = new AutocompleteMemberCompletionFollowUp();
 
-		_indexLifetime = new AutocompleteIndexLifetime();
+		_indexLifetime = new AutocompleteIndexLifetime(persistentWorkerDiagnosticLog);
 		var typeScanner = new RoslynProjectTypeScanner(completionContextBuilder);
 		var cacheJsonCodec = new CSharpProjectIndexCacheJsonCodec();
 
@@ -138,18 +185,60 @@ internal sealed class AutocompletePluginHost
 			() => _activeDocumentIndex.CurrentSnapshot
 		);
 
-		IAutocompleteCompletionSource[] completionSources =
-		{
-			_projectTypeCompletionSource,
-			_projectMemberCompletionSource,
-		};
+		IAutocompleteCompletionSource[] completionSources = _semanticMemberPipelineEnabled
+			? new IAutocompleteCompletionSource[]
+			{
+				_projectTypeCompletionSource,
+				_projectMemberCompletionSource,
+			}
+			: new IAutocompleteCompletionSource[]
+			{
+				_projectTypeCompletionSource,
+			};
 
 		_completionCoordinator = new AutocompleteCompletionCoordinator(
 			_prefixExtractor,
 			_presenter,
 			_matchPolicy,
 			completionSources,
-			_debugLog
+			_debugLog,
+			_cancelNativeCompletionOnTextChangedValidation
+		);
+
+		if (!_semanticMemberPipelineEnabled)
+		{
+			Trace(
+				"C# autocomplete semantic member pipeline isolated",
+				$"Enabled='False', Mode='DiagnosticIsolation', ProjectTypeCompletionRetained='True', ActiveDocumentSyntaxOverlayRetained='{_activeDocumentSyntaxOverlayEnabled}'"
+			);
+		}
+
+		if (!_activeDocumentSyntaxOverlayEnabled)
+		{
+			Trace(
+				"C# autocomplete active document syntax overlay isolated",
+				"Enabled='False', Mode='DiagnosticIsolation', ProjectIndexRetained='True', ProjectTypeCompletionRetained='True', ActiveCodeEditValidationRetained='True', ActiveDocumentTextCaptureRetained='False', ActiveDocumentWorkerRetained='False'"
+			);
+		}
+
+		if (!_cancelNativeCompletionOnTextChangedValidation)
+		{
+			Trace(
+				"C# autocomplete TextChanged validation native completion cancellation isolated",
+				"Enabled='False', Mode='DiagnosticIsolation', Scope='AutocompleteCompletionCoordinator.ValidateAfterTextChanged', ManagedSessionInvalidationRetained='True', DormantSessionStateRetained='True', RequestTimeCoordinatorCancellationRetained='True', ShutdownCancellationRetained='True'"
+			);
+		}
+
+		Trace(
+			"C# autocomplete automatic using execution diagnostic mode",
+			$"InsertTextExecutionEnabled='{_automaticUsingInsertTextExecutionEnabled}', "
+				+ $"DeferInsertTextAfterGuiInputEnabled='{_automaticUsingDeferInsertTextAfterGuiInputEnabled}', "
+				+ $"ComplexOperationWrapperEnabled='{_automaticUsingComplexOperationWrapperEnabled}', "
+				+ "UsingPlannerRetained='True', NativeConfirmationRetained='True', ConfirmationBridgeRetained='True', "
+				+ $"BeginComplexOperationRetained='{_automaticUsingInsertTextExecutionEnabled && !_automaticUsingDeferInsertTextAfterGuiInputEnabled && _automaticUsingComplexOperationWrapperEnabled}', "
+				+ $"UsingInsertTextRetained='{_automaticUsingInsertTextExecutionEnabled}', "
+				+ $"UsingInsertTextDeferredAfterGuiInput='{_automaticUsingInsertTextExecutionEnabled && _automaticUsingDeferInsertTextAfterGuiInputEnabled}', "
+				+ $"EndComplexOperationRetained='{_automaticUsingInsertTextExecutionEnabled && !_automaticUsingDeferInsertTextAfterGuiInputEnabled && _automaticUsingComplexOperationWrapperEnabled}'"
 		);
 
 		var themeDefinition = new AutocompleteThemeDefinition
@@ -160,6 +249,8 @@ internal sealed class AutocompletePluginHost
 		var completionPrefixController = new AutocompleteCodeCompletionPrefixController();
 
 		_editorBinding = new AutocompleteEditorBinding(
+			_managedAssemblyGeneration,
+			_cancelNativeCompletionOnRebind,
 			scriptEditorProvider,
 			connectPluginSignal,
 			disconnectPluginSignal,
@@ -169,7 +260,9 @@ internal sealed class AutocompletePluginHost
 			guiInputMethodName,
 			InvalidatePendingValidations,
 			completionPrefixController,
-			_themeController
+			_themeController,
+			_debugLog,
+			_debugEnabled
 		);
 
 		_projectIndexLifecycle = new AutocompleteProjectIndexLifecycle(
@@ -181,52 +274,101 @@ internal sealed class AutocompletePluginHost
 			_indexCoordinator,
 			_debugLog
 		);
+		Trace("C# autocomplete host constructor completed");
 	}
 
-	internal bool EnsureLifecycleCurrent()
+	internal bool EnsureLifecycleCurrent(bool refreshCodeEditBinding = true)
 	{
-		bool editorBindingCurrent = _editorBinding.EnsureLifecycleCurrent();
+		Trace(
+			"C# autocomplete host EnsureLifecycleCurrent begin",
+			$"RefreshCodeEditBinding='{refreshCodeEditBinding}'"
+		);
+		bool editorBindingCurrent = _editorBinding.EnsureLifecycleCurrent(
+			refreshCodeEditBinding
+		);
 		EnsureProjectIndexLifecycleCurrentBestEffort();
 		DrainIndexBuildResults();
 		EnsureSemanticProjectStateBestEffort();
 
-		if (editorBindingCurrent)
+		if (editorBindingCurrent && refreshCodeEditBinding)
 			CaptureActiveDocumentIfNeededBestEffort("Ensure lifecycle current");
 
 		DrainIndexBuildResults();
+		Trace(
+			"C# autocomplete host EnsureLifecycleCurrent completed",
+			$"EditorBindingCurrent='{editorBindingCurrent}', RefreshCodeEditBinding='{refreshCodeEditBinding}'"
+		);
 		return editorBindingCurrent;
 	}
 
-	internal void HandleProjectFilesystemChanged()
+	internal void HandleProjectFilesystemChanged(
+		Action<string, string> diagnosticPhase = null
+	)
 	{
+		InvokeProjectFilesystemDiagnosticPhase(
+			diagnosticPhase,
+			"ProjectRefreshRequested.Begin"
+		);
 		try
 		{
 			_projectIndexLifecycle.HandleFilesystemChanged();
+			InvokeProjectFilesystemDiagnosticPhase(
+				diagnosticPhase,
+				"ProjectRefreshRequested.Returned"
+			);
 		}
 		catch (Exception exception)
 		{
+			InvokeProjectFilesystemDiagnosticPhase(
+				diagnosticPhase,
+				"ProjectRefreshRequested.Returned",
+				$"Result='Exception', ExceptionType='{exception.GetType().Name}'"
+			);
 			_debugLog(
 				"C# autocomplete project index filesystem handling failed",
 				exception.ToString()
 			);
 		}
 
-		DrainIndexBuildResults();
-		EnsureSemanticProjectStateBestEffort();
+		DrainIndexBuildResults(diagnosticPhase);
+		EnsureSemanticProjectStateBestEffort(diagnosticPhase);
+		InvokeProjectFilesystemDiagnosticPhase(
+			diagnosticPhase,
+			"HandleProjectFilesystemChanged.Completed"
+		);
 	}
 
-	internal void HandleScriptChanged()
+	internal void HandleScriptChanged(
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null
+	)
 	{
+		InvokeScriptChangeDiagnosticPhase(
+			diagnosticPhase,
+			"HandleScriptChanged.Begin"
+		);
 		DrainIndexBuildResults();
 		_memberCompletionFollowUp.Clear();
 		_completionCoordinator.InvalidatePendingValidations();
 		_semanticMemberCoordinator.ResetActiveDocument();
 		_activeDocumentIndexLifecycle.ResetForScriptChange();
 
-		if (_editorBinding.RefreshCodeEditBinding())
-			CaptureActiveDocumentIfNeededBestEffort("Active script changed");
+		InvokeScriptChangeDiagnosticPhase(
+			diagnosticPhase,
+			"RefreshCodeEditBinding"
+		);
+		if (_editorBinding.RefreshCodeEditBinding(diagnosticPhase))
+		{
+			CaptureActiveDocumentIfNeededBestEffort(
+				"Active script changed",
+				diagnosticPhase
+			);
+		}
 
 		DrainIndexBuildResults();
+		InvokeScriptChangeDiagnosticPhase(
+			diagnosticPhase,
+			"HandleScriptChanged.Completed"
+		);
 	}
 
 	internal void HandleCompletionRequested()
@@ -259,18 +401,127 @@ internal sealed class AutocompletePluginHost
 		DrainIndexBuildResults();
 	}
 
-	internal void HandleCodeEditGuiInput(InputEvent inputEvent)
+	internal AutocompleteDeferredUsingInsertionRequest HandleCodeEditGuiInput(
+		InputEvent inputEvent
+	)
 	{
 		if (inputEvent == null)
-			return;
+			return null;
 
-		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out _))
+		if (
+			!_editorBinding.TryGetActiveCodeEdit(
+				out CodeEdit codeEdit,
+				out string scriptPath
+			)
+		)
 		{
 			_editorBinding.RefreshCodeEditBinding();
-			return;
+			return null;
 		}
 
-		_confirmationBridge.TryHandleGuiInput(codeEdit, inputEvent);
+		_confirmationBridge.TryHandleGuiInput(
+			codeEdit,
+			inputEvent,
+			out AutocompleteDeferredUsingInsertionCandidate candidate
+		);
+
+		if (candidate == null || candidate.Plan == null)
+			return null;
+
+		try
+		{
+			return new AutocompleteDeferredUsingInsertionRequest(
+				candidate.CompletionName ?? "",
+				candidate.NamespaceName ?? "",
+				ScriptPathUtility.Normalize(scriptPath),
+				codeEdit.GetInstanceId(),
+				candidate.Plan
+			);
+		}
+		catch (Exception exception)
+		{
+			_debugLog(
+				"C# autocomplete deferred using request capture failed after confirmation",
+				$"Name='{candidate.CompletionName ?? ""}', Namespace='{candidate.NamespaceName ?? ""}', ExceptionType='{exception.GetType().FullName}', Exception='{exception}'"
+			);
+			return null;
+		}
+	}
+
+	internal AutocompleteDeferredUsingInsertionApplyResult TryApplyDeferredUsingInsertion(
+		AutocompleteDeferredUsingInsertionRequest request,
+		long hostInstanceToken,
+		string managedAssemblyGeneration,
+		int guiInputCallbackDepth
+	)
+	{
+		if (request == null)
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"PluginUnavailable"
+			);
+		}
+
+		if (
+			!_editorBinding.TryGetActiveCodeEdit(
+				out CodeEdit codeEdit,
+				out string scriptPath
+			)
+		)
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"CodeEditChanged"
+			);
+		}
+
+		ulong currentCodeEditNativeInstanceId;
+		try
+		{
+			currentCodeEditNativeInstanceId = codeEdit.GetInstanceId();
+		}
+		catch
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"CodeEditChanged"
+			);
+		}
+
+		string normalizedScriptPath = ScriptPathUtility.Normalize(scriptPath);
+		if (currentCodeEditNativeInstanceId != request.CodeEditNativeInstanceId)
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"CodeEditChanged",
+				currentCodeEditNativeInstanceId,
+				normalizedScriptPath
+			);
+		}
+
+		if (
+			!string.Equals(
+				normalizedScriptPath,
+				request.ScriptPath,
+				StringComparison.OrdinalIgnoreCase
+			)
+		)
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"ScriptChanged",
+				currentCodeEditNativeInstanceId,
+				normalizedScriptPath
+			);
+		}
+
+		return _projectTypeConfirmationService.ApplyDeferredUsingInsertion(
+			codeEdit,
+			request,
+			new AutocompleteDeferredUsingInsertionExecutionContext(
+				currentCodeEditNativeInstanceId,
+				normalizedScriptPath,
+				hostInstanceToken,
+				managedAssemblyGeneration ?? "",
+				guiInputCallbackDepth
+			)
+		);
 	}
 
 	internal long BeginTextChangedValidation()
@@ -331,16 +582,19 @@ internal sealed class AutocompletePluginHost
 
 	internal void ResetTransientState()
 	{
+		Trace("C# autocomplete host ResetTransientState begin");
 		_memberCompletionFollowUp.Clear();
 		_completionCoordinator.Reset();
 		_semanticMemberCoordinator.ResetTransientState();
 		_activeDocumentIndexLifecycle.ResetTransientState();
 		_projectIndexLifecycle.ResetTransientState();
 		_cacheCoordinator.ResetTransientState();
+		Trace("C# autocomplete host ResetTransientState completed");
 	}
 
 	internal void Shutdown()
 	{
+		Trace("C# autocomplete host Shutdown begin");
 		_memberCompletionFollowUp.Clear();
 		_projectIndexLifecycle.Shutdown();
 		_indexCoordinator.Shutdown();
@@ -352,6 +606,7 @@ internal sealed class AutocompletePluginHost
 		_completionCoordinator.InvalidatePendingValidations();
 		_editorBinding.Shutdown();
 		_themeController.Reset();
+		Trace("C# autocomplete host Shutdown completed");
 	}
 
 	internal bool HasPendingCompletionProcessWork()
@@ -545,6 +800,69 @@ internal sealed class AutocompletePluginHost
 		);
 	}
 
+
+	private void LogAcceptedActiveDocumentCapture(
+		CodeEdit codeEdit,
+		CSharpActiveDocumentIndexRequest capturedRequest
+	)
+	{
+		try
+		{
+			if (!_debugEnabled() || capturedRequest == null)
+				return;
+			if (
+				string.Equals(
+					capturedRequest.Reason,
+					"Active script changed",
+					StringComparison.Ordinal
+				)
+				|| string.Equals(
+					capturedRequest.Reason,
+					"Deferred TextChanged capture",
+					StringComparison.Ordinal
+				)
+				|| string.Equals(
+					capturedRequest.Reason,
+					"Ensure lifecycle current",
+					StringComparison.Ordinal
+				)
+			)
+			{
+				return;
+			}
+
+			string codeEditInstanceId = "<null-or-invalid>";
+			if (IsValidGodotObject(codeEdit))
+				codeEditInstanceId = codeEdit.GetInstanceId().ToString();
+
+			_debugLog(
+				"C# autocomplete active document captured",
+				$"Revision={capturedRequest.Revision}, Reason='{capturedRequest.Reason}', "
+					+ $"ScriptPath='{capturedRequest.ScriptPath}', CodeEditInstanceId='{codeEditInstanceId}', "
+					+ $"SourceLength={capturedRequest.SourceText?.Length ?? 0}, "
+					+ $"SourceObjectToken={CSharpRoslynRuntimeDiagnostics.GetObjectToken(capturedRequest.SourceText)}, "
+					+ $"HostInstanceToken={_hostInstanceTokenProvider()}"
+			);
+		}
+		catch
+		{
+		}
+	}
+
+	private void Trace(string operation, string details = "")
+	{
+		try
+		{
+			if (!_debugEnabled())
+				return;
+
+			_debugLog(operation ?? "", details ?? "");
+		}
+		catch
+		{
+		}
+	}
+
 	private static bool IsNewerSnapshotForPendingDemand(
 		string snapshotScriptPath,
 		long snapshotRevision,
@@ -579,16 +897,38 @@ internal sealed class AutocompletePluginHost
 		}
 	}
 
-	private void EnsureSemanticProjectStateBestEffort()
+	private void EnsureSemanticProjectStateBestEffort(
+		Action<string, string> diagnosticPhase = null
+	)
 	{
+		if (!_semanticMemberPipelineEnabled)
+			return;
+
 		try
 		{
 			CSharpProjectIndexSnapshot snapshot = _projectIndex.CurrentSnapshot;
 			if (snapshot != null && snapshot.HasBuiltAtLeastOnce)
-				_semanticMemberCoordinator.RequestProjectSnapshot(snapshot);
+			{
+				InvokeProjectFilesystemDiagnosticPhase(
+					diagnosticPhase,
+					"SemanticProjectStateEnsure.Begin",
+					$"ProjectGeneration='{snapshot.Generation}'"
+				);
+				bool accepted = _semanticMemberCoordinator.RequestProjectSnapshot(snapshot);
+				InvokeProjectFilesystemDiagnosticPhase(
+					diagnosticPhase,
+					"SemanticProjectStateEnsure.Returned",
+					$"ProjectGeneration='{snapshot.Generation}', SemanticProjectSnapshotAccepted='{accepted}'"
+				);
+			}
 		}
 		catch (Exception exception)
 		{
+			InvokeProjectFilesystemDiagnosticPhase(
+				diagnosticPhase,
+				"SemanticProjectStateEnsure.Returned",
+				$"Result='Exception', ExceptionType='{exception.GetType().Name}'"
+			);
 			_debugLog(
 				"C# autocomplete semantic project routing failed",
 				exception.ToString()
@@ -596,25 +936,38 @@ internal sealed class AutocompletePluginHost
 		}
 	}
 
-	private void CaptureActiveDocumentIfNeededBestEffort(string reason)
+	private void CaptureActiveDocumentIfNeededBestEffort(
+		string reason,
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null
+	)
 	{
 		if (
 			_editorBinding.TryGetActiveCodeEdit(
 				out CodeEdit codeEdit,
-				out string scriptPath
+				out string scriptPath,
+				diagnosticPhase
 			)
 		)
 		{
-			CaptureActiveDocumentIfNeededBestEffort(codeEdit, scriptPath, reason);
+			CaptureActiveDocumentIfNeededBestEffort(
+				codeEdit,
+				scriptPath,
+				reason,
+				diagnosticPhase
+			);
 		}
 	}
 
 	private void CaptureActiveDocumentIfNeededBestEffort(
 		CodeEdit codeEdit,
 		string scriptPath,
-		string reason
+		string reason,
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null
 	)
 	{
+		if (!_activeDocumentSyntaxOverlayEnabled)
+			return;
+
 		try
 		{
 			if (_activeDocumentIndexLifecycle.NeedsCapture(scriptPath))
@@ -623,28 +976,34 @@ internal sealed class AutocompletePluginHost
 					_activeDocumentIndexLifecycle.CapturePendingText(
 						codeEdit,
 						scriptPath,
-						reason
+						reason,
+						diagnosticPhase
 					);
 
 				if (capturedRequest != null)
 				{
-					bool semanticRequestAccepted =
-						_semanticMemberCoordinator.RequestActiveDocument(
-							new CSharpSemanticActiveDocumentRequest(
-								capturedRequest.Revision,
-								capturedRequest.Reason,
-								capturedRequest.ScriptPath,
-								capturedRequest.SourceText
-							)
-						);
+					LogAcceptedActiveDocumentCapture(codeEdit, capturedRequest);
 
-					if (semanticRequestAccepted)
+					if (_semanticMemberPipelineEnabled)
 					{
-						TryArmBareMemberCompletionFollowUp(
-							codeEdit,
-							scriptPath,
-							capturedRequest
-						);
+						bool semanticRequestAccepted =
+							_semanticMemberCoordinator.RequestActiveDocument(
+								new CSharpSemanticActiveDocumentRequest(
+									capturedRequest.Revision,
+									capturedRequest.Reason,
+									capturedRequest.ScriptPath,
+									capturedRequest.SourceText
+								)
+							);
+
+						if (semanticRequestAccepted)
+						{
+							TryArmBareMemberCompletionFollowUp(
+								codeEdit,
+								scriptPath,
+								capturedRequest
+							);
+						}
 					}
 				}
 			}
@@ -658,18 +1017,46 @@ internal sealed class AutocompletePluginHost
 		}
 	}
 
-	private void DrainIndexBuildResults()
+	private static void InvokeScriptChangeDiagnosticPhase(
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase,
+		string phase,
+		ScriptEditor scriptEditor = null,
+		CodeEdit codeEdit = null
+	)
 	{
-		DrainProjectIndexBuildResult();
-		DrainActiveDocumentIndexBuildResult();
-		DrainSemanticMemberBuildResult();
-		DrainCacheWriteResult();
+		try
+		{
+			diagnosticPhase?.Invoke(phase ?? "", scriptEditor, codeEdit);
+		}
+		catch
+		{
+			// Diagnostic observation must not affect autocomplete control flow.
+		}
 	}
 
-	private void DrainProjectIndexBuildResult()
+	private void DrainIndexBuildResults(Action<string, string> diagnosticPhase = null)
 	{
+		DrainProjectIndexBuildResult(diagnosticPhase);
+		DrainActiveDocumentIndexBuildResult();
+		DrainSemanticMemberBuildResult();
+		DrainCacheWriteResult(diagnosticPhase);
+	}
+
+	private void DrainProjectIndexBuildResult(Action<string, string> diagnosticPhase = null)
+	{
+		InvokeProjectFilesystemDiagnosticPhase(
+			diagnosticPhase,
+			"DrainProjectIndexResult.Begin"
+		);
 		if (!_indexCoordinator.TryTakeLatestBuildResult(out CSharpProjectIndexBuildResult result))
+		{
+			InvokeProjectFilesystemDiagnosticPhase(
+				diagnosticPhase,
+				"DrainProjectIndexResult.Returned",
+				"HasResult='False'"
+			);
 			return;
+		}
 
 		string operation = result.Status switch
 		{
@@ -687,18 +1074,49 @@ internal sealed class AutocompletePluginHost
 		if (result.IsFailed)
 			_memberCompletionFollowUp.Clear();
 
-		if (result.IsSuccessful && result.Snapshot != null)
-			_semanticMemberCoordinator.RequestProjectSnapshot(result.Snapshot);
+		if (
+			_semanticMemberPipelineEnabled
+			&& result.IsSuccessful
+			&& result.Snapshot != null
+		)
+		{
+			InvokeProjectFilesystemDiagnosticPhase(
+				diagnosticPhase,
+				"SemanticProjectSnapshotRoute.Begin",
+				$"ProjectGeneration='{result.Generation}'"
+			);
+			bool accepted = _semanticMemberCoordinator.RequestProjectSnapshot(result.Snapshot);
+			InvokeProjectFilesystemDiagnosticPhase(
+				diagnosticPhase,
+				"SemanticProjectSnapshotRoute.Returned",
+				$"ProjectGeneration='{result.Generation}', SemanticProjectSnapshotAccepted='{accepted}'"
+			);
+		}
+
+		InvokeProjectFilesystemDiagnosticPhase(
+			diagnosticPhase,
+			"DrainProjectIndexResult.Returned",
+			$"HasResult='True', ProjectGeneration='{result.Generation}', Status='{result.Status}'"
+		);
 	}
 
-	private void DrainCacheWriteResult()
+	private void DrainCacheWriteResult(Action<string, string> diagnosticPhase = null)
 	{
+		InvokeProjectFilesystemDiagnosticPhase(
+			diagnosticPhase,
+			"DrainCacheResult.Begin"
+		);
 		if (
 			!_cacheCoordinator.TryTakeLatestReportableWriteResult(
 				out CSharpProjectIndexCacheWriteResult result
 			)
 		)
 		{
+			InvokeProjectFilesystemDiagnosticPhase(
+				diagnosticPhase,
+				"DrainCacheResult.Returned",
+				"HasResult='False'"
+			);
 			return;
 		}
 
@@ -710,6 +1128,27 @@ internal sealed class AutocompletePluginHost
 		};
 
 		_debugLog(operation, result.CreateDebugSummary());
+		InvokeProjectFilesystemDiagnosticPhase(
+			diagnosticPhase,
+			"DrainCacheResult.Returned",
+			$"HasResult='True', ProjectGeneration='{result.Generation}', Status='{result.Status}'"
+		);
+	}
+
+	private static void InvokeProjectFilesystemDiagnosticPhase(
+		Action<string, string> diagnosticPhase,
+		string phase,
+		string details = ""
+	)
+	{
+		try
+		{
+			diagnosticPhase?.Invoke(phase ?? "", details ?? "");
+		}
+		catch
+		{
+			// Operation-local diagnostic observation must not affect autocomplete control flow.
+		}
 	}
 
 	private void DrainSemanticMemberBuildResult()

@@ -92,7 +92,7 @@ internal sealed class CSharpProjectIndexBuildResult
 		CacheEntriesRead = Math.Max(0, cacheEntriesRead);
 		CacheEntriesReused = Math.Max(0, cacheEntriesReused);
 		CacheLoadDetail = NormalizeDetail(cacheLoadDetail, 600);
-		FailureDetail = NormalizeDetail(failureDetail, 1000);
+		FailureDetail = NormalizeDetail(failureDetail, 2600);
 		SampleTypeNames = new ReadOnlyCollection<string>(
 			(sampleTypeNames ?? Array.Empty<string>())
 				.Where(name => !string.IsNullOrWhiteSpace(name))

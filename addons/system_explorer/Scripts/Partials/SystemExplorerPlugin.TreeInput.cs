@@ -133,15 +133,17 @@ public partial class SystemExplorerPlugin
 				}
 
 				string releaseMetadata = item.GetMetadata(0).AsString();
-				bool isClick =
-					_leftMousePressedOnSelectedScript
-					&& _leftMousePressedMetadata == releaseMetadata
-					&& _leftMousePressPosition.DistanceTo(mousePosition) <= ClickOpenDragThreshold;
+				float dragDistance = _leftMousePressPosition.DistanceTo(mousePosition);
+				bool releasedOnPressedItem = _leftMousePressedMetadata == releaseMetadata;
 
-				if (isClick)
+				if (dragDistance <= ClickOpenDragThreshold)
 				{
-					OpenScriptFromTreeItem(item);
-					OpenSceneFromTreeItem(item);
+					if (_leftMousePressedOnSelectedScript && releasedOnPressedItem)
+					{
+						OpenScriptFromTreeItem(item);
+						OpenSceneFromTreeItem(item);
+					}
+
 					ClearDragState();
 					return;
 				}

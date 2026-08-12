@@ -142,6 +142,87 @@ internal sealed class AutocompleteCodeEditThemeController
 		}
 	}
 
+	internal bool TryCaptureCompletionExistingColorNativeOwnershipState(
+		CodeEdit codeEdit,
+		out ulong codeEditInstanceId,
+		out bool completionExistingColorOwned,
+		out bool hadPreviousOverride,
+		out Color previousColor
+	)
+	{
+		codeEditInstanceId = 0;
+		completionExistingColorOwned = false;
+		hadPreviousOverride = false;
+		previousColor = default;
+
+		if (codeEdit == null)
+			return false;
+
+		AutocompleteThemeSnapshot snapshot = _snapshot;
+		if (snapshot == null)
+			return true;
+
+		if (!ReferenceEquals(snapshot.CodeEdit, codeEdit))
+			return false;
+
+		codeEditInstanceId = snapshot.CodeEditInstanceId;
+
+		if (
+			!snapshot.ColorOverrides.TryGetValue(
+				CompletionExistingColorThemeKey,
+				out AutocompleteThemeSnapshot.ColorOverrideSnapshot colorSnapshot
+			)
+		)
+		{
+			return true;
+		}
+
+		completionExistingColorOwned = true;
+		hadPreviousOverride = colorSnapshot.HadOverride;
+		previousColor = colorSnapshot.PreviousValue;
+		return true;
+	}
+
+	internal bool TryRestoreCompletionExistingColorFromNativeBridge(
+		CodeEdit codeEdit,
+		bool hadPreviousOverride,
+		Color previousColor
+	)
+	{
+		if (!IsValidGodotObject(codeEdit))
+			return false;
+
+		try
+		{
+			codeEdit.BeginBulkThemeOverride();
+
+			try
+			{
+				if (hadPreviousOverride)
+				{
+					codeEdit.AddThemeColorOverride(
+						CompletionExistingColorThemeKey,
+						previousColor
+					);
+				}
+				else
+				{
+					codeEdit.RemoveThemeColorOverride(CompletionExistingColorThemeKey);
+				}
+			}
+			finally
+			{
+				codeEdit.EndBulkThemeOverride();
+			}
+
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
 	internal void Restore(CodeEdit codeEdit)
 	{
 		AutocompleteThemeSnapshot snapshot = _snapshot;

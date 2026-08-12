@@ -137,8 +137,9 @@ public partial class SystemExplorerPlugin
 
 	private async Task<CSharpierFormatResult> FormatScriptWithCSharpierUsingCachedCommandFallback(EditorOperationLease operation, CSharpierCommand command, string scriptPath, string operationName)
 	{
+		Action<string, string> persistentDiagnosticSink = DebugLogger.CreatePersistentFileOnlyDiagnosticSink();
 		bool usedCached = CSharpierCommands.IsCachedCommand(command);
-		CSharpierFormatResult result = await FormatScriptWithCSharpierAsync(operation, command, scriptPath, operationName, DebugState);
+		CSharpierFormatResult result = await FormatScriptWithCSharpierAsync(operation, command, scriptPath, operationName, persistentDiagnosticSink);
 		operation.CancellationToken.ThrowIfCancellationRequested();
 		if (result.Success || !result.ShouldInvalidateCachedCommand || !usedCached || !operation.IsCurrent) return result;
 		CSharpierCommands.ClearCachedCommand("cached command failed during format");
@@ -147,10 +148,10 @@ public partial class SystemExplorerPlugin
 		if (!probe.Success || !operation.IsCurrent) return result;
 		CSharpierCommands.CacheCommand(probe.Command, "format fallback probe");
 		if (IsEditorOperationAccessValid(operation)) DebugLogger.LogOperation("CSharpier Command Retry", $"{CSharpierCommandService.GetCommandDisplayName(command)} -> {CSharpierCommandService.GetCommandDisplayName(probe.Command)}");
-		return await FormatScriptWithCSharpierAsync(operation, probe.Command, scriptPath, operationName, DebugState);
+		return await FormatScriptWithCSharpierAsync(operation, probe.Command, scriptPath, operationName, persistentDiagnosticSink);
 	}
 
-	private async Task<CSharpierFormatResult> FormatScriptWithCSharpierAsync(EditorOperationLease operation, CSharpierCommand command, string scriptPath, string operationName, bool debugState)
+	private async Task<CSharpierFormatResult> FormatScriptWithCSharpierAsync(EditorOperationLease operation, CSharpierCommand command, string scriptPath, string operationName, Action<string, string> persistentDiagnosticSink)
 	{
 		if (!command.IsValid) return new CSharpierFormatResult(false, "", "Beautify Script failed: CSharpier command is invalid.", true);
 		string globalPath = ProjectSettings.GlobalizePath(scriptPath);
@@ -168,7 +169,7 @@ public partial class SystemExplorerPlugin
 			return new CSharpierFormatResult(false, "", $"Beautify Script failed: CSharpier could not format '{scriptPath}'.", LooksLikeUnavailableCSharpierCommandDetails(details));
 		}
 		catch (OperationCanceledException) { throw; }
-		catch (Exception exception) { DebugPrintBeautify(debugState, $"{operationName} CSharpier exception: {exception}"); return new CSharpierFormatResult(false, "", "Beautify Script failed: CSharpier could not be started.", true); }
+		catch (Exception exception) { DebugPrintBeautify(persistentDiagnosticSink, $"{operationName} CSharpier exception: {exception}"); return new CSharpierFormatResult(false, "", "Beautify Script failed: CSharpier could not be started.", true); }
 	}
 
 	private async Task<CSharpierInstallResult> InstallCSharpierGlobalToolAsync(EditorOperationLease operation)
@@ -220,8 +221,12 @@ public partial class SystemExplorerPlugin
 	}
 
 	private void SetCSharpierInstallButtonDisabled(bool disabled) { Button button = _csharpierNotInstalledDialog?.GetOkButton(); if (button != null) button.Disabled = disabled; }
-	private void DebugPrintBeautify(string message) => DebugPrintBeautify(DebugState, message);
-	private static void DebugPrintBeautify(bool debugState, string message) { if (debugState) GD.Print($"System Explorer Beautify: {message}"); }
+	private void DebugPrintBeautify(string message) => DebugLogger.Log($"System Explorer Beautify: {message}");
+	private static void DebugPrintBeautify(Action<string, string> persistentDiagnosticSink, string message)
+	{
+		try { persistentDiagnosticSink?.Invoke($"System Explorer Beautify: {message}", ""); }
+		catch { }
+	}
 	private static int GetDebugLength(string text) => text?.Length ?? -1;
 	private static string GetDebugTextPreview(string text)
 	{

@@ -36,7 +36,12 @@ public partial class SystemExplorerPlugin
 			sourceActivationToken = 0;
 		}
 
+		ScriptEditorEditBoundaryContext editBoundary = BeginEditScriptDiagnosticBoundary(
+			"System Explorer navigation",
+			normalizedScriptPath
+		);
 		EditorInterface.Singleton.EditScript(script);
+		CompleteEditScriptDiagnosticBoundary(editBoundary);
 		QueueSystemExplorerScriptActivationDeferredCheck(sourceActivationToken);
 
 		if (releaseTreeFocusAfterNavigation)

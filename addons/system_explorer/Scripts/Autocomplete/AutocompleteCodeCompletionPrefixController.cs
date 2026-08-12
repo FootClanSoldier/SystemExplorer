@@ -81,6 +81,58 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 		}
 	}
 
+	internal bool TryCaptureNativeOwnershipState(
+		CodeEdit codeEdit,
+		out ulong codeEditInstanceId,
+		out bool prefixOwned,
+		out string[] previousPrefixes
+	)
+	{
+		codeEditInstanceId = 0;
+		prefixOwned = false;
+		previousPrefixes = Array.Empty<string>();
+
+		if (codeEdit == null)
+			return false;
+
+		PrefixSnapshot snapshot = _snapshot;
+		if (snapshot == null)
+			return true;
+
+		if (!ReferenceEquals(snapshot.CodeEdit, codeEdit))
+			return false;
+
+		codeEditInstanceId = snapshot.CodeEditInstanceId;
+		prefixOwned = true;
+		previousPrefixes = CopyPrefixes(snapshot.PreviousPrefixes);
+		return true;
+	}
+
+	internal bool TryRestoreOwnedPrefixesFromNativeBridge(
+		CodeEdit codeEdit,
+		IReadOnlyList<string> previousPrefixes
+	)
+	{
+		if (
+			!IsValidGodotObject(codeEdit)
+			|| previousPrefixes == null
+			|| HasMemberAccessPrefix(previousPrefixes)
+		)
+		{
+			return false;
+		}
+
+		try
+		{
+			codeEdit.CodeCompletionPrefixes = CreatePrefixes(previousPrefixes);
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
 	internal void Restore(CodeEdit codeEdit)
 	{
 		PrefixSnapshot snapshot = _snapshot;
@@ -140,6 +192,18 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 
 		for (int index = 0; index < prefixes.Count; index++)
 			copy.Add(prefixes[index]);
+
+		return copy;
+	}
+
+	private static string[] CopyPrefixes(IReadOnlyList<string> prefixes)
+	{
+		if (prefixes == null || prefixes.Count == 0)
+			return Array.Empty<string>();
+
+		var copy = new string[prefixes.Count];
+		for (int index = 0; index < prefixes.Count; index++)
+			copy[index] = prefixes[index];
 
 		return copy;
 	}

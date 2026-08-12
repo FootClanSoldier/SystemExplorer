@@ -84,7 +84,7 @@ internal sealed class CSharpActiveDocumentIndexBuildResult
 			return "";
 
 		string normalized = detail.Replace('\r', ' ').Replace('\n', ' ').Trim();
-		return normalized.Length <= 800 ? normalized : normalized.Substring(0, 800);
+		return normalized.Length <= 2600 ? normalized : normalized.Substring(0, 2600);
 	}
 }
 #endif

@@ -9,6 +9,8 @@ namespace SystemExplorer.Autocomplete.Semantics;
 
 internal sealed class CSharpSemanticMemberCoordinator
 {
+	private const string WorkerKind = "SemanticMember";
+
 	private readonly object _sync = new();
 	private readonly AutocompleteIndexLifetime _lifetime;
 	private readonly CSharpSemanticMemberIndex _index;
@@ -235,7 +237,7 @@ internal sealed class CSharpSemanticMemberCoordinator
 			_workerRunning
 			|| _pendingRequest == null
 			|| _stopAcceptingRequests
-			|| !_lifetime.TryBeginWorker(out CancellationToken shutdownToken)
+			|| !_lifetime.TryBeginWorker(WorkerKind, out CancellationToken shutdownToken)
 		)
 		{
 			return;
@@ -254,7 +256,7 @@ internal sealed class CSharpSemanticMemberCoordinator
 			_workerTask = null;
 			_pendingRequest = null;
 			_latestReportableBuildResult = CreateUnexpectedLoopFailureResult(exception);
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 		}
 	}
 
@@ -335,7 +337,7 @@ internal sealed class CSharpSemanticMemberCoordinator
 				}
 			}
 
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 			StartWorkerLoopIfPending();
 		}
 	}

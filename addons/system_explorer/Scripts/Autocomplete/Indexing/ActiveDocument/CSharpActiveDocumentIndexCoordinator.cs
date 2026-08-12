@@ -8,6 +8,8 @@ namespace SystemExplorer.Autocomplete.Indexing.ActiveDocument;
 
 internal sealed class CSharpActiveDocumentIndexCoordinator
 {
+	private const string WorkerKind = "ActiveDocumentIndex";
+
 	private readonly object _sync = new();
 	private readonly AutocompleteIndexLifetime _lifetime;
 	private readonly CSharpActiveDocumentIndex _index;
@@ -120,7 +122,7 @@ internal sealed class CSharpActiveDocumentIndexCoordinator
 			_workerRunning
 			|| _pendingRequest == null
 			|| _stopAcceptingRequests
-			|| !_lifetime.TryBeginWorker(out CancellationToken shutdownToken)
+			|| !_lifetime.TryBeginWorker(WorkerKind, out CancellationToken shutdownToken)
 		)
 		{
 			return;
@@ -139,7 +141,7 @@ internal sealed class CSharpActiveDocumentIndexCoordinator
 			_workerTask = null;
 			_pendingRequest = null;
 			_latestReportableBuildResult = CreateUnexpectedLoopFailureResult(exception);
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 		}
 	}
 
@@ -220,7 +222,7 @@ internal sealed class CSharpActiveDocumentIndexCoordinator
 				}
 			}
 
-			_lifetime.NotifyWorkerStopped();
+			_lifetime.NotifyWorkerStopped(WorkerKind);
 			StartWorkerLoopIfPending();
 		}
 	}
