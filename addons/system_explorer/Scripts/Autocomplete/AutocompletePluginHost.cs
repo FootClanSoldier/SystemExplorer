@@ -288,9 +288,15 @@ internal sealed class AutocompletePluginHost
 		Trace("C# autocomplete host constructor completed");
 	}
 
-	internal bool EnsureLifecycleCurrent()
+	internal bool EnsureLifecycleCurrent(
+		Action<string, string> diagnosticPhase = null
+	)
 	{
 		Trace("C# autocomplete host EnsureLifecycleCurrent begin");
+		InvokeLifecycleEnsureDiagnosticPhase(
+			diagnosticPhase,
+			"EnsureLifecycleCurrent.EditorBinding.Begin"
+		);
 		bool editorBindingCurrent = _editorBinding.EnsureLifecycleCurrent(
 			out bool bindingResolutionRequired
 		);
@@ -304,8 +310,21 @@ internal sealed class AutocompletePluginHost
 			_requestScriptEditorLifecycleRebind("ScriptEditorIdentityChanged");
 		}
 
+		InvokeLifecycleEnsureDiagnosticPhase(
+			diagnosticPhase,
+			"EnsureLifecycleCurrent.ProjectIndexLifecycle.Begin",
+			$"EditorBindingCurrent='{editorBindingCurrent}', BindingResolutionRequired='{bindingResolutionRequired}'"
+		);
 		EnsureProjectIndexLifecycleCurrentBestEffort();
+		InvokeLifecycleEnsureDiagnosticPhase(
+			diagnosticPhase,
+			"EnsureLifecycleCurrent.FirstDrain.Begin"
+		);
 		DrainIndexBuildResults();
+		InvokeLifecycleEnsureDiagnosticPhase(
+			diagnosticPhase,
+			"EnsureLifecycleCurrent.PostFirstDrainFeatureGates.Begin"
+		);
 		EnsureSemanticProjectStateBestEffort();
 
 		if (
@@ -316,7 +335,16 @@ internal sealed class AutocompletePluginHost
 			CaptureActiveDocumentIfNeededBestEffort("Ensure lifecycle current");
 		}
 
+		InvokeLifecycleEnsureDiagnosticPhase(
+			diagnosticPhase,
+			"EnsureLifecycleCurrent.SecondDrain.Begin"
+		);
 		DrainIndexBuildResults();
+		InvokeLifecycleEnsureDiagnosticPhase(
+			diagnosticPhase,
+			"EnsureLifecycleCurrent.Returned",
+			$"EditorBindingCurrent='{editorBindingCurrent}', BindingResolutionRequired='{bindingResolutionRequired}'"
+		);
 		Trace(
 			"C# autocomplete host EnsureLifecycleCurrent completed",
 			$"EditorBindingCurrent='{editorBindingCurrent}', LifecycleState='{_scriptEditorLifecycleCoordinator.Snapshot.State}', ScriptTransitionId='{_scriptEditorLifecycleCoordinator.Snapshot.ScriptTransitionId}', BindingEpoch='{_scriptEditorLifecycleCoordinator.Snapshot.BindingEpoch}'"
@@ -1167,6 +1195,22 @@ internal sealed class AutocompletePluginHost
 			"DrainCacheResult.Returned",
 			$"HasResult='True', ProjectGeneration='{result.Generation}', Status='{result.Status}'"
 		);
+	}
+
+	private static void InvokeLifecycleEnsureDiagnosticPhase(
+		Action<string, string> diagnosticPhase,
+		string phase,
+		string details = ""
+	)
+	{
+		try
+		{
+			diagnosticPhase?.Invoke(phase ?? "", details ?? "");
+		}
+		catch
+		{
+			// Observation-only lifecycle diagnostics must never affect autocomplete control flow.
+		}
 	}
 
 	private static void InvokeProjectFilesystemDiagnosticPhase(

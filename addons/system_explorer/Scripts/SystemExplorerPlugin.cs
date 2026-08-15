@@ -227,6 +227,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		{
 			BuildTree(keepCurrentExpansionState: true);
 			RestorePersistentTreeSelectionBestEffort("Plugin Startup");
+			SynchronizeNavigationStressAfterTreeReady("Plugin Startup");
 		}
 
 		SchedulePendingTreeOperationDialogPresentation();
@@ -436,6 +437,7 @@ public sealed class {{CLASS_NAME}}
 	public override void _ExitTree()
 	{
 		TryLogEditorOperation("Exit Tree");
+		ShutdownNavigationStress();
 		ResetTreeMouseScriptClickIntent();
 		ShutdownEditorOperationLifecycle();
 		FlushAndShutdownTreeStatePersistence();

@@ -23,6 +23,15 @@ public partial class SystemExplorerPlugin
 			ClearPendingAutocompleteProcessWork();
 		}
 
+		try
+		{
+			ProcessNavigationStress(delta);
+		}
+		catch (System.Exception exception)
+		{
+			FailNavigationStress(exception);
+		}
+
 		bool shouldReapplyBusyCursor = false;
 
 		try
@@ -50,6 +59,7 @@ public partial class SystemExplorerPlugin
 			busyCursorNeedsProcessing
 				|| HasPendingPersistentTreeStateProcessWork()
 				|| HasPendingAutocompleteProcessWork()
+				|| HasPendingNavigationStressProcessWork()
 		);
 	}
 

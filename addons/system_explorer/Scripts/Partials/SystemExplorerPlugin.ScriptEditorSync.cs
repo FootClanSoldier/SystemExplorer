@@ -188,46 +188,26 @@ public partial class SystemExplorerPlugin
 	private void OnScriptEditorScriptChanged(Script script)
 	{
 		EnterAutocompleteScriptEditorChangedCallbackScope();
-		Action<string, string> diagnosticPhase = null;
 		try
 		{
-			diagnosticPhase = CreateScriptEditorSyncCallbackTailDiagnosticPhase();
-			LogScriptEditorCallbackEntry("ScriptEditorSyncScriptChanged", script);
 			ObserveScriptEditorLifecycleScriptChange(
 				script,
 				"ScriptEditorSyncScriptChanged"
 			);
-			diagnosticPhase?.Invoke("AfterLifecycleObservation", "");
 
-			diagnosticPhase?.Invoke("EnsureManagedAssemblyStateCurrent.Begin", "");
-			bool managedAssemblyStateCurrent = EnsureManagedAssemblyStateCurrent(
-				"Script Editor Changed",
-				diagnosticPhase
-			);
-			diagnosticPhase?.Invoke(
-				"EnsureManagedAssemblyStateCurrent.Returned",
-				$"Result='{managedAssemblyStateCurrent}'"
-			);
-			if (!managedAssemblyStateCurrent)
+			if (!EnsureManagedAssemblyStateCurrent("Script Editor Changed"))
 				return;
 
 			bool scriptEditorSyncSuppressed =
 				_followActiveScript && IsScriptEditorSyncSuppressed();
-			diagnosticPhase?.Invoke(
-				"FollowActiveDecision",
-				$"FollowActive='{_followActiveScript}', Suppressed='{scriptEditorSyncSuppressed}'"
-			);
 			if (!_followActiveScript || scriptEditorSyncSuppressed)
 				return;
 
-			diagnosticPhase?.Invoke("QueueScriptEditorSync.Begin", "");
 			QueueScriptEditorSyncToActiveScript();
-			diagnosticPhase?.Invoke("QueueScriptEditorSync.Returned", "");
 		}
 		finally
 		{
 			ExitAutocompleteScriptEditorChangedCallbackScope();
-			diagnosticPhase?.Invoke("ReturningToGodot", "");
 		}
 	}
 

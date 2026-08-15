@@ -2,6 +2,7 @@
 using Godot;
 using System;
 using System.Runtime.Loader;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
 {
@@ -64,14 +65,12 @@ public partial class SystemExplorerPlugin
 			NormalizeScriptEditorDiagnosticText(scriptPath)
 		);
 
-		LogScriptEditorDiagnosticPhase(
-			"ScriptEditor EditScript boundary",
-			context.Origin,
+		LogCompactScriptEditorCrashTail(
+			"EditScript",
 			"Begin",
-			context.ScriptPath,
-			_scriptEditorSyncScriptEditor,
-			textEditor: null,
-			boundaryToken: context.BoundaryToken
+			targetScriptPath: context.ScriptPath,
+			editorBoundaryToken: context.BoundaryToken,
+			extraDetails: $"Origin='{context.Origin}'"
 		);
 
 		return context;
@@ -87,139 +86,72 @@ public partial class SystemExplorerPlugin
 		_activeEditScriptBoundaryToken = context.PreviousBoundaryToken;
 		_editScriptCallDepth = context.PreviousCallDepth;
 
-		LogScriptEditorDiagnosticPhase(
-			"ScriptEditor EditScript boundary",
-			context.Origin,
+		LogCompactScriptEditorCrashTail(
+			"EditScript",
 			"Returned",
-			context.ScriptPath,
-			_scriptEditorSyncScriptEditor,
-			textEditor: null,
-			boundaryToken: context.BoundaryToken
+			targetScriptPath: context.ScriptPath,
+			editorBoundaryToken: context.BoundaryToken,
+			extraDetails: $"Origin='{context.Origin}'"
 		);
 	}
 
-	private void LogScriptEditorCallbackEntry(string callbackName, Script script = null)
+	private void LogCompactScriptEditorCrashTail(
+		string flow,
+		string phase,
+		long operationToken = 0,
+		long editorBoundaryToken = 0,
+		string targetScriptPath = "",
+		long? hostInstanceToken = null,
+		string extraDetails = ""
+	)
 	{
 		try
 		{
 			if (!DebugLogger.IsEnabled)
 				return;
 
-			string callbackScriptContext = DescribeDiagnosticGodotObject(
-				"CallbackScript",
-				script
-			);
-
-			DebugLogger.LogPersistentFileOnlyOperation(
-				"ScriptEditor managed callback entry",
-				$"Callback='{NormalizeScriptEditorDiagnosticText(callbackName)}', "
-					+ $"{CreatePluginDiagnosticContext()}, "
-					+ $"{callbackScriptContext}, "
-					+ $"{DescribeDiagnosticGodotObject("ScriptEditor", _scriptEditorSyncScriptEditor)}, "
-					+ $"ActiveEditScriptBoundaryToken='{_activeEditScriptBoundaryToken}', "
-					+ $"EditScriptCallActive='{_editScriptCallDepth > 0}', "
-					+ $"EditScriptCallDepth='{_editScriptCallDepth}'"
-			);
-		}
-		catch
-		{
-			// Callback-generation evidence must never affect callback control flow.
-		}
-	}
-
-	private Action<string, string> CreateScriptEditorSyncCallbackTailDiagnosticPhase()
-	{
-		if (
-			!DebugLogger.IsEnabled
-			|| _editScriptCallDepth <= 0
-			|| _activeEditScriptBoundaryToken <= 0
-		)
-		{
-			return null;
-		}
-
-		return LogScriptEditorSyncCallbackTailPhase;
-	}
-
-	private void LogScriptEditorSyncCallbackTailPhase(string phase, string details = "")
-	{
-		try
-		{
-			if (
-				!DebugLogger.IsEnabled
-				|| _editScriptCallDepth <= 0
-				|| _activeEditScriptBoundaryToken <= 0
-			)
+			ScriptEditorLifecycleSnapshot lifecycle =
+				_scriptEditorLifecycleCoordinator?.Snapshot ?? default;
+			string effectiveTargetScriptPath = targetScriptPath;
+			if (string.IsNullOrWhiteSpace(effectiveTargetScriptPath))
 			{
-				return;
+				effectiveTargetScriptPath = !string.IsNullOrWhiteSpace(lifecycle.ObservedScriptPath)
+					? lifecycle.ObservedScriptPath
+					: !string.IsNullOrWhiteSpace(lifecycle.BoundScriptResourcePath)
+						? lifecycle.BoundScriptResourcePath
+						: lifecycle.ExpectedScriptPath;
 			}
 
-			string lifecycleDetails;
-			if (_scriptEditorLifecycleCoordinator == null)
-			{
-				lifecycleDetails =
-					"LifecycleState='Detached', ScriptTransitionId='0', BindingEpoch='0'";
-			}
-			else
-			{
-				var lifecycleSnapshot = _scriptEditorLifecycleCoordinator.Snapshot;
-				lifecycleDetails =
-					$"LifecycleState='{lifecycleSnapshot.State}', "
-					+ $"ScriptTransitionId='{lifecycleSnapshot.ScriptTransitionId}', "
-					+ $"BindingEpoch='{lifecycleSnapshot.BindingEpoch}'";
-			}
-
-			string diagnosticDetails =
-				$"Phase='{NormalizeScriptEditorDiagnosticText(phase)}', "
+			string details =
+				$"Flow='{NormalizeScriptEditorDiagnosticText(flow)}', "
+				+ $"Phase='{NormalizeScriptEditorDiagnosticText(phase)}', "
 				+ $"ManagedAssemblyGeneration='{ManagedAssemblyGeneration}', "
-				+ $"EditorBoundaryToken='{_activeEditScriptBoundaryToken}', "
-				+ $"EditScriptCallDepth='{_editScriptCallDepth}', "
-				+ $"AutocompleteScriptEditorChangedCallbackDepth='{_autocompleteScriptEditorChangedCallbackDepth}', "
-				+ $"HostInstanceToken='{_autocompleteHostInstanceToken}', "
-				+ $"ScriptEditorSyncDeferredQueued='{_isScriptEditorSyncDeferredQueued}', "
-				+ $"ScriptEditorSyncSuppressionDepth='{_scriptEditorSyncSuppressionDepth}', "
-				+ $"FollowActiveScript='{_followActiveScript}', "
-				+ lifecycleDetails;
+				+ $"HostInstanceToken='{hostInstanceToken ?? _autocompleteHostInstanceToken}', "
+				+ $"OperationToken='{operationToken}', "
+				+ $"EditorBoundaryToken='{editorBoundaryToken}', "
+				+ $"LifecycleState='{lifecycle.State}', "
+				+ $"ScriptTransitionId='{lifecycle.ScriptTransitionId}', "
+				+ $"BindingEpoch='{lifecycle.BindingEpoch}', "
+				+ $"BindingCodeEditInstanceId='{lifecycle.CodeEditInstanceId}', "
+				+ $"TargetScriptPath='{NormalizeScriptEditorDiagnosticText(effectiveTargetScriptPath)}', "
+				+ $"EditScriptCallDepth='{_editScriptCallDepth}'";
 
-			if (!string.IsNullOrWhiteSpace(details))
-				diagnosticDetails += $", {details}";
+			if (!string.IsNullOrWhiteSpace(extraDetails))
+				details += $", {extraDetails}";
 
 			DebugLogger.LogPersistentFileOnlyOperation(
-				"ScriptEditorSync callback tail",
-				diagnosticDetails
+				"ScriptEditor compact crash tail",
+				details
 			);
 		}
 		catch
 		{
-			// Callback-tail diagnostics must never affect ScriptEditor callback control flow.
+			// Compact crash-tail diagnostics are pure-managed, observation-only, and fail closed.
 		}
 	}
 
-	private Action<string, ScriptEditor, CodeEdit> CreateAutocompleteScriptChangeDiagnosticPhase(
-		string origin,
-		string targetScriptPath = ""
-	)
-	{
-		if (!DebugLogger.IsEnabled)
-			return null;
-
-		string normalizedOrigin = NormalizeScriptEditorDiagnosticText(origin);
-		string normalizedTargetScriptPath = NormalizeScriptEditorDiagnosticText(targetScriptPath);
-
-		return (phase, scriptEditor, codeEdit) =>
-			LogScriptEditorDiagnosticPhase(
-				"C# autocomplete ScriptEditor boundary",
-				normalizedOrigin,
-				phase,
-				normalizedTargetScriptPath,
-				scriptEditor ?? _scriptEditorSyncScriptEditor,
-				codeEdit
-			);
-	}
-
-	private Action<string, string> CreateAutocompleteCodeEditNativeBoundaryDiagnosticPhase(
+	private Action<string, string> CreateDeferredScriptRebindLifecycleEnsureDiagnosticPhase(
 		long operationToken,
-		long targetScriptTransitionId,
 		long hostInstanceToken,
 		string targetScriptPath
 	)
@@ -227,53 +159,17 @@ public partial class SystemExplorerPlugin
 		if (!DebugLogger.IsEnabled)
 			return null;
 
-		string managedAssemblyGeneration = ManagedAssemblyGeneration;
-		string normalizedTargetScriptPath = NormalizeScriptEditorDiagnosticText(targetScriptPath);
-
+		string capturedTargetScriptPath =
+			NormalizeScriptEditorDiagnosticText(targetScriptPath);
 		return (phase, details) =>
-		{
-			try
-			{
-				string lifecycleDetails;
-				if (_scriptEditorLifecycleCoordinator == null)
-				{
-					lifecycleDetails =
-						"LifecycleState='Detached', ScriptTransitionId='0', BindingEpoch='0'";
-				}
-				else
-				{
-					var lifecycleSnapshot = _scriptEditorLifecycleCoordinator.Snapshot;
-					lifecycleDetails =
-						$"LifecycleState='{lifecycleSnapshot.State}', "
-						+ $"ScriptTransitionId='{lifecycleSnapshot.ScriptTransitionId}', "
-						+ $"TransitionOrigin='{lifecycleSnapshot.TransitionOrigin?.ToString() ?? "<none>"}', "
-						+ $"ExpectedScriptPath='{NormalizeScriptEditorDiagnosticText(lifecycleSnapshot.ExpectedScriptPath)}', "
-						+ $"ObservedScriptPath='{NormalizeScriptEditorDiagnosticText(lifecycleSnapshot.ObservedScriptPath)}', "
-						+ $"BindingEpoch='{lifecycleSnapshot.BindingEpoch}'";
-				}
-
-				string diagnosticDetails =
-					$"Phase='{NormalizeScriptEditorDiagnosticText(phase)}', "
-					+ $"ManagedAssemblyGeneration='{managedAssemblyGeneration}', "
-					+ $"HostInstanceToken='{hostInstanceToken}', "
-					+ $"OperationToken='{operationToken}', "
-					+ $"TargetScriptTransitionId='{targetScriptTransitionId}', "
-					+ $"TargetScriptPath='{normalizedTargetScriptPath}', "
-					+ lifecycleDetails;
-
-				if (!string.IsNullOrWhiteSpace(details))
-					diagnosticDetails += $", {details}";
-
-				DebugLogger.LogPersistentFileOnlyOperation(
-					"C# autocomplete CodeEdit native boundary",
-					diagnosticDetails
-				);
-			}
-			catch
-			{
-				// Native-gap diagnostics are pure-managed, observation-only, and fail closed.
-			}
-		};
+			LogCompactScriptEditorCrashTail(
+				"DeferredScriptRebind",
+				phase,
+				operationToken: operationToken,
+				targetScriptPath: capturedTargetScriptPath,
+				hostInstanceToken: hostInstanceToken,
+				extraDetails: details
+			);
 	}
 
 	private long BeginBeautifyBatchDiagnosticContext()

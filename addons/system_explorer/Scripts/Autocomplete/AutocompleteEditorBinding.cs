@@ -1135,18 +1135,10 @@ internal sealed class AutocompleteEditorBinding
 		string reason
 	)
 	{
-		string currentCodeEditInstanceId = CaptureInstanceIdForDiagnostics(currentCodeEdit);
-		if (
-			result
-			&& string.Equals(
-				previousCodeEditInstanceId,
-				currentCodeEditInstanceId,
-				StringComparison.Ordinal
-			)
-		)
-		{
+		if (result)
 			return;
-		}
+
+		string currentCodeEditInstanceId = CaptureInstanceIdForDiagnostics(currentCodeEdit);
 
 		Trace(
 			"C# autocomplete binding rebound",

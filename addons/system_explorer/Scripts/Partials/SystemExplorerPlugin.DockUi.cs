@@ -603,8 +603,6 @@ public partial class SystemExplorerPlugin
 
 	private void OnItemSelectedSignal()
 	{
-		LogScriptEditorCallbackEntry("TreeItemSelected");
-
 		if (EnsureManagedAssemblyStateCurrent("Tree Item Selected"))
 			OnItemSelected();
 	}

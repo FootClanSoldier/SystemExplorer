@@ -1272,8 +1272,6 @@ public partial class SystemExplorerPlugin
 		EnterAutocompleteScriptEditorChangedCallbackScope();
 		try
 		{
-			LogScriptEditorCallbackEntry("AutocompleteScriptChanged", script);
-
 			if (IsAutocompleteDeferredUsingInsertionBarrierActive)
 				CancelDeferredAutocompleteUsingInsertion("ScriptChanged");
 
@@ -1381,6 +1379,8 @@ public partial class SystemExplorerPlugin
 
 		_autocompleteDeferredScriptChangeRebindQueued = false;
 		_autocompleteDeferredScriptChangeRebindExecutionActive = true;
+		bool crashTailReachedHandleScriptChanged = false;
+		string crashTailTargetScriptPath = "";
 		try
 		{
 			if (!IsAutocompletePluginBoundaryAvailable())
@@ -1489,7 +1489,21 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			if (!host.EnsureLifecycleCurrent())
+			ScriptEditorLifecycleSnapshot lifecycleSnapshotBeforeEnsure =
+				ScriptEditorLifecycleCoordinator.Snapshot;
+			crashTailTargetScriptPath = !string.IsNullOrWhiteSpace(
+				lifecycleSnapshotBeforeEnsure.ObservedScriptPath
+			)
+				? lifecycleSnapshotBeforeEnsure.ObservedScriptPath
+				: lifecycleSnapshotBeforeEnsure.ExpectedScriptPath;
+			Action<string, string> lifecycleEnsureDiagnosticPhase =
+				CreateDeferredScriptRebindLifecycleEnsureDiagnosticPhase(
+					token,
+					scheduledHostInstanceToken,
+					crashTailTargetScriptPath
+				);
+
+			if (!host.EnsureLifecycleCurrent(lifecycleEnsureDiagnosticPhase))
 			{
 				DebugLogger.LogOperation(
 					"C# autocomplete deferred ScriptEditor rebind aborted",
@@ -1520,44 +1534,31 @@ public partial class SystemExplorerPlugin
 
 			ScriptEditorLifecycleSnapshot lifecycleSnapshot =
 				ScriptEditorLifecycleCoordinator.Snapshot;
-			string diagnosticTargetPath = !string.IsNullOrWhiteSpace(
+			crashTailTargetScriptPath = !string.IsNullOrWhiteSpace(
 				lifecycleSnapshot.ObservedScriptPath
 			)
 				? lifecycleSnapshot.ObservedScriptPath
 				: lifecycleSnapshot.ExpectedScriptPath;
-			Action<string, ScriptEditor, CodeEdit> diagnosticPhase =
-				CreateAutocompleteScriptChangeDiagnosticPhase(
-					"DeferredAutocompleteScriptChanged",
-					diagnosticTargetPath
-				);
-			Action<string, string> nativeBoundaryDiagnosticPhase =
-				CreateAutocompleteCodeEditNativeBoundaryDiagnosticPhase(
-					token,
-					targetTransitionId,
-					scheduledHostInstanceToken,
-					diagnosticTargetPath
-				);
+			crashTailReachedHandleScriptChanged = true;
 
 			try
 			{
-				bool bindingResolved = host.HandleScriptChanged(
-					targetTransitionId,
-					diagnosticPhase,
-					nativeBoundaryDiagnosticPhase
+				LogCompactScriptEditorCrashTail(
+					"DeferredScriptRebind",
+					"HandleScriptChanged.Begin",
+					operationToken: token,
+					targetScriptPath: crashTailTargetScriptPath,
+					hostInstanceToken: scheduledHostInstanceToken
 				);
-				if (
-					bindingResolved
-					&& ScriptEditorLifecycleCoordinator.TryGetCurrentBindingLease(
-						out EditorBindingLease lease
-					)
-					&& lease.ScriptTransitionId == targetTransitionId
-				)
-				{
-					LogScriptEditorLifecycle(
-						"ScriptEditor lifecycle binding established",
-						DescribeScriptEditorLifecycleForDiagnostics()
-					);
-				}
+				bool bindingResolved = host.HandleScriptChanged(targetTransitionId);
+				LogCompactScriptEditorCrashTail(
+					"DeferredScriptRebind",
+					"HandleScriptChanged.Returned",
+					operationToken: token,
+					targetScriptPath: crashTailTargetScriptPath,
+					hostInstanceToken: scheduledHostInstanceToken,
+					extraDetails: $"BindingResolved='{bindingResolved}'"
+				);
 			}
 			catch (Exception exception)
 			{
@@ -1569,12 +1570,36 @@ public partial class SystemExplorerPlugin
 			finally
 			{
 				ConsumeDeferredAutocompleteScriptChangeRebind(token);
+				LogCompactScriptEditorCrashTail(
+					"DeferredScriptRebind",
+					"RefreshProcessing.Begin",
+					operationToken: token,
+					targetScriptPath: crashTailTargetScriptPath,
+					hostInstanceToken: scheduledHostInstanceToken
+				);
 				RefreshEditorPluginProcessingState();
+				LogCompactScriptEditorCrashTail(
+					"DeferredScriptRebind",
+					"RefreshProcessing.Returned",
+					operationToken: token,
+					targetScriptPath: crashTailTargetScriptPath,
+					hostInstanceToken: scheduledHostInstanceToken
+				);
 			}
 		}
 		finally
 		{
 			_autocompleteDeferredScriptChangeRebindExecutionActive = false;
+			if (crashTailReachedHandleScriptChanged)
+			{
+				LogCompactScriptEditorCrashTail(
+					"DeferredScriptRebind",
+					"CallbackExit",
+					operationToken: token,
+					targetScriptPath: crashTailTargetScriptPath,
+					hostInstanceToken: scheduledHostInstanceToken
+				);
+			}
 		}
 	}
 
@@ -1969,8 +1994,38 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		LogCompactScriptEditorCrashTail(
+			"TextChangedValidation",
+			"HostValidate.Begin",
+			operationToken: validationGeneration,
+			hostInstanceToken: scheduledHostInstanceToken
+		);
 		currentHost.ValidateAfterTextChanged(validationGeneration);
+		LogCompactScriptEditorCrashTail(
+			"TextChangedValidation",
+			"HostValidate.Returned",
+			operationToken: validationGeneration,
+			hostInstanceToken: scheduledHostInstanceToken
+		);
+		LogCompactScriptEditorCrashTail(
+			"TextChangedValidation",
+			"RefreshProcessing.Begin",
+			operationToken: validationGeneration,
+			hostInstanceToken: scheduledHostInstanceToken
+		);
 		RefreshEditorPluginProcessingState();
+		LogCompactScriptEditorCrashTail(
+			"TextChangedValidation",
+			"RefreshProcessing.Returned",
+			operationToken: validationGeneration,
+			hostInstanceToken: scheduledHostInstanceToken
+		);
+		LogCompactScriptEditorCrashTail(
+			"TextChangedValidation",
+			"CallbackExit",
+			operationToken: validationGeneration,
+			hostInstanceToken: scheduledHostInstanceToken
+		);
 	}
 
 	private void LogStaleDeferredAutocompleteOperation(
