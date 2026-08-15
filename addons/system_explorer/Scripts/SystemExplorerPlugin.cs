@@ -230,14 +230,29 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		}
 
 		SchedulePendingTreeOperationDialogPresentation();
-		CallDeferred(nameof(MakeSystemExplorerDockVisible));
+		CallDeferred(nameof(MakeSystemExplorerDockVisible), ManagedAssemblyGeneration);
 
 		DebugLogStateSnapshot("Enter Tree Complete");
 		StartCSharpierStartupWarmUp();
 	}
 
-	private void MakeSystemExplorerDockVisible()
+	private void MakeSystemExplorerDockVisible(string scheduledManagedAssemblyGeneration)
 	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Deferred editor operation rejected",
+				$"Reason='StaleManagedAssemblyGeneration', Operation='MakeSystemExplorerDockVisible', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
+
 		if (!GodotObject.IsInstanceValid(_editorDock))
 		{
 			return;
@@ -421,6 +436,7 @@ public sealed class {{CLASS_NAME}}
 	public override void _ExitTree()
 	{
 		TryLogEditorOperation("Exit Tree");
+		ResetTreeMouseScriptClickIntent();
 		ShutdownEditorOperationLifecycle();
 		FlushAndShutdownTreeStatePersistence();
 
@@ -433,9 +449,11 @@ public sealed class {{CLASS_NAME}}
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 		_isScriptEditorSyncDeferredQueued = false;
+		InvalidateScriptEditorLifecycle("ExitTree");
 		ShutdownTreeOperationDialogs();
 		ShutdownAutocomplete();
 		ShutdownScriptEditorSync();
+		ShutdownScriptEditorLifecycleAssemblyUnloadRegistration();
 		ShutdownFolderBindingFilesystemLifecycle();
 		DisconnectNamespaceRefactorDialogSignals();
 		DisconnectDockSignals();
@@ -457,6 +475,7 @@ public sealed class {{CLASS_NAME}}
 		_dock = null;
 		ClearDockControlReferences();
 		_loadedPersistentTreeStateGeneration = "";
+		AdvanceManagedAssemblyRecoveryOperationToken();
 		_isRecoveringManagedAssemblyState = false;
 		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.NotQueued;
 		_managedAssemblyRecoveryDeferredAttempts = 0;

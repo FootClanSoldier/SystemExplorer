@@ -485,15 +485,19 @@ public partial class SystemExplorerPlugin
 		if (entries == null)
 			return new List<string>();
 
-		List<string> explicitFolders = entries
+		List<string> validEntries = entries
+			.Where(entry => !string.IsNullOrWhiteSpace(entry))
+			.ToList();
+
+		List<string> explicitFolders = validEntries
 			.Where(entry => entry.StartsWith("folder::"))
 			.GroupBy(GetFolderPathFromFolderEntry)
 			.Select(group => BuildFolderEntry(group.Key, group.Any(IsEntryLocked)))
 			.ToList();
 
-		List<string> systemMarkers = entries.Where(IsSystemLockEntry).Distinct().ToList();
+		List<string> systemMarkers = validEntries.Where(IsSystemLockEntry).Distinct().ToList();
 
-		List<string> scripts = entries
+		List<string> scripts = validEntries
 			.Where(IsScriptOrSceneEntry)
 			.Select(NormalizeScriptOrSceneResourcePaths)
 			.Distinct()

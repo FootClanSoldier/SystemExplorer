@@ -52,6 +52,8 @@ internal sealed class AutocompletePluginHost
 	private readonly Action<string, string> _debugLog;
 	private readonly Func<bool> _debugEnabled;
 	private readonly Func<long> _hostInstanceTokenProvider;
+	private readonly ScriptEditorLifecycleCoordinator _scriptEditorLifecycleCoordinator;
+	private readonly Action<string> _requestScriptEditorLifecycleRebind;
 	private bool _isIssuingForcedMemberCompletionRequest;
 
 	internal AutocompletePluginHost(
@@ -70,6 +72,8 @@ internal sealed class AutocompletePluginHost
 		Action<string, string> persistentWorkerDiagnosticLog,
 		Func<bool> debugEnabled,
 		Func<long> hostInstanceTokenProvider,
+		ScriptEditorLifecycleCoordinator scriptEditorLifecycleCoordinator,
+		Action<string> requestScriptEditorLifecycleRebind,
 		bool semanticMemberPipelineEnabled,
 		bool cancelNativeCompletionOnRebind,
 		bool activeDocumentSyntaxOverlayEnabled,
@@ -101,6 +105,12 @@ internal sealed class AutocompletePluginHost
 		_hostInstanceTokenProvider =
 			hostInstanceTokenProvider
 			?? throw new ArgumentNullException(nameof(hostInstanceTokenProvider));
+		_scriptEditorLifecycleCoordinator =
+			scriptEditorLifecycleCoordinator
+			?? throw new ArgumentNullException(nameof(scriptEditorLifecycleCoordinator));
+		_requestScriptEditorLifecycleRebind =
+			requestScriptEditorLifecycleRebind
+			?? throw new ArgumentNullException(nameof(requestScriptEditorLifecycleRebind));
 		Trace("C# autocomplete host constructor begin");
 		_prefixExtractor = new AutocompletePrefixExtractor();
 		_metadataCodec = new AutocompleteCompletionOptionMetadataCodec();
@@ -251,6 +261,7 @@ internal sealed class AutocompletePluginHost
 		_editorBinding = new AutocompleteEditorBinding(
 			_managedAssemblyGeneration,
 			_cancelNativeCompletionOnRebind,
+			_scriptEditorLifecycleCoordinator,
 			scriptEditorProvider,
 			connectPluginSignal,
 			disconnectPluginSignal,
@@ -277,26 +288,38 @@ internal sealed class AutocompletePluginHost
 		Trace("C# autocomplete host constructor completed");
 	}
 
-	internal bool EnsureLifecycleCurrent(bool refreshCodeEditBinding = true)
+	internal bool EnsureLifecycleCurrent()
 	{
-		Trace(
-			"C# autocomplete host EnsureLifecycleCurrent begin",
-			$"RefreshCodeEditBinding='{refreshCodeEditBinding}'"
-		);
+		Trace("C# autocomplete host EnsureLifecycleCurrent begin");
 		bool editorBindingCurrent = _editorBinding.EnsureLifecycleCurrent(
-			refreshCodeEditBinding
+			out bool bindingResolutionRequired
 		);
+		if (
+			editorBindingCurrent
+			&& bindingResolutionRequired
+			&& _scriptEditorLifecycleCoordinator.Snapshot.State
+				== ScriptEditorLifecycleState.Stable
+		)
+		{
+			_requestScriptEditorLifecycleRebind("ScriptEditorIdentityChanged");
+		}
+
 		EnsureProjectIndexLifecycleCurrentBestEffort();
 		DrainIndexBuildResults();
 		EnsureSemanticProjectStateBestEffort();
 
-		if (editorBindingCurrent && refreshCodeEditBinding)
+		if (
+			editorBindingCurrent
+			&& _scriptEditorLifecycleCoordinator.TryGetCurrentBindingLease(out _)
+		)
+		{
 			CaptureActiveDocumentIfNeededBestEffort("Ensure lifecycle current");
+		}
 
 		DrainIndexBuildResults();
 		Trace(
 			"C# autocomplete host EnsureLifecycleCurrent completed",
-			$"EditorBindingCurrent='{editorBindingCurrent}', RefreshCodeEditBinding='{refreshCodeEditBinding}'"
+			$"EditorBindingCurrent='{editorBindingCurrent}', LifecycleState='{_scriptEditorLifecycleCoordinator.Snapshot.State}', ScriptTransitionId='{_scriptEditorLifecycleCoordinator.Snapshot.ScriptTransitionId}', BindingEpoch='{_scriptEditorLifecycleCoordinator.Snapshot.BindingEpoch}'"
 		);
 		return editorBindingCurrent;
 	}
@@ -338,8 +361,10 @@ internal sealed class AutocompletePluginHost
 		);
 	}
 
-	internal void HandleScriptChanged(
-		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null
+	internal bool HandleScriptChanged(
+		long scriptTransitionId,
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null,
+		Action<string, string> nativeBoundaryDiagnosticPhase = null
 	)
 	{
 		InvokeScriptChangeDiagnosticPhase(
@@ -354,9 +379,15 @@ internal sealed class AutocompletePluginHost
 
 		InvokeScriptChangeDiagnosticPhase(
 			diagnosticPhase,
-			"RefreshCodeEditBinding"
+			"ResolveCodeEditBinding"
 		);
-		if (_editorBinding.RefreshCodeEditBinding(diagnosticPhase))
+		bool bindingResolved = _editorBinding.ResolveCodeEditBinding(
+			scriptTransitionId,
+			_hostInstanceTokenProvider(),
+			diagnosticPhase,
+			nativeBoundaryDiagnosticPhase
+		);
+		if (bindingResolved)
 		{
 			CaptureActiveDocumentIfNeededBestEffort(
 				"Active script changed",
@@ -369,6 +400,7 @@ internal sealed class AutocompletePluginHost
 			diagnosticPhase,
 			"HandleScriptChanged.Completed"
 		);
+		return bindingResolved;
 	}
 
 	internal void HandleCompletionRequested()
@@ -377,7 +409,7 @@ internal sealed class AutocompletePluginHost
 
 		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath))
 		{
-			_editorBinding.RefreshCodeEditBinding();
+			_requestScriptEditorLifecycleRebind("HandleCompletionRequested");
 			return;
 		}
 
@@ -415,7 +447,7 @@ internal sealed class AutocompletePluginHost
 			)
 		)
 		{
-			_editorBinding.RefreshCodeEditBinding();
+			_requestScriptEditorLifecycleRebind("HandleCodeEditGuiInput");
 			return null;
 		}
 
@@ -469,6 +501,7 @@ internal sealed class AutocompletePluginHost
 			)
 		)
 		{
+			_requestScriptEditorLifecycleRebind("TryApplyDeferredUsingInsertion");
 			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
 				"CodeEditChanged"
 			);
@@ -550,7 +583,7 @@ internal sealed class AutocompletePluginHost
 			)
 		)
 		{
-			_editorBinding.RefreshCodeEditBinding();
+			_requestScriptEditorLifecycleRebind("ValidateAfterTextChanged");
 			return;
 		}
 
@@ -642,6 +675,7 @@ internal sealed class AutocompletePluginHost
 			)
 		)
 		{
+			_requestScriptEditorLifecycleRebind("ProcessPendingCompletionWork");
 			_memberCompletionFollowUp.Clear();
 			return;
 		}

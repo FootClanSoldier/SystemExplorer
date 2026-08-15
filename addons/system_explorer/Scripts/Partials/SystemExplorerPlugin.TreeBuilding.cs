@@ -49,6 +49,8 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		InvalidateCurrentScriptFilterProjection();
+
 		DebugLogger.LogOperation("Build Tree", $"{_systems.Count} systems");
 
 		if (!keepCurrentExpansionState)

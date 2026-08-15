@@ -21,13 +21,17 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(normalizedScriptPath))
 			normalizedScriptPath = ScriptPathUtility.Normalize(script.ResourcePath);
 
+		ScriptEditorTransition scriptTransition =
+			BeginSystemExplorerScriptEditorTransition(normalizedScriptPath);
+
 		long sourceActivationToken;
 
 		if (sourceOccurrence.HasValue)
 		{
 			sourceActivationToken = RegisterSystemExplorerScriptActivation(
 				sourceOccurrence.Value,
-				normalizedScriptPath
+				normalizedScriptPath,
+				scriptTransition.TransitionId
 			);
 		}
 		else

@@ -4113,29 +4113,16 @@ public partial class SystemExplorerPlugin
 
 		if (wasFiltering)
 		{
-			TreeItem root = _tree.GetRoot();
-			TreeItem current = root?.GetFirstChild();
-			int selectedIndex = 0;
-
-			while (current != null && current != selectedItem)
+			if (
+				TryGetScriptFilterResultForTreeItem(
+					selectedItem,
+					out ScriptFilterResult result
+				)
+				&& string.Equals(result.Entry, entry, StringComparison.Ordinal)
+			)
 			{
-				selectedIndex++;
-				current = current.GetNext();
-			}
-
-			List<ScriptFilterResult> results = GetFilteredScriptResults(
-				(_scriptFilterInput?.Text ?? "").Trim().ToLowerInvariant()
-			);
-
-			if (current == selectedItem && selectedIndex >= 0 && selectedIndex < results.Count)
-			{
-				ScriptFilterResult result = results[selectedIndex];
-
-				if (result.Entry == entry)
-				{
-					systemName = result.SystemName;
-					folderPath = result.FolderPath;
-				}
+				systemName = result.SystemName;
+				folderPath = result.FolderPath;
 			}
 		}
 		else

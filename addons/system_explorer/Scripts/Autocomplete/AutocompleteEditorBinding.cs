@@ -2,6 +2,7 @@
 using Godot;
 using System;
 using SystemExplorer.Autocomplete.Styling;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 namespace SystemExplorer.Autocomplete;
 
@@ -16,6 +17,7 @@ internal sealed class AutocompleteEditorBinding
 
 	private readonly string _managedAssemblyGeneration;
 	private readonly bool _cancelNativeCompletionOnRebind;
+	private readonly ScriptEditorLifecycleCoordinator _scriptEditorLifecycleCoordinator;
 	private readonly Func<ScriptEditor> _scriptEditorProvider;
 	private readonly Func<GodotObject, StringName, string, string, bool> _connectPluginSignal;
 	private readonly Action<GodotObject, StringName, string, string> _disconnectPluginSignal;
@@ -38,10 +40,12 @@ internal sealed class AutocompleteEditorBinding
 
 	private ScriptEditor _scriptEditor;
 	private CodeEdit _codeEdit;
+	private EditorBindingLease? _bindingLease;
 
 	internal AutocompleteEditorBinding(
 		string managedAssemblyGeneration,
 		bool cancelNativeCompletionOnRebind,
+		ScriptEditorLifecycleCoordinator scriptEditorLifecycleCoordinator,
 		Func<ScriptEditor> scriptEditorProvider,
 		Func<GodotObject, StringName, string, string, bool> connectPluginSignal,
 		Action<GodotObject, StringName, string, string> disconnectPluginSignal,
@@ -63,6 +67,9 @@ internal sealed class AutocompleteEditorBinding
 				nameof(managedAssemblyGeneration)
 			);
 		_cancelNativeCompletionOnRebind = cancelNativeCompletionOnRebind;
+		_scriptEditorLifecycleCoordinator =
+			scriptEditorLifecycleCoordinator
+			?? throw new ArgumentNullException(nameof(scriptEditorLifecycleCoordinator));
 		_scriptEditorProvider =
 			scriptEditorProvider ?? throw new ArgumentNullException(nameof(scriptEditorProvider));
 		_connectPluginSignal =
@@ -98,23 +105,22 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete CodeEdit rebind native completion cancellation isolated",
-				"Enabled='False', Scope='RefreshCodeEditBindingInitialDisconnect', SignalDisconnectRetained='True', ShutdownCancellationRetained='True', CompletionCoordinatorCancellationRetained='True'"
+				"Enabled='False', Scope='ResolveCodeEditBindingInitialDisconnect', SignalDisconnectRetained='True', ShutdownCancellationRetained='True', CompletionCoordinatorCancellationRetained='True'"
 			);
 		}
 	}
 
-	internal bool EnsureLifecycleCurrent(bool refreshCodeEditBinding = true)
+	internal bool EnsureLifecycleCurrent(out bool bindingResolutionRequired)
 	{
+		bindingResolutionRequired = false;
 		ScriptEditor currentScriptEditor = _scriptEditorProvider();
 
 		if (!IsValidGodotObject(currentScriptEditor))
 		{
 			Trace(
 				"C# autocomplete binding lifecycle anomaly",
-				() => $"Reason='Current ScriptEditor invalid', RefreshCodeEditBinding='{refreshCodeEditBinding}', {DescribeGodotObject("CurrentScriptEditor", currentScriptEditor)}"
+				() => $"Reason='Current ScriptEditor invalid', {DescribeGodotObject("CurrentScriptEditor", currentScriptEditor)}"
 			);
-			if (refreshCodeEditBinding)
-				DisconnectCodeEdit(cancelCompletion: true);
 			DisconnectScriptEditor();
 			_scriptEditor = null;
 			return false;
@@ -126,12 +132,11 @@ internal sealed class AutocompleteEditorBinding
 
 		if (scriptEditorIdentityChanged)
 		{
+			bindingResolutionRequired = true;
 			Trace(
 				"C# autocomplete binding ScriptEditor identity changed",
-				() => $"RefreshCodeEditBinding='{refreshCodeEditBinding}', {DescribeGodotObject("PreviousScriptEditor", _scriptEditor)}, {DescribeGodotObject("CurrentScriptEditor", currentScriptEditor)}"
+				() => $"{DescribeGodotObject("PreviousScriptEditor", _scriptEditor)}, {DescribeGodotObject("CurrentScriptEditor", currentScriptEditor)}"
 			);
-			if (refreshCodeEditBinding)
-				DisconnectCodeEdit(cancelCompletion: true);
 			DisconnectScriptEditor();
 		}
 
@@ -142,7 +147,7 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete binding lifecycle anomaly",
-				() => $"Reason='ScriptChanged signal unavailable', RefreshCodeEditBinding='{refreshCodeEditBinding}', {DescribeGodotObject("ScriptEditor", currentScriptEditor)}"
+				() => $"Reason='ScriptChanged signal unavailable', {DescribeGodotObject("ScriptEditor", currentScriptEditor)}"
 			);
 			return false;
 		}
@@ -158,23 +163,51 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete binding lifecycle anomaly",
-				() => $"Reason='ScriptChanged connect failed', RefreshCodeEditBinding='{refreshCodeEditBinding}', {DescribeGodotObject("ScriptEditor", currentScriptEditor)}"
+				() => $"Reason='ScriptChanged connect failed', {DescribeGodotObject("ScriptEditor", currentScriptEditor)}"
 			);
 			return false;
 		}
 
-		if (!refreshCodeEditBinding)
-			return true;
-
-		return RefreshCodeEditBinding();
+		return true;
 	}
 
-	internal bool RefreshCodeEditBinding(
-		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null
+	internal bool ResolveCodeEditBinding(
+		long scriptTransitionId,
+		long hostInstanceToken,
+		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null,
+		Action<string, string> nativeBoundaryDiagnosticPhase = null
 	)
 	{
+		if (
+			!_scriptEditorLifecycleCoordinator.CanResolveBinding(
+				_managedAssemblyGeneration,
+				scriptTransitionId
+			)
+		)
+		{
+			Trace(
+				"C# autocomplete binding resolution rejected",
+				$"Reason='StaleLifecycleAuthorityBeforeEditorAccess', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}'"
+			);
+			return false;
+		}
+
 		string previousCodeEditInstanceId = CaptureInstanceIdForDiagnostics(_codeEdit);
 		DisconnectCodeEdit(cancelCompletion: _cancelNativeCompletionOnRebind);
+
+		if (
+			!_scriptEditorLifecycleCoordinator.CanResolveBinding(
+				_managedAssemblyGeneration,
+				scriptTransitionId
+			)
+		)
+		{
+			Trace(
+				"C# autocomplete binding resolution rejected",
+				$"Reason='StaleLifecycleAuthorityAfterOutgoingDisconnect', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}'"
+			);
+			return false;
+		}
 
 		ScriptEditor scriptEditor = _scriptEditor;
 
@@ -182,28 +215,61 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete binding rebind failed",
-				() => $"Reason='Invalid ScriptEditor', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', {DescribeGodotObject("ScriptEditor", scriptEditor)}"
+				() => $"Reason='Invalid ScriptEditor', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', ScriptTransitionId='{scriptTransitionId}', {DescribeGodotObject("ScriptEditor", scriptEditor)}"
 			);
 			return false;
 		}
 
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
-			"RefreshCodeEditBinding.GetCurrentScript",
+			"ResolveCodeEditBinding.GetCurrentScript",
 			scriptEditor,
 			codeEdit: null
 		);
 		Script currentScript = scriptEditor.GetCurrentScript();
+
+		if (
+			!_scriptEditorLifecycleCoordinator.CanResolveBinding(
+				_managedAssemblyGeneration,
+				scriptTransitionId
+			)
+		)
+		{
+			Trace(
+				"C# autocomplete binding resolution rejected",
+				$"Reason='StaleLifecycleAuthorityAfterGetCurrentScript', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}'"
+			);
+			return false;
+		}
+
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
-			"RefreshCodeEditBinding.GetCurrentEditor",
+			"ResolveCodeEditBinding.GetCurrentEditor",
 			scriptEditor,
 			codeEdit: null
 		);
 		ScriptEditorBase currentEditor = scriptEditor.GetCurrentEditor();
+		string currentScriptPath = ScriptPathUtility.Normalize(
+			IsValidGodotObject(currentScript) ? currentScript.ResourcePath : ""
+		);
 
 		if (!IsCSharpScript(currentScript))
 		{
+			bool completedWithoutBinding =
+				_scriptEditorLifecycleCoordinator.TryCompleteWithoutBinding(
+					_managedAssemblyGeneration,
+					scriptTransitionId,
+					currentScriptPath
+				);
+			if (!completedWithoutBinding)
+			{
+				Trace(
+					"C# autocomplete binding resolution rejected",
+					$"Reason='StaleLifecycleAuthorityForNonCSharpResolution', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}', ScriptPath='{currentScriptPath}'"
+				);
+				return false;
+			}
+
 			TraceRebindSummary(
 				scriptEditor,
 				previousCodeEditInstanceId,
@@ -219,39 +285,124 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete binding rebind failed",
-				() => $"Reason='Invalid ScriptEditorBase', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', {DescribeScript(currentScript)}, {DescribeGodotObject("ScriptEditorBase", currentEditor)}"
+				() => $"Reason='Invalid ScriptEditorBase', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', ScriptTransitionId='{scriptTransitionId}', {DescribeScript(currentScript)}, {DescribeGodotObject("ScriptEditorBase", currentEditor)}"
+			);
+			return false;
+		}
+
+		if (
+			!_scriptEditorLifecycleCoordinator.CanResolveBinding(
+				_managedAssemblyGeneration,
+				scriptTransitionId
+			)
+		)
+		{
+			Trace(
+				"C# autocomplete binding resolution rejected",
+				$"Reason='StaleLifecycleAuthorityBeforeGetBaseEditor', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}'"
 			);
 			return false;
 		}
 
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
-			"RefreshCodeEditBinding.GetBaseEditor",
+			"ResolveCodeEditBinding.GetBaseEditor",
 			scriptEditor,
 			codeEdit: null
 		);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.GetBaseEditor.Call.Begin"
+		);
 		Control baseEditor = currentEditor.GetBaseEditor();
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.GetBaseEditor.Call.Returned"
+		);
 
-		if (baseEditor is not CodeEdit codeEdit || !IsValidGodotObject(codeEdit))
+		bool candidateIsCodeEdit = baseEditor is CodeEdit;
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.CandidateTypeCheck.Returned",
+			$"IsCodeEdit='{candidateIsCodeEdit}'"
+		);
+		if (!candidateIsCodeEdit)
 		{
 			Trace(
 				"C# autocomplete binding rebind failed",
-				() => $"Reason='Base editor is not a valid CodeEdit', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', {DescribeScript(currentScript)}, {DescribeGodotObject("BaseEditor", baseEditor)}"
+				() => $"Reason='Base editor is not a valid CodeEdit', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', ScriptTransitionId='{scriptTransitionId}', {DescribeScript(currentScript)}, {DescribeGodotObject("BaseEditor", baseEditor)}"
+			);
+			return false;
+		}
+
+		CodeEdit codeEdit = (CodeEdit)baseEditor;
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.CandidateIsInstanceValid.Begin"
+		);
+		bool candidateValid = IsValidGodotObject(codeEdit);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.CandidateIsInstanceValid.Returned",
+			$"Result='{candidateValid}'"
+		);
+		if (!candidateValid)
+		{
+			Trace(
+				"C# autocomplete binding rebind failed",
+				() => $"Reason='Base editor is not a valid CodeEdit', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', ScriptTransitionId='{scriptTransitionId}', {DescribeScript(currentScript)}, {DescribeGodotObject("BaseEditor", baseEditor)}"
+			);
+			return false;
+		}
+
+		bool candidateAuthority =
+			_scriptEditorLifecycleCoordinator.CanResolveBinding(
+				_managedAssemblyGeneration,
+				scriptTransitionId
+			);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.CandidateAuthority.Checked",
+			$"Result='{candidateAuthority}'"
+		);
+		if (!candidateAuthority)
+		{
+			Trace(
+				"C# autocomplete binding resolution rejected",
+				$"Reason='StaleLifecycleAuthorityBeforeCandidateBinding', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}'"
 			);
 			return false;
 		}
 
 		bool allowFreshNativeOwnershipMarkerWrite = true;
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.NativeOwnershipRecovery.Begin"
+		);
 		RecoverStaleNativeOwnershipIfNeeded(
 			codeEdit,
-			ref allowFreshNativeOwnershipMarkerWrite
+			ref allowFreshNativeOwnershipMarkerWrite,
+			nativeBoundaryDiagnosticPhase
+		);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.NativeOwnershipRecovery.Returned",
+			$"AllowFreshNativeOwnershipMarkerWrite='{allowFreshNativeOwnershipMarkerWrite}'"
 		);
 
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.LegacyBindDiagnostic.Begin"
+		);
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
-			"RefreshCodeEditBinding.BindCodeEdit",
+			"ResolveCodeEditBinding.BindCodeEdit",
 			scriptEditor,
 			codeEdit
+		);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"ResolveCodeEditBinding.LegacyBindDiagnostic.Returned"
 		);
 
 		bool textChangedConnected = _connectPluginSignal(
@@ -265,7 +416,7 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete binding rebind failed",
-				() => $"Reason='TextChanged connect failed', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
+				() => $"Reason='TextChanged connect failed', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', ScriptTransitionId='{scriptTransitionId}', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
 			);
 			return false;
 		}
@@ -279,20 +430,19 @@ internal sealed class AutocompleteEditorBinding
 
 		if (!completionRequestedConnected)
 		{
-			_disconnectPluginSignal(
+			RollbackResolvedCodeEditCandidate(
 				codeEdit,
-				TextEdit.SignalName.TextChanged,
-				_textChangedMethodName,
-				$"{TextChangedDescription} rollback"
+				textChangedConnected: true,
+				completionRequestedConnected: false,
+				guiInputConnected: false,
+				restorePresentationOwnership: false
 			);
 			Trace(
 				"C# autocomplete binding rebind failed",
-				() => $"Reason='CodeCompletionRequested connect failed', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
+				() => $"Reason='CodeCompletionRequested connect failed', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', ScriptTransitionId='{scriptTransitionId}', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
 			);
 			return false;
 		}
-
-		_codeEdit = codeEdit;
 
 		bool guiInputConnected = _connectPluginSignal(
 			codeEdit,
@@ -304,17 +454,44 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete binding anomaly",
-				() => $"Reason='GuiInput connect failed; non-critical', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
+				() => $"Reason='GuiInput connect failed; non-critical', ScriptTransitionId='{scriptTransitionId}', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
 			);
+		}
+
+		if (
+			!_scriptEditorLifecycleCoordinator.CanResolveBinding(
+				_managedAssemblyGeneration,
+				scriptTransitionId
+			)
+		)
+		{
+			RollbackResolvedCodeEditCandidate(
+				codeEdit,
+				textChangedConnected: true,
+				completionRequestedConnected: true,
+				guiInputConnected: guiInputConnected,
+				restorePresentationOwnership: false
+			);
+			Trace(
+				"C# autocomplete binding resolution rejected",
+				$"Reason='StaleLifecycleAuthorityAfterSignalConnect', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}'"
+			);
+			return false;
 		}
 
 		bool prefixApplied = _completionPrefixController.Apply(codeEdit);
 		if (!prefixApplied)
 		{
-			DisconnectCodeEdit(cancelCompletion: true);
+			RollbackResolvedCodeEditCandidate(
+				codeEdit,
+				textChangedConnected: true,
+				completionRequestedConnected: true,
+				guiInputConnected: guiInputConnected,
+				restorePresentationOwnership: true
+			);
 			Trace(
 				"C# autocomplete binding rebind failed",
-				() => $"Reason='CompletionPrefix Apply failed', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
+				() => $"Reason='CompletionPrefix Apply failed', PreviousCodeEditInstanceId='{previousCodeEditInstanceId}', ScriptTransitionId='{scriptTransitionId}', {DescribeGodotObject("CodeEdit", codeEdit)}, {DescribeScript(currentScript)}"
 			);
 			return false;
 		}
@@ -325,13 +502,66 @@ internal sealed class AutocompleteEditorBinding
 			if (allowFreshNativeOwnershipMarkerWrite)
 				PublishFreshNativeOwnershipMarkerBestEffort(codeEdit);
 
+			if (
+				!_scriptEditorLifecycleCoordinator.CanResolveBinding(
+					_managedAssemblyGeneration,
+					scriptTransitionId
+				)
+			)
+			{
+				RollbackResolvedCodeEditCandidate(
+					codeEdit,
+					textChangedConnected: true,
+					completionRequestedConnected: true,
+					guiInputConnected: guiInputConnected,
+					restorePresentationOwnership: true
+				);
+				Trace(
+					"C# autocomplete binding resolution rejected",
+					$"Reason='StaleLifecycleAuthorityAfterPresentationApply', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}'"
+				);
+				return false;
+			}
+
+			ScriptEditorBindingIdentity identity = new(
+				scriptEditor.GetInstanceId(),
+				currentEditor.GetInstanceId(),
+				codeEdit.GetInstanceId(),
+				currentScriptPath
+			);
+			if (
+				!_scriptEditorLifecycleCoordinator.TryCommitBinding(
+					_managedAssemblyGeneration,
+					hostInstanceToken,
+					scriptTransitionId,
+					identity,
+					out EditorBindingLease lease
+				)
+			)
+			{
+				RollbackResolvedCodeEditCandidate(
+					codeEdit,
+					textChangedConnected: true,
+					completionRequestedConnected: true,
+					guiInputConnected: guiInputConnected,
+					restorePresentationOwnership: true
+				);
+				Trace(
+					"C# autocomplete binding resolution rejected",
+					$"Reason='LifecycleCommitRejected', ScriptTransitionId='{scriptTransitionId}', HostInstanceToken='{hostInstanceToken}', CodeEditInstanceId='{identity.CodeEditInstanceId}', ScriptPath='{identity.ScriptResourcePath}'"
+				);
+				return false;
+			}
+
+			_codeEdit = codeEdit;
+			_bindingLease = lease;
 			TraceRebindSummary(
 				scriptEditor,
 				previousCodeEditInstanceId,
 				codeEdit,
 				currentScript,
 				result: true,
-				reason: "Bound C# CodeEdit"
+				reason: $"Bound C# CodeEdit; ScriptTransitionId={lease.ScriptTransitionId}; BindingEpoch={lease.BindingEpoch}"
 			);
 			return true;
 		}
@@ -339,9 +569,15 @@ internal sealed class AutocompleteEditorBinding
 		{
 			Trace(
 				"C# autocomplete binding Theme Apply failed",
-				() => $"{DescribeGodotObject("CodeEdit", codeEdit)}, Exception='{exception}'"
+				() => $"ScriptTransitionId='{scriptTransitionId}', {DescribeGodotObject("CodeEdit", codeEdit)}, Exception='{exception}'"
 			);
-			DisconnectCodeEdit(cancelCompletion: true);
+			RollbackResolvedCodeEditCandidate(
+				codeEdit,
+				textChangedConnected: true,
+				completionRequestedConnected: true,
+				guiInputConnected: guiInputConnected,
+				restorePresentationOwnership: true
+			);
 			throw;
 		}
 	}
@@ -352,56 +588,135 @@ internal sealed class AutocompleteEditorBinding
 		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null
 	)
 	{
-		codeEdit = _codeEdit;
+		codeEdit = null;
 		scriptPath = "";
-		ScriptEditor scriptEditor = _scriptEditor;
-
-		if (!IsValidGodotObject(codeEdit) || !IsValidGodotObject(scriptEditor))
+		if (!_bindingLease.HasValue)
 			return false;
+
+		EditorBindingLease lease = _bindingLease.Value;
+		if (!_scriptEditorLifecycleCoordinator.IsCurrentStableBinding(lease))
+			return false;
+
+		CodeEdit boundCodeEdit = _codeEdit;
+		ScriptEditor scriptEditor = _scriptEditor;
+		if (!IsValidGodotObject(boundCodeEdit) || !IsValidGodotObject(scriptEditor))
+			return false;
+
+		if (
+			scriptEditor.GetInstanceId() != lease.ScriptEditorInstanceId
+			|| boundCodeEdit.GetInstanceId() != lease.CodeEditInstanceId
+		)
+		{
+			return false;
+		}
 
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
 			"ValidateActiveCodeEdit.GetCurrentScript",
 			scriptEditor,
-			codeEdit
+			boundCodeEdit
 		);
 		Script currentScript = scriptEditor.GetCurrentScript();
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
 			"ValidateActiveCodeEdit.GetCurrentEditor",
 			scriptEditor,
-			codeEdit
+			boundCodeEdit
 		);
 		ScriptEditorBase currentEditor = scriptEditor.GetCurrentEditor();
 
 		if (!IsCSharpScript(currentScript) || !IsValidGodotObject(currentEditor))
+			return false;
+		if (currentEditor.GetInstanceId() != lease.ScriptEditorBaseInstanceId)
 			return false;
 
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
 			"ValidateActiveCodeEdit.GetBaseEditor",
 			scriptEditor,
-			codeEdit
+			boundCodeEdit
 		);
 		Control baseEditor = currentEditor.GetBaseEditor();
 
 		if (
 			baseEditor is not CodeEdit currentCodeEdit
 			|| !IsValidGodotObject(currentCodeEdit)
-			|| currentCodeEdit.GetInstanceId() != codeEdit.GetInstanceId()
+			|| currentCodeEdit.GetInstanceId() != lease.CodeEditInstanceId
 		)
 		{
 			return false;
 		}
 
-		scriptPath = currentScript.ResourcePath;
+		string normalizedScriptPath = ScriptPathUtility.Normalize(currentScript.ResourcePath);
+		if (
+			!string.Equals(
+				normalizedScriptPath,
+				lease.ScriptResourcePath,
+				StringComparison.OrdinalIgnoreCase
+			)
+		)
+		{
+			return false;
+		}
+
+		codeEdit = boundCodeEdit;
+		scriptPath = normalizedScriptPath;
 		InvokeDiagnosticPhase(
 			diagnosticPhase,
 			"ValidateActiveCodeEdit.Completed",
 			scriptEditor,
-			codeEdit
+			boundCodeEdit
 		);
 		return true;
+	}
+
+	private void RollbackResolvedCodeEditCandidate(
+		CodeEdit codeEdit,
+		bool textChangedConnected,
+		bool completionRequestedConnected,
+		bool guiInputConnected,
+		bool restorePresentationOwnership
+	)
+	{
+		if (IsValidGodotObject(codeEdit))
+		{
+			if (textChangedConnected)
+			{
+				_disconnectPluginSignal(
+					codeEdit,
+					TextEdit.SignalName.TextChanged,
+					_textChangedMethodName,
+					$"{TextChangedDescription} resolution rollback"
+				);
+			}
+
+			if (completionRequestedConnected)
+			{
+				_disconnectPluginSignal(
+					codeEdit,
+					CodeEdit.SignalName.CodeCompletionRequested,
+					_completionRequestedMethodName,
+					$"{CompletionRequestedDescription} resolution rollback"
+				);
+			}
+
+			if (guiInputConnected)
+			{
+				_disconnectPluginSignal(
+					codeEdit,
+					Control.SignalName.GuiInput,
+					_guiInputMethodName,
+					$"{GuiInputDescription} resolution rollback"
+				);
+			}
+		}
+
+		if (restorePresentationOwnership)
+		{
+			_completionPrefixController.Restore(codeEdit);
+			_themeController.Restore(codeEdit);
+			ClearCurrentGenerationNativeOwnershipMarkerBestEffort(codeEdit);
+		}
 	}
 
 	internal void Shutdown()
@@ -463,19 +778,31 @@ internal sealed class AutocompleteEditorBinding
 		_themeController.Restore(codeEdit);
 		ClearCurrentGenerationNativeOwnershipMarkerBestEffort(codeEdit);
 		_codeEdit = null;
+		_bindingLease = null;
 	}
 
 	private void RecoverStaleNativeOwnershipIfNeeded(
 		CodeEdit codeEdit,
-		ref bool allowFreshNativeOwnershipMarkerWrite
+		ref bool allowFreshNativeOwnershipMarkerWrite,
+		Action<string, string> nativeBoundaryDiagnosticPhase = null
 	)
 	{
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.Inspect.Begin"
+		);
 		AutocompleteCodeEditNativeOwnershipBridge.MarkerReadStatus markerStatus =
 			_nativeOwnershipBridge.Inspect(
 				codeEdit,
 				out AutocompleteCodeEditNativeOwnershipBridge.OwnershipState state,
-				out string failureDetail
+				out string failureDetail,
+				nativeBoundaryDiagnosticPhase
 			);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.Inspect.Returned",
+			$"Status='{markerStatus}'"
+		);
 
 		if (markerStatus == AutocompleteCodeEditNativeOwnershipBridge.MarkerReadStatus.Missing)
 			return;
@@ -506,12 +833,26 @@ internal sealed class AutocompleteEditorBinding
 				$"CodeEditNativeInstanceId='{state.CodeEditNativeInstanceId}', PreviousManagedAssemblyGeneration='{state.OwnerManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{_managedAssemblyGeneration}', PrefixOwned='{state.PrefixOwned}', CompletionExistingColorOwned='{state.CompletionExistingColorOwned}', HadPreviousCompletionExistingColorOverride='{state.HadPreviousCompletionExistingColorOverride}'"
 		);
 
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.PrefixRestore.Begin"
+		);
 		bool prefixRestored =
 			!state.PrefixOwned
 			|| _completionPrefixController.TryRestoreOwnedPrefixesFromNativeBridge(
 				codeEdit,
 				state.PreviousCodeCompletionPrefixes
 			);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.PrefixRestore.Returned",
+			$"Result='{prefixRestored}'"
+		);
+
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.ThemeRestore.Begin"
+		);
 		bool completionExistingColorRestored =
 			!state.CompletionExistingColorOwned
 			|| _themeController.TryRestoreCompletionExistingColorFromNativeBridge(
@@ -519,6 +860,11 @@ internal sealed class AutocompleteEditorBinding
 				state.HadPreviousCompletionExistingColorOverride,
 				state.PreviousCompletionExistingColor
 			);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.ThemeRestore.Returned",
+			$"Result='{completionExistingColorRestored}'"
+		);
 
 		if (!prefixRestored || !completionExistingColorRestored)
 		{
@@ -530,13 +876,22 @@ internal sealed class AutocompleteEditorBinding
 			return;
 		}
 
-		if (
-			!_nativeOwnershipBridge.TryClearVerifiedMarker(
-				codeEdit,
-				state,
-				out string clearFailureDetail
-			)
-		)
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.MarkerClear.Begin"
+		);
+		bool markerCleared = _nativeOwnershipBridge.TryClearVerifiedMarker(
+			codeEdit,
+			state,
+			out string clearFailureDetail,
+			nativeBoundaryDiagnosticPhase
+		);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipRecovery.MarkerClear.Returned",
+			$"Result='{markerCleared}'"
+		);
+		if (!markerCleared)
 		{
 			allowFreshNativeOwnershipMarkerWrite = false;
 			TraceNativeOwnershipRestoreFailureOnce(
@@ -755,6 +1110,22 @@ internal sealed class AutocompleteEditorBinding
 		}
 	}
 
+	private static void InvokeNativeBoundaryDiagnosticPhase(
+		Action<string, string> nativeBoundaryDiagnosticPhase,
+		string phase,
+		string details = ""
+	)
+	{
+		try
+		{
+			nativeBoundaryDiagnosticPhase?.Invoke(phase ?? "", details ?? "");
+		}
+		catch
+		{
+			// Operation-local diagnostics must never affect binding control flow.
+		}
+	}
+
 	private void TraceRebindSummary(
 		ScriptEditor scriptEditor,
 		string previousCodeEditInstanceId,
@@ -843,7 +1214,10 @@ internal sealed class AutocompleteEditorBinding
 
 	private string AppendBindingIdentity(string details)
 	{
-		string identity = $"BindingInstanceToken='{_bindingInstanceToken}'";
+		ScriptEditorLifecycleSnapshot lifecycle =
+			_scriptEditorLifecycleCoordinator.Snapshot;
+		string identity =
+			$"BindingInstanceToken='{_bindingInstanceToken}', ManagedAssemblyGeneration='{lifecycle.ManagedAssemblyGeneration}', LifecycleState='{lifecycle.State}', ScriptTransitionId='{lifecycle.ScriptTransitionId}', BindingEpoch='{lifecycle.BindingEpoch}', BindingHostInstanceToken='{lifecycle.HostInstanceToken}', BindingScriptEditorInstanceId='{lifecycle.ScriptEditorInstanceId}', BindingScriptEditorBaseInstanceId='{lifecycle.ScriptEditorBaseInstanceId}', BindingCodeEditInstanceId='{lifecycle.CodeEditInstanceId}', BindingScriptResourcePath='{lifecycle.BoundScriptResourcePath}'";
 		return string.IsNullOrWhiteSpace(details) ? identity : $"{identity}, {details}";
 	}
 

@@ -596,6 +596,7 @@ public partial class SystemExplorerPlugin
 		if (!EnsureManagedAssemblyStateCurrent("Global Input"))
 			return;
 
+		ObserveTreeMouseScriptPressBeforeTreeGuiInput(inputEvent);
 		ObserveTreeKeyboardNavigationPersistenceRelease(inputEvent);
 
 		if (HandleGlobalDockAndFilteredTreeKeyboardInput(inputEvent))

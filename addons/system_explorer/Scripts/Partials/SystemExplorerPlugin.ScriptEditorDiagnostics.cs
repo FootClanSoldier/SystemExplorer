@@ -127,6 +127,74 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
+	private Action<string, string> CreateScriptEditorSyncCallbackTailDiagnosticPhase()
+	{
+		if (
+			!DebugLogger.IsEnabled
+			|| _editScriptCallDepth <= 0
+			|| _activeEditScriptBoundaryToken <= 0
+		)
+		{
+			return null;
+		}
+
+		return LogScriptEditorSyncCallbackTailPhase;
+	}
+
+	private void LogScriptEditorSyncCallbackTailPhase(string phase, string details = "")
+	{
+		try
+		{
+			if (
+				!DebugLogger.IsEnabled
+				|| _editScriptCallDepth <= 0
+				|| _activeEditScriptBoundaryToken <= 0
+			)
+			{
+				return;
+			}
+
+			string lifecycleDetails;
+			if (_scriptEditorLifecycleCoordinator == null)
+			{
+				lifecycleDetails =
+					"LifecycleState='Detached', ScriptTransitionId='0', BindingEpoch='0'";
+			}
+			else
+			{
+				var lifecycleSnapshot = _scriptEditorLifecycleCoordinator.Snapshot;
+				lifecycleDetails =
+					$"LifecycleState='{lifecycleSnapshot.State}', "
+					+ $"ScriptTransitionId='{lifecycleSnapshot.ScriptTransitionId}', "
+					+ $"BindingEpoch='{lifecycleSnapshot.BindingEpoch}'";
+			}
+
+			string diagnosticDetails =
+				$"Phase='{NormalizeScriptEditorDiagnosticText(phase)}', "
+				+ $"ManagedAssemblyGeneration='{ManagedAssemblyGeneration}', "
+				+ $"EditorBoundaryToken='{_activeEditScriptBoundaryToken}', "
+				+ $"EditScriptCallDepth='{_editScriptCallDepth}', "
+				+ $"AutocompleteScriptEditorChangedCallbackDepth='{_autocompleteScriptEditorChangedCallbackDepth}', "
+				+ $"HostInstanceToken='{_autocompleteHostInstanceToken}', "
+				+ $"ScriptEditorSyncDeferredQueued='{_isScriptEditorSyncDeferredQueued}', "
+				+ $"ScriptEditorSyncSuppressionDepth='{_scriptEditorSyncSuppressionDepth}', "
+				+ $"FollowActiveScript='{_followActiveScript}', "
+				+ lifecycleDetails;
+
+			if (!string.IsNullOrWhiteSpace(details))
+				diagnosticDetails += $", {details}";
+
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"ScriptEditorSync callback tail",
+				diagnosticDetails
+			);
+		}
+		catch
+		{
+			// Callback-tail diagnostics must never affect ScriptEditor callback control flow.
+		}
+	}
+
 	private Action<string, ScriptEditor, CodeEdit> CreateAutocompleteScriptChangeDiagnosticPhase(
 		string origin,
 		string targetScriptPath = ""
@@ -147,6 +215,65 @@ public partial class SystemExplorerPlugin
 				scriptEditor ?? _scriptEditorSyncScriptEditor,
 				codeEdit
 			);
+	}
+
+	private Action<string, string> CreateAutocompleteCodeEditNativeBoundaryDiagnosticPhase(
+		long operationToken,
+		long targetScriptTransitionId,
+		long hostInstanceToken,
+		string targetScriptPath
+	)
+	{
+		if (!DebugLogger.IsEnabled)
+			return null;
+
+		string managedAssemblyGeneration = ManagedAssemblyGeneration;
+		string normalizedTargetScriptPath = NormalizeScriptEditorDiagnosticText(targetScriptPath);
+
+		return (phase, details) =>
+		{
+			try
+			{
+				string lifecycleDetails;
+				if (_scriptEditorLifecycleCoordinator == null)
+				{
+					lifecycleDetails =
+						"LifecycleState='Detached', ScriptTransitionId='0', BindingEpoch='0'";
+				}
+				else
+				{
+					var lifecycleSnapshot = _scriptEditorLifecycleCoordinator.Snapshot;
+					lifecycleDetails =
+						$"LifecycleState='{lifecycleSnapshot.State}', "
+						+ $"ScriptTransitionId='{lifecycleSnapshot.ScriptTransitionId}', "
+						+ $"TransitionOrigin='{lifecycleSnapshot.TransitionOrigin?.ToString() ?? "<none>"}', "
+						+ $"ExpectedScriptPath='{NormalizeScriptEditorDiagnosticText(lifecycleSnapshot.ExpectedScriptPath)}', "
+						+ $"ObservedScriptPath='{NormalizeScriptEditorDiagnosticText(lifecycleSnapshot.ObservedScriptPath)}', "
+						+ $"BindingEpoch='{lifecycleSnapshot.BindingEpoch}'";
+				}
+
+				string diagnosticDetails =
+					$"Phase='{NormalizeScriptEditorDiagnosticText(phase)}', "
+					+ $"ManagedAssemblyGeneration='{managedAssemblyGeneration}', "
+					+ $"HostInstanceToken='{hostInstanceToken}', "
+					+ $"OperationToken='{operationToken}', "
+					+ $"TargetScriptTransitionId='{targetScriptTransitionId}', "
+					+ $"TargetScriptPath='{normalizedTargetScriptPath}', "
+					+ lifecycleDetails;
+
+				if (!string.IsNullOrWhiteSpace(details))
+					diagnosticDetails += $", {details}";
+
+				DebugLogger.LogPersistentFileOnlyOperation(
+					"C# autocomplete CodeEdit native boundary",
+					diagnosticDetails
+				);
+			}
+			catch
+			{
+				// Native-gap diagnostics are pure-managed, observation-only, and fail closed.
+			}
+		};
 	}
 
 	private long BeginBeautifyBatchDiagnosticContext()
@@ -417,6 +544,7 @@ public partial class SystemExplorerPlugin
 			+ $"PluginAssemblyLoadContextCollectible='{loadContextCollectible}', "
 			+ $"HostInstanceToken='{_autocompleteHostInstanceToken}', "
 			+ $"HostManagedAssemblyGeneration='{_autocompleteHostManagedAssemblyGeneration}', "
+			+ $"{DescribeScriptEditorLifecycleForDiagnostics()}, "
 			+ $"TreeKeyboardNavigationBurstActive='{IsTreeKeyboardNavigationBurstActive}', "
 			+ $"AutocompleteScriptEditorChangedCallbackDepth='{_autocompleteScriptEditorChangedCallbackDepth}', "
 			+ $"AutocompleteDeferredScriptChangeRebindPending='{_autocompleteDeferredScriptChangeRebindPending}'";

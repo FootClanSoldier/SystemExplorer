@@ -68,13 +68,23 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 	internal MarkerReadStatus Inspect(
 		CodeEdit codeEdit,
 		out OwnershipState state,
-		out string failureDetail
+		out string failureDetail,
+		Action<string, string> nativeBoundaryDiagnosticPhase = null
 	)
 	{
 		state = null;
 		failureDetail = "";
-
-		if (!IsValidGodotObject(codeEdit))
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipBridge.Inspect.IsInstanceValid.Begin"
+		);
+		bool codeEditValid = IsValidGodotObject(codeEdit);
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipBridge.Inspect.IsInstanceValid.Returned",
+			$"Result='{codeEditValid}'"
+		);
+		if (!codeEditValid)
 		{
 			failureDetail = "CodeEdit is null or invalid.";
 			return MarkerReadStatus.Malformed;
@@ -82,21 +92,45 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 
 		try
 		{
-			if (!codeEdit.HasMeta(MetadataKey))
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.Inspect.HasMeta.Begin"
+			);
+			bool hasMarker = codeEdit.HasMeta(MetadataKey);
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.Inspect.HasMeta.Returned",
+				$"Result='{hasMarker}'"
+			);
+			if (!hasMarker)
 				return MarkerReadStatus.Missing;
 
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.Inspect.GetMeta.Begin"
+			);
 			Variant rawMarker = codeEdit.GetMeta(MetadataKey);
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.Inspect.GetMeta.Returned"
+			);
+
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.Inspect.MarkerDecode.Begin"
+			);
+
 			if (rawMarker.VariantType != Variant.Type.Dictionary)
 			{
 				failureDetail = "Metadata value is not a Dictionary Variant.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			Godot.Collections.Dictionary dictionary = rawMarker.AsGodotDictionary();
 			if (dictionary == null)
 			{
 				failureDetail = "Metadata dictionary is null.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (
@@ -105,7 +139,7 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			)
 			{
 				failureDetail = "Schema version is missing or unsupported.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (
@@ -118,7 +152,7 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			)
 			{
 				failureDetail = "Owner managed assembly generation is missing.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (
@@ -137,15 +171,24 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			)
 			{
 				failureDetail = "CodeEdit native instance id is missing or invalid.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.Inspect.GetInstanceId.Begin"
+			);
 			ulong currentCodeEditNativeInstanceId = codeEdit.GetInstanceId();
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.Inspect.GetInstanceId.Returned",
+				$"NativeInstanceId='{currentCodeEditNativeInstanceId}'"
+			);
 			if (currentCodeEditNativeInstanceId != codeEditNativeInstanceId)
 			{
 				failureDetail =
 					$"CodeEdit identity mismatch. Marker='{codeEditNativeInstanceId}', Current='{currentCodeEditNativeInstanceId}'.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (
@@ -158,13 +201,13 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			)
 			{
 				failureDetail = "Prefix ownership state is missing or invalid.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (!prefixOwned && previousCodeCompletionPrefixes.Length != 0)
 			{
 				failureDetail = "Unowned prefix state contains a previous-prefix snapshot.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (
@@ -187,7 +230,7 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			)
 			{
 				failureDetail = "completion_existing_color ownership state is invalid.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (
@@ -197,13 +240,13 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			{
 				failureDetail =
 					"Unowned completion_existing_color state claims a previous override.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			if (!prefixOwned && !completionExistingColorOwned)
 			{
 				failureDetail = "Marker does not describe any owned reversible state.";
-				return MarkerReadStatus.Malformed;
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
 			state = new OwnershipState(
@@ -215,7 +258,7 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 				hadPreviousCompletionExistingColorOverride,
 				previousCompletionExistingColor
 			);
-			return MarkerReadStatus.Valid;
+			return CompleteMarkerDecode(MarkerReadStatus.Valid, nativeBoundaryDiagnosticPhase);
 		}
 		catch (Exception exception)
 		{
@@ -293,12 +336,18 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 	internal bool TryClearVerifiedMarker(
 		CodeEdit codeEdit,
 		OwnershipState expectedState,
-		out string failureDetail
+		out string failureDetail,
+		Action<string, string> nativeBoundaryDiagnosticPhase = null
 	)
 	{
 		failureDetail = "";
 
-		MarkerReadStatus status = Inspect(codeEdit, out OwnershipState currentState, out string readFailure);
+		MarkerReadStatus status = Inspect(
+			codeEdit,
+			out OwnershipState currentState,
+			out string readFailure,
+			nativeBoundaryDiagnosticPhase
+		);
 		if (status == MarkerReadStatus.Missing)
 		{
 			failureDetail = "Verified marker disappeared before it could be cleared.";
@@ -317,9 +366,18 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 
 		try
 		{
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.TryClearVerifiedMarker.RemoveMeta.Begin"
+			);
 			codeEdit.RemoveMeta(MetadataKey);
+			InvokeNativeBoundaryDiagnosticPhase(
+				nativeBoundaryDiagnosticPhase,
+				"NativeOwnershipBridge.TryClearVerifiedMarker.RemoveMeta.Returned"
+			);
 			return true;
 		}
+
 		catch (Exception exception)
 		{
 			failureDetail =
@@ -368,6 +426,35 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			failureDetail =
 				$"Marker clear failed: {exception.GetType().Name}: {exception.Message}";
 			return false;
+		}
+	}
+
+	private static MarkerReadStatus CompleteMarkerDecode(
+		MarkerReadStatus status,
+		Action<string, string> nativeBoundaryDiagnosticPhase
+	)
+	{
+		InvokeNativeBoundaryDiagnosticPhase(
+			nativeBoundaryDiagnosticPhase,
+			"NativeOwnershipBridge.Inspect.MarkerDecode.Returned",
+			$"Status='{status}'"
+		);
+		return status;
+	}
+
+	private static void InvokeNativeBoundaryDiagnosticPhase(
+		Action<string, string> nativeBoundaryDiagnosticPhase,
+		string phase,
+		string details = ""
+	)
+	{
+		try
+		{
+			nativeBoundaryDiagnosticPhase?.Invoke(phase ?? "", details ?? "");
+		}
+		catch
+		{
+			// Operation-local diagnostics must never affect ownership behavior.
 		}
 	}
 

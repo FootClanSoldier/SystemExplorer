@@ -9,6 +9,9 @@ public partial class SystemExplorerPlugin
 {
 	#region Script Filter
 	private bool _isClearingScriptFilterInputProgrammatically;
+	private ScriptFilterResult[] _currentScriptFilterProjection = Array.Empty<ScriptFilterResult>();
+	private string _currentScriptFilterNormalizedText = "";
+	private bool _currentScriptFilterProjectionIsValid;
 
 	private void OnScriptFilterTextChanged(string filterText)
 	{
@@ -238,26 +241,27 @@ public partial class SystemExplorerPlugin
 
 	private void BuildFilteredItemTree(string filterText)
 	{
+		InvalidateCurrentScriptFilterProjection();
+
 		if (!EnsureSystemsLoadedForScriptFilter("Build Filtered Item Tree"))
 			return;
 
 		NormalizeAllSystemEntries();
 
+		string normalizedFilter = NormalizeScriptFilterText(filterText);
+		ScriptFilterResult[] projection = string.IsNullOrWhiteSpace(normalizedFilter)
+			? Array.Empty<ScriptFilterResult>()
+			: GetFilteredScriptResults(normalizedFilter).ToArray();
+
 		_tree.Clear();
 
 		TreeItem root = _tree.CreateItem();
-		string normalizedFilter = filterText.Trim().ToLowerInvariant();
 
-		if (string.IsNullOrWhiteSpace(normalizedFilter))
-			return;
-
-		foreach (ScriptFilterResult result in GetFilteredScriptResults(normalizedFilter))
+		foreach (ScriptFilterResult result in projection)
 		{
 			TreeItem item = _tree.CreateItem(root);
 			bool isSceneEntry = IsSceneEntry(result.Entry);
-			string metadata = isSceneEntry
-				? $"sceneLink::{result.Entry}"
-				: $"script::{result.Entry}";
+			string metadata = GetScriptFilterResultMetadata(result);
 
 			item.SetText(0, GetLockableItemDisplayName(metadata, result.ItemName, result.Entry));
 			item.SetTooltipText(
@@ -269,6 +273,10 @@ public partial class SystemExplorerPlugin
 			item.SetIcon(0, GetFilterResultIcon(result.Entry));
 			item.SetMetadata(0, metadata);
 		}
+
+		_currentScriptFilterProjection = projection;
+		_currentScriptFilterNormalizedText = normalizedFilter;
+		_currentScriptFilterProjectionIsValid = true;
 	}
 
 	private List<ScriptFilterResult> GetFilteredScriptResults(string normalizedFilter)
@@ -277,10 +285,26 @@ public partial class SystemExplorerPlugin
 
 		foreach (KeyValuePair<string, List<string>> system in _systems)
 		{
-			foreach (string entry in system.Value.Where(IsScriptOrSceneEntry))
+			List<string> entries = system.Value;
+
+			if (entries == null)
+				continue;
+
+			foreach (string entry in entries)
 			{
+				if (string.IsNullOrWhiteSpace(entry) || !IsScriptOrSceneEntry(entry))
+					continue;
+
 				string itemPath = GetPathFromEntry(entry);
+
+				if (string.IsNullOrWhiteSpace(itemPath))
+					continue;
+
 				string itemName = itemPath.GetFile();
+
+				if (string.IsNullOrWhiteSpace(itemName))
+					continue;
+
 				string normalizedItemName = itemName.ToLowerInvariant();
 
 				if (!normalizedItemName.Contains(normalizedFilter))
@@ -307,11 +331,48 @@ public partial class SystemExplorerPlugin
 			.ToList();
 	}
 
-	private List<ScriptFilterResult> GetCurrentScriptFilterResults()
+	private static string NormalizeScriptFilterText(string filterText)
 	{
-		return GetFilteredScriptResults(
-			(_scriptFilterInput?.Text ?? "").Trim().ToLowerInvariant()
-		);
+		return (filterText ?? "").Trim().ToLowerInvariant();
+	}
+
+	private void InvalidateCurrentScriptFilterProjection()
+	{
+		_currentScriptFilterProjection = Array.Empty<ScriptFilterResult>();
+		_currentScriptFilterNormalizedText = "";
+		_currentScriptFilterProjectionIsValid = false;
+	}
+
+	private bool TryGetCurrentScriptFilterProjection(
+		out ScriptFilterResult[] projection
+	)
+	{
+		projection = Array.Empty<ScriptFilterResult>();
+
+		if (
+			!_isFilteringScripts
+			|| !IsScriptFilterActive()
+			|| !_currentScriptFilterProjectionIsValid
+		)
+		{
+			return false;
+		}
+
+		string currentNormalizedFilter = NormalizeScriptFilterText(_scriptFilterInput?.Text);
+
+		if (
+			!string.Equals(
+				currentNormalizedFilter,
+				_currentScriptFilterNormalizedText,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return false;
+		}
+
+		projection = _currentScriptFilterProjection;
+		return true;
 	}
 
 	private bool TryGetScriptFilterResultForTreeItem(
@@ -321,24 +382,38 @@ public partial class SystemExplorerPlugin
 	{
 		matchingResult = default;
 
-		if (!IsScriptFilterActive() || _tree == null || item == null)
+		if (
+			_tree == null
+			|| item == null
+			|| !TryGetCurrentScriptFilterProjection(out ScriptFilterResult[] projection)
+		)
+		{
 			return false;
+		}
 
 		TreeItem current = _tree.GetRoot()?.GetFirstChild();
-		List<ScriptFilterResult> results = GetCurrentScriptFilterResults();
+		int currentIndex = 0;
+		int matchingIndex = -1;
 
-		for (int index = 0; current != null && index < results.Count; index++)
+		while (current != null)
 		{
 			if (current == item)
-			{
-				matchingResult = results[index];
-				return true;
-			}
+				matchingIndex = currentIndex;
 
+			currentIndex++;
 			current = current.GetNext();
 		}
 
-		return false;
+		if (currentIndex != projection.Length || matchingIndex < 0)
+			return false;
+
+		ScriptFilterResult result = projection[matchingIndex];
+
+		if (!DoesScriptFilterTreeItemMatchResult(item, result))
+			return false;
+
+		matchingResult = result;
+		return true;
 	}
 
 	private bool TryFindScriptFilterTreeItemByIdentity(
@@ -351,44 +426,67 @@ public partial class SystemExplorerPlugin
 		item = null;
 
 		if (
-			!IsScriptFilterActive()
-			|| _tree == null
+			_tree == null
 			|| string.IsNullOrWhiteSpace(systemName)
 			|| string.IsNullOrWhiteSpace(entry)
+			|| !TryGetCurrentScriptFilterProjection(out ScriptFilterResult[] projection)
 		)
 		{
 			return false;
 		}
 
-		string expectedMetadata = isSceneEntry
-			? $"sceneLink::{entry}"
-			: $"script::{entry}";
 		TreeItem current = _tree.GetRoot()?.GetFirstChild();
-		List<ScriptFilterResult> results = GetCurrentScriptFilterResults();
+		TreeItem matchingItem = null;
+		int index = 0;
 
-		for (int index = 0; current != null && index < results.Count; index++)
+		while (current != null && index < projection.Length)
 		{
-			ScriptFilterResult result = results[index];
+			ScriptFilterResult result = projection[index];
+
+			if (!DoesScriptFilterTreeItemMatchResult(current, result))
+				return false;
 
 			if (
-				string.Equals(result.SystemName, systemName, StringComparison.Ordinal)
+				matchingItem == null
+				&& string.Equals(result.SystemName, systemName, StringComparison.Ordinal)
 				&& string.Equals(result.Entry, entry, StringComparison.Ordinal)
 				&& IsSceneEntry(result.Entry) == isSceneEntry
-				&& string.Equals(
-					current.GetMetadata(0).AsString(),
-					expectedMetadata,
-					StringComparison.Ordinal
-				)
 			)
 			{
-				item = current;
-				return true;
+				matchingItem = current;
 			}
 
+			index++;
 			current = current.GetNext();
 		}
 
-		return false;
+		if (current != null || index != projection.Length || matchingItem == null)
+			return false;
+
+		item = matchingItem;
+		return true;
+	}
+
+	private static string GetScriptFilterResultMetadata(ScriptFilterResult result)
+	{
+		return IsSceneEntry(result.Entry)
+			? $"sceneLink::{result.Entry}"
+			: $"script::{result.Entry}";
+	}
+
+	private static bool DoesScriptFilterTreeItemMatchResult(
+		TreeItem item,
+		ScriptFilterResult result
+	)
+	{
+		if (item == null || string.IsNullOrWhiteSpace(result.Entry))
+			return false;
+
+		return string.Equals(
+			item.GetMetadata(0).AsString(),
+			GetScriptFilterResultMetadata(result),
+			StringComparison.Ordinal
+		);
 	}
 
 	private Texture2D GetFilterResultIcon(string entry)
@@ -433,6 +531,7 @@ public partial class SystemExplorerPlugin
 			QueuePersistentTreeStateSave();
 		}
 
+		InvalidateCurrentScriptFilterProjection();
 		_isFilteringScripts = false;
 		EnsureSystemsLoadedForScriptFilter("Script Filter Exited");
 		_expandedItems.Clear();

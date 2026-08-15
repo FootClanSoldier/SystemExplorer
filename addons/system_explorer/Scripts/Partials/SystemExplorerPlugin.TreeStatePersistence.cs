@@ -963,7 +963,9 @@ public partial class SystemExplorerPlugin
 
 	private void PrepareTreeStatePersistenceForManagedAssemblyRecovery()
 	{
-		ResetTreeKeyboardNavigationPersistenceDeferral();
+		ResetTreeKeyboardNavigationPersistenceDeferral(
+			"ManagedRecoveryInProgress"
+		);
 		ClearPendingPersistentTreeStateSave();
 		_treeStatePersistenceShutdown = false;
 		_isRestoringOrRebuildingPersistentTreeState = false;
@@ -975,7 +977,7 @@ public partial class SystemExplorerPlugin
 		if (!_treeStatePersistenceShutdown && IsValidGodotObject(_tree))
 			SavePersistentTreeStateBestEffort("Plugin Exit");
 
-		ResetTreeKeyboardNavigationPersistenceDeferral();
+		ResetTreeKeyboardNavigationPersistenceDeferral("ShutdownInProgress");
 		_treeStatePersistenceShutdown = true;
 		_isRestoringOrRebuildingPersistentTreeState = false;
 		ClearPendingPersistentTreeStateSave();

@@ -19,7 +19,8 @@ public partial class SystemExplorerPlugin
 	private readonly record struct PendingSystemExplorerScriptActivation(
 		ScriptTreeOccurrence SourceOccurrence,
 		string ExpectedScriptPath,
-		long Token
+		long Token,
+		long ScriptTransitionId
 	);
 
 	private readonly Dictionary<string, ScriptTreeOccurrence> _lastScriptTreeOccurrencesByPath =
@@ -187,26 +188,56 @@ public partial class SystemExplorerPlugin
 	private void OnScriptEditorScriptChanged(Script script)
 	{
 		EnterAutocompleteScriptEditorChangedCallbackScope();
+		Action<string, string> diagnosticPhase = null;
 		try
 		{
+			diagnosticPhase = CreateScriptEditorSyncCallbackTailDiagnosticPhase();
 			LogScriptEditorCallbackEntry("ScriptEditorSyncScriptChanged", script);
+			ObserveScriptEditorLifecycleScriptChange(
+				script,
+				"ScriptEditorSyncScriptChanged"
+			);
+			diagnosticPhase?.Invoke("AfterLifecycleObservation", "");
 
-			if (!EnsureManagedAssemblyStateCurrent("Script Editor Changed"))
+			diagnosticPhase?.Invoke("EnsureManagedAssemblyStateCurrent.Begin", "");
+			bool managedAssemblyStateCurrent = EnsureManagedAssemblyStateCurrent(
+				"Script Editor Changed",
+				diagnosticPhase
+			);
+			diagnosticPhase?.Invoke(
+				"EnsureManagedAssemblyStateCurrent.Returned",
+				$"Result='{managedAssemblyStateCurrent}'"
+			);
+			if (!managedAssemblyStateCurrent)
 				return;
 
-			if (!_followActiveScript || IsScriptEditorSyncSuppressed())
+			bool scriptEditorSyncSuppressed =
+				_followActiveScript && IsScriptEditorSyncSuppressed();
+			diagnosticPhase?.Invoke(
+				"FollowActiveDecision",
+				$"FollowActive='{_followActiveScript}', Suppressed='{scriptEditorSyncSuppressed}'"
+			);
+			if (!_followActiveScript || scriptEditorSyncSuppressed)
 				return;
 
+			diagnosticPhase?.Invoke("QueueScriptEditorSync.Begin", "");
 			QueueScriptEditorSyncToActiveScript();
+			diagnosticPhase?.Invoke("QueueScriptEditorSync.Returned", "");
 		}
 		finally
 		{
 			ExitAutocompleteScriptEditorChangedCallbackScope();
+			diagnosticPhase?.Invoke("ReturningToGodot", "");
 		}
 	}
 
 	private void OnScriptEditorSyncPollTimerTimeout()
 	{
+		string polledScriptPath = TryGetActiveScriptPath(out string activeScriptPath)
+			? activeScriptPath
+			: "";
+		ObservePolledScriptEditorLifecyclePathIfChanged(polledScriptPath);
+
 		if (!EnsureManagedAssemblyStateCurrent("Script Editor Sync Poll"))
 			return;
 
@@ -228,6 +259,9 @@ public partial class SystemExplorerPlugin
 	private void TrySyncTreeSelectionToActiveScriptDeferred()
 	{
 		_isScriptEditorSyncDeferredQueued = false;
+
+		if (IsTreeKeyboardNavigationBurstActive)
+			return;
 
 		if (!EnsureManagedAssemblyStateCurrent("Deferred Script Editor Sync"))
 			return;
@@ -258,8 +292,14 @@ public partial class SystemExplorerPlugin
 
 	private bool TrySyncTreeSelectionToActiveScriptCore(bool force)
 	{
-		if (_isSyncingTreeSelectionToActiveScript || IsScriptEditorSyncSuppressed())
+		if (
+			_isSyncingTreeSelectionToActiveScript
+			|| IsScriptEditorSyncSuppressed()
+			|| IsTreeKeyboardNavigationBurstActive
+		)
+		{
 			return false;
+		}
 
 		if (!TryGetActiveScriptPath(out string scriptPath))
 			return false;
@@ -527,7 +567,8 @@ public partial class SystemExplorerPlugin
 
 	private long RegisterSystemExplorerScriptActivation(
 		ScriptTreeOccurrence sourceOccurrence,
-		string expectedScriptPath
+		string expectedScriptPath,
+		long scriptTransitionId
 	)
 	{
 		if (IsScriptEditorSyncSuppressed())
@@ -559,7 +600,8 @@ public partial class SystemExplorerPlugin
 		_pendingSystemExplorerScriptActivation = new PendingSystemExplorerScriptActivation(
 			sourceOccurrence,
 			normalizedExpectedPath,
-			_systemExplorerScriptActivationSequence
+			_systemExplorerScriptActivationSequence,
+			scriptTransitionId
 		);
 
 		return _systemExplorerScriptActivationSequence;
@@ -580,6 +622,12 @@ public partial class SystemExplorerPlugin
 			|| _pendingSystemExplorerScriptActivation.Value.Token != token
 		)
 		{
+			return;
+		}
+
+		if (IsTreeKeyboardNavigationBurstActive)
+		{
+			ClearPendingSystemExplorerScriptActivation(token);
 			return;
 		}
 
@@ -921,6 +969,20 @@ public partial class SystemExplorerPlugin
 			if (selectionChanged)
 			{
 				_suppressNextTreeNavigationFromScriptEditorSync = true;
+
+				string targetMetadata = item.GetMetadata(0).AsString();
+				string targetScriptPath = TryGetScriptPathFromTreeItem(
+					item,
+					out string resolvedTargetScriptPath
+				)
+					? resolvedTargetScriptPath
+					: "";
+
+				DebugLogger.LogOperation(
+					"Script Editor Sync tree selection requested",
+					$"TargetMetadata='{targetMetadata}', TargetScriptPath='{targetScriptPath}', SelectionChanged='{selectionChanged}', IsSyncingTreeSelectionToActiveScript='{_isSyncingTreeSelectionToActiveScript}', SuppressNextTreeNavigationFromScriptEditorSync='{_suppressNextTreeNavigationFromScriptEditorSync}'"
+				);
+
 				item.Select(0);
 			}
 

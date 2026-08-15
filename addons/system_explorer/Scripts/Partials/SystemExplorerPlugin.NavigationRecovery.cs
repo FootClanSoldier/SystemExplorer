@@ -23,14 +23,36 @@ public partial class SystemExplorerPlugin
 
 		UpdatePersistentTreeSelectionFromTreeItem(selectedItem);
 
+		bool wasSyncingTreeSelectionToActiveScript = _isSyncingTreeSelectionToActiveScript;
+		bool wasSuppressNextTreeNavigationFromScriptEditorSync =
+			_suppressNextTreeNavigationFromScriptEditorSync;
+
 		if (
-			_isSyncingTreeSelectionToActiveScript || _suppressNextTreeNavigationFromScriptEditorSync
+			wasSyncingTreeSelectionToActiveScript
+			|| wasSuppressNextTreeNavigationFromScriptEditorSync
 		)
 		{
+			string selectedMetadata =
+				selectedItem != null && GodotObject.IsInstanceValid(selectedItem)
+					? selectedItem.GetMetadata(0).AsString()
+					: "";
+
+			DebugLogger.LogOperation(
+				"Tree ItemSelected navigation suppressed",
+				$"Reason='ScriptEditorSync', SelectedMetadata='{selectedMetadata}', WasSyncingTreeSelectionToActiveScript='{wasSyncingTreeSelectionToActiveScript}', WasSuppressNextTreeNavigationFromScriptEditorSync='{wasSuppressNextTreeNavigationFromScriptEditorSync}'"
+			);
+
 			_suppressNextTreeNavigationFromScriptEditorSync = false;
 			return;
 		}
 
+		if (TryCoalesceTreeKeyboardNavigationScriptActivation(selectedItem))
+			return;
+
+		if (ShouldSuppressTreeMouseScriptActivationFromItemSelected(selectedItem))
+			return;
+
+		InvalidateDeferredTreeKeyboardNavigationScriptActivationForNonBurstTakeover();
 		OpenScriptFromTreeItem(selectedItem);
 		OpenSceneFromTreeItem(selectedItem);
 	}

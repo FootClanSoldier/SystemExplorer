@@ -25,6 +25,12 @@ public partial class SystemExplorerPlugin
 	private Key? _pendingKeyboardControlTransitionKey;
 	private TreeKeyboardNavigationPersistenceKeyState
 		_heldTreeKeyboardNavigationPersistenceKeys;
+	private bool _treeKeyboardNavigationScriptActivationPending;
+	private int _treeKeyboardNavigationSuppressedScriptActivationCount;
+	private bool _deferredTreeKeyboardNavigationScriptActivationPending;
+	private bool _deferredTreeKeyboardNavigationScriptActivationQueued;
+	private long _deferredTreeKeyboardNavigationScriptActivationOperationToken;
+	private int _deferredTreeKeyboardNavigationSuppressedScriptActivationCount;
 
 	private bool IsTreeKeyboardNavigationBurstActive =>
 		_heldTreeKeyboardNavigationPersistenceKeys
@@ -377,6 +383,7 @@ public partial class SystemExplorerPlugin
 			QueuePersistentTreeStateSave();
 
 		FlushPendingAutocompleteScriptChangeAfterTreeKeyboardNavigation();
+		FinalizePendingTreeKeyboardNavigationScriptActivation();
 	}
 
 	private static bool TryGetTreeKeyboardNavigationPersistenceKeyState(
@@ -396,10 +403,351 @@ public partial class SystemExplorerPlugin
 		return keyState != TreeKeyboardNavigationPersistenceKeyState.None;
 	}
 
-	private void ResetTreeKeyboardNavigationPersistenceDeferral()
+	private void ResetTreeKeyboardNavigationPersistenceDeferral(string reason)
 	{
 		_heldTreeKeyboardNavigationPersistenceKeys =
 			TreeKeyboardNavigationPersistenceKeyState.None;
+		ClearPendingTreeKeyboardNavigationScriptActivation();
+		InvalidateDeferredTreeKeyboardNavigationScriptActivation(
+			reason,
+			forceOperationTokenInvalidation: true
+		);
+	}
+
+	private bool TryCoalesceTreeKeyboardNavigationScriptActivation(
+		TreeItem selectedItem
+	)
+	{
+		if (
+			!IsTreeKeyboardNavigationBurstActive
+			|| selectedItem == null
+			|| !GodotObject.IsInstanceValid(selectedItem)
+		)
+		{
+			return false;
+		}
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+
+		if (!metadata.StartsWith("script::", System.StringComparison.Ordinal))
+			return false;
+
+		if (!_treeKeyboardNavigationScriptActivationPending)
+		{
+			InvalidateDeferredTreeKeyboardNavigationScriptActivation(
+				"SupersededByNewKeyboardBurst"
+			);
+			_treeKeyboardNavigationScriptActivationPending = true;
+			_treeKeyboardNavigationSuppressedScriptActivationCount = 1;
+			ClearPendingSystemExplorerScriptActivation();
+
+			DebugLogger.LogOperation(
+				"Tree keyboard navigation script activation coalescing started",
+				$"SuppressedCount='{_treeKeyboardNavigationSuppressedScriptActivationCount}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}', HostInstanceToken='{_autocompleteHostInstanceToken}'"
+			);
+		}
+		else
+		{
+			_treeKeyboardNavigationSuppressedScriptActivationCount++;
+		}
+
+		return true;
+	}
+
+	private void FinalizePendingTreeKeyboardNavigationScriptActivation()
+	{
+		if (!_treeKeyboardNavigationScriptActivationPending)
+			return;
+
+		int suppressedCount = _treeKeyboardNavigationSuppressedScriptActivationCount;
+		ClearPendingTreeKeyboardNavigationScriptActivation();
+		QueueDeferredTreeKeyboardNavigationScriptActivation(suppressedCount);
+	}
+
+	private void QueueDeferredTreeKeyboardNavigationScriptActivation(
+		int suppressedCount
+	)
+	{
+		long operationToken =
+			AdvanceDeferredTreeKeyboardNavigationScriptActivationToken();
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+
+		_deferredTreeKeyboardNavigationScriptActivationPending = true;
+		_deferredTreeKeyboardNavigationScriptActivationQueued = true;
+		_deferredTreeKeyboardNavigationSuppressedScriptActivationCount =
+			suppressedCount;
+
+		DebugLogger.LogOperation(
+			"Tree keyboard navigation final script activation deferred",
+			$"OperationToken='{operationToken}', SuppressedCount='{suppressedCount}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', TreeKeyboardNavigationBurstActive='{IsTreeKeyboardNavigationBurstActive}'"
+		);
+
+		try
+		{
+			CallDeferred(
+				nameof(ApplyDeferredTreeKeyboardNavigationScriptActivation),
+				operationToken,
+				scheduledManagedAssemblyGeneration
+			);
+		}
+		catch (System.Exception exception)
+		{
+			if (
+				operationToken
+					== _deferredTreeKeyboardNavigationScriptActivationOperationToken
+				&& _deferredTreeKeyboardNavigationScriptActivationPending
+			)
+			{
+				_deferredTreeKeyboardNavigationScriptActivationPending = false;
+				_deferredTreeKeyboardNavigationScriptActivationQueued = false;
+				_deferredTreeKeyboardNavigationSuppressedScriptActivationCount = 0;
+				AdvanceDeferredTreeKeyboardNavigationScriptActivationToken();
+			}
+
+			DebugLogger.LogOperation(
+				"Tree keyboard navigation deferred script activation scheduling failed",
+				$"OperationToken='{operationToken}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', CurrentOperationToken='{_deferredTreeKeyboardNavigationScriptActivationOperationToken}', Exception='{exception}'"
+			);
+		}
+	}
+
+	private void ApplyDeferredTreeKeyboardNavigationScriptActivation(
+		long operationToken,
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				System.StringComparison.Ordinal
+			)
+		)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Tree keyboard navigation deferred script activation rejected",
+				$"Reason='StaleManagedAssemblyGeneration', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', ScheduledOperationToken='{operationToken}', CurrentOperationToken='{_deferredTreeKeyboardNavigationScriptActivationOperationToken}'"
+			);
+			return;
+		}
+
+		if (
+			operationToken
+			!= _deferredTreeKeyboardNavigationScriptActivationOperationToken
+		)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Tree keyboard navigation deferred script activation rejected",
+				$"Reason='StaleOperationToken', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', ScheduledOperationToken='{operationToken}', CurrentOperationToken='{_deferredTreeKeyboardNavigationScriptActivationOperationToken}'"
+			);
+			return;
+		}
+
+		if (
+			!_deferredTreeKeyboardNavigationScriptActivationPending
+			|| !_deferredTreeKeyboardNavigationScriptActivationQueued
+		)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Tree keyboard navigation deferred script activation rejected",
+				$"Reason='OperationNoLongerPending', OperationToken='{operationToken}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', Pending='{_deferredTreeKeyboardNavigationScriptActivationPending}', Queued='{_deferredTreeKeyboardNavigationScriptActivationQueued}'"
+			);
+			return;
+		}
+
+		_deferredTreeKeyboardNavigationScriptActivationQueued = false;
+
+		if (_editorOperationShutdownStarted)
+		{
+			RejectCurrentDeferredTreeKeyboardNavigationScriptActivation(
+				operationToken,
+				"ShutdownInProgress"
+			);
+			return;
+		}
+
+		if (_isRecoveringManagedAssemblyState)
+		{
+			RejectCurrentDeferredTreeKeyboardNavigationScriptActivation(
+				operationToken,
+				"ManagedRecoveryInProgress"
+			);
+			return;
+		}
+
+		if (
+			!HasVerifiedPersistentTreeStateForCurrentAssembly
+			|| !GodotObject.IsInstanceValid(this)
+			|| !IsInsideTree()
+		)
+		{
+			RejectCurrentDeferredTreeKeyboardNavigationScriptActivation(
+				operationToken,
+				"PluginBoundaryUnavailable"
+			);
+			return;
+		}
+
+		if (IsTreeKeyboardNavigationBurstActive)
+		{
+			RejectCurrentDeferredTreeKeyboardNavigationScriptActivation(
+				operationToken,
+				"SupersededByNewKeyboardBurst",
+				invalidateOperationToken: true
+			);
+			return;
+		}
+
+		if (
+			_tree == null
+			|| !GodotObject.IsInstanceValid(_tree)
+			|| _tree.IsQueuedForDeletion()
+			|| !_tree.IsInsideTree()
+		)
+		{
+			RejectCurrentDeferredTreeKeyboardNavigationScriptActivation(
+				operationToken,
+				"TreeUnavailable"
+			);
+			return;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+		string finalSelectionMetadata =
+			selectedItem != null && GodotObject.IsInstanceValid(selectedItem)
+				? selectedItem.GetMetadata(0).AsString()
+				: "";
+		bool finalSelectionIsScript = finalSelectionMetadata.StartsWith(
+			"script::",
+			System.StringComparison.Ordinal
+		);
+		int suppressedCount =
+			_deferredTreeKeyboardNavigationSuppressedScriptActivationCount;
+
+		DebugLogger.LogOperation(
+			"Tree keyboard navigation deferred script activation executing",
+			$"OperationToken='{operationToken}', SuppressedCount='{suppressedCount}', FinalSelectionMetadata='{finalSelectionMetadata}', FinalSelectionIsScript='{finalSelectionIsScript}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', TreeKeyboardNavigationBurstActive='{IsTreeKeyboardNavigationBurstActive}'"
+		);
+
+		ConsumeCurrentDeferredTreeKeyboardNavigationScriptActivation(operationToken);
+
+		if (!finalSelectionIsScript)
+		{
+			DebugLogger.LogOperation(
+				"Tree keyboard navigation deferred script activation rejected",
+				$"Reason='FinalSelectionNotScript', OperationToken='{operationToken}', FinalSelectionMetadata='{finalSelectionMetadata}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
+
+		OpenScriptFromTreeItem(selectedItem);
+	}
+
+	private long AdvanceDeferredTreeKeyboardNavigationScriptActivationToken()
+	{
+		unchecked
+		{
+			_deferredTreeKeyboardNavigationScriptActivationOperationToken++;
+			if (_deferredTreeKeyboardNavigationScriptActivationOperationToken <= 0)
+				_deferredTreeKeyboardNavigationScriptActivationOperationToken = 1;
+		}
+
+		return _deferredTreeKeyboardNavigationScriptActivationOperationToken;
+	}
+
+	private void ConsumeCurrentDeferredTreeKeyboardNavigationScriptActivation(
+		long operationToken
+	)
+	{
+		if (
+			operationToken
+			!= _deferredTreeKeyboardNavigationScriptActivationOperationToken
+		)
+		{
+			return;
+		}
+
+		_deferredTreeKeyboardNavigationScriptActivationPending = false;
+		_deferredTreeKeyboardNavigationScriptActivationQueued = false;
+		_deferredTreeKeyboardNavigationSuppressedScriptActivationCount = 0;
+	}
+
+	private void RejectCurrentDeferredTreeKeyboardNavigationScriptActivation(
+		long operationToken,
+		string reason,
+		bool invalidateOperationToken = false
+	)
+	{
+		if (
+			operationToken
+			!= _deferredTreeKeyboardNavigationScriptActivationOperationToken
+			|| !_deferredTreeKeyboardNavigationScriptActivationPending
+		)
+		{
+			return;
+		}
+
+		int suppressedCount =
+			_deferredTreeKeyboardNavigationSuppressedScriptActivationCount;
+		ConsumeCurrentDeferredTreeKeyboardNavigationScriptActivation(operationToken);
+
+		if (invalidateOperationToken)
+			AdvanceDeferredTreeKeyboardNavigationScriptActivationToken();
+
+		DebugLogger.LogOperation(
+			"Tree keyboard navigation deferred script activation rejected",
+			$"Reason='{reason}', OperationToken='{operationToken}', CurrentOperationToken='{_deferredTreeKeyboardNavigationScriptActivationOperationToken}', SuppressedCount='{suppressedCount}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}', TreeKeyboardNavigationBurstActive='{IsTreeKeyboardNavigationBurstActive}'"
+		);
+	}
+
+	private bool InvalidateDeferredTreeKeyboardNavigationScriptActivation(
+		string reason,
+		bool forceOperationTokenInvalidation = false
+	)
+	{
+		bool hadPendingOperation =
+			_deferredTreeKeyboardNavigationScriptActivationPending
+			|| _deferredTreeKeyboardNavigationScriptActivationQueued;
+
+		if (!hadPendingOperation && !forceOperationTokenInvalidation)
+			return false;
+
+		long invalidatedOperationToken =
+			_deferredTreeKeyboardNavigationScriptActivationOperationToken;
+		int suppressedCount =
+			_deferredTreeKeyboardNavigationSuppressedScriptActivationCount;
+
+		_deferredTreeKeyboardNavigationScriptActivationPending = false;
+		_deferredTreeKeyboardNavigationScriptActivationQueued = false;
+		_deferredTreeKeyboardNavigationSuppressedScriptActivationCount = 0;
+		long currentOperationToken =
+			AdvanceDeferredTreeKeyboardNavigationScriptActivationToken();
+
+		if (hadPendingOperation)
+		{
+			DebugLogger.LogOperation(
+				"Tree keyboard navigation deferred script activation invalidated",
+				$"Reason='{reason}', InvalidatedOperationToken='{invalidatedOperationToken}', CurrentOperationToken='{currentOperationToken}', SuppressedCount='{suppressedCount}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}', TreeKeyboardNavigationBurstActive='{IsTreeKeyboardNavigationBurstActive}'"
+			);
+		}
+
+		return hadPendingOperation;
+	}
+
+	private void InvalidateDeferredTreeKeyboardNavigationScriptActivationForNonBurstTakeover()
+	{
+		if (IsTreeKeyboardNavigationBurstActive)
+			return;
+
+		InvalidateDeferredTreeKeyboardNavigationScriptActivation(
+			"SupersededByNonBurstSelection"
+		);
+	}
+
+	private void ClearPendingTreeKeyboardNavigationScriptActivation()
+	{
+		_treeKeyboardNavigationScriptActivationPending = false;
+		_treeKeyboardNavigationSuppressedScriptActivationCount = 0;
 	}
 
 	private void ApplyTreeKeyboardNavigation(
