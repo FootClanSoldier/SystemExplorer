@@ -16,6 +16,30 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
+			ProcessAutocompletePostReloadObservationIsolation();
+		}
+		catch
+		{
+		}
+
+		try
+		{
+			ProcessAutocompleteReloadStabilization();
+		}
+		catch
+		{
+		}
+
+		try
+		{
+			ProcessAutocompleteScriptTransitionStabilization();
+		}
+		catch
+		{
+		}
+
+		try
+		{
 			ProcessPendingAutocompleteProcessWork();
 		}
 		catch
@@ -58,6 +82,9 @@ public partial class SystemExplorerPlugin
 		TrySetEditorPluginProcessing(
 			busyCursorNeedsProcessing
 				|| HasPendingPersistentTreeStateProcessWork()
+				|| HasPendingAutocompletePostReloadObservationIsolationProcessWork()
+				|| HasPendingAutocompleteReloadStabilizationProcessWork()
+				|| HasPendingAutocompleteScriptTransitionStabilizationProcessWork()
 				|| HasPendingAutocompleteProcessWork()
 				|| HasPendingNavigationStressProcessWork()
 		);

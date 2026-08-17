@@ -41,10 +41,23 @@ internal readonly record struct ScriptEditorBindingIdentity(
 	string ScriptResourcePath
 );
 
+internal readonly record struct EditorBindingReservation(
+	string ManagedAssemblyGeneration,
+	long HostInstanceToken,
+	long ScriptTransitionId,
+	long ReloadReadyEpoch,
+	long BindingEpoch,
+	ulong ScriptEditorInstanceId,
+	ulong ScriptEditorBaseInstanceId,
+	ulong CodeEditInstanceId,
+	string ScriptResourcePath
+);
+
 internal readonly record struct EditorBindingLease(
 	string ManagedAssemblyGeneration,
 	long HostInstanceToken,
 	long ScriptTransitionId,
+	long ReloadReadyEpoch,
 	long BindingEpoch,
 	ulong ScriptEditorInstanceId,
 	ulong ScriptEditorBaseInstanceId,
@@ -60,6 +73,7 @@ internal readonly record struct ScriptEditorLifecycleSnapshot(
 	string ExpectedScriptPath,
 	string ObservedScriptPath,
 	long BindingEpoch,
+	long ReloadReadyEpoch,
 	long HostInstanceToken,
 	ulong ScriptEditorInstanceId,
 	ulong ScriptEditorBaseInstanceId,
@@ -84,6 +98,7 @@ internal sealed class ScriptEditorLifecycleCoordinator
 	private ScriptEditorTransition? _currentTransition;
 	private string _observedScriptPath = "";
 	private EditorBindingLease? _currentBindingLease;
+	private EditorBindingReservation? _pendingBindingReservation;
 
 	internal ScriptEditorLifecycleCoordinator(string managedAssemblyGeneration)
 	{
@@ -116,6 +131,7 @@ internal sealed class ScriptEditorLifecycleCoordinator
 		_currentTransition = transition;
 		_observedScriptPath = "";
 		_currentBindingLease = null;
+		_pendingBindingReservation = null;
 		_state = ScriptEditorLifecycleState.ScriptTransitionPending;
 
 		return new ScriptEditorTransitionUpdate(
@@ -133,27 +149,14 @@ internal sealed class ScriptEditorLifecycleCoordinator
 
 		if (
 			_currentTransition.HasValue
-			&& _currentTransition.Value.Origin
-				== ScriptEditorTransitionOrigin.SystemExplorerNavigation
-			&& _state == ScriptEditorLifecycleState.ScriptTransitionPending
-			&& !string.IsNullOrWhiteSpace(_currentTransition.Value.ExpectedScriptPath)
-			&& !string.IsNullOrWhiteSpace(normalizedObservedPath)
-			&& PathsEqual(
-				_currentTransition.Value.ExpectedScriptPath,
-				normalizedObservedPath
+			&& TryObserveExpectedSystemExplorerTransitionCore(
+				_currentTransition.Value.TransitionId,
+				normalizedObservedPath,
+				out ScriptEditorTransitionUpdate expectedTransitionUpdate
 			)
 		)
 		{
-			_observedScriptPath = normalizedObservedPath;
-			_currentBindingLease = null;
-			_state = ScriptEditorLifecycleState.BindingPending;
-			return new ScriptEditorTransitionUpdate(
-				_currentTransition.Value,
-				0,
-				0,
-				BeganNewTransition: false,
-				ObservationDisposition: ScriptEditorTransitionObservationDisposition.ExpectedTransitionObserved
-			);
+			return expectedTransitionUpdate;
 		}
 
 		if (_currentTransition.HasValue && _state == ScriptEditorLifecycleState.BindingPending)
@@ -197,6 +200,58 @@ internal sealed class ScriptEditorLifecycleCoordinator
 		);
 	}
 
+	internal bool TryObserveExpectedSystemExplorerTransition(
+		long transitionId,
+		string observedScriptPath,
+		out ScriptEditorTransitionUpdate update
+	)
+	{
+		string normalizedObservedPath = ScriptPathUtility.Normalize(observedScriptPath);
+		return TryObserveExpectedSystemExplorerTransitionCore(
+			transitionId,
+			normalizedObservedPath,
+			out update
+		);
+	}
+
+	private bool TryObserveExpectedSystemExplorerTransitionCore(
+		long transitionId,
+		string normalizedObservedPath,
+		out ScriptEditorTransitionUpdate update
+	)
+	{
+		update = default;
+		if (
+			!IsCurrentTransition(transitionId)
+			|| !_currentTransition.HasValue
+			|| _currentTransition.Value.Origin
+				!= ScriptEditorTransitionOrigin.SystemExplorerNavigation
+			|| _state != ScriptEditorLifecycleState.ScriptTransitionPending
+			|| string.IsNullOrWhiteSpace(_currentTransition.Value.ExpectedScriptPath)
+			|| string.IsNullOrWhiteSpace(normalizedObservedPath)
+			|| !PathsEqual(
+				_currentTransition.Value.ExpectedScriptPath,
+				normalizedObservedPath
+			)
+		)
+		{
+			return false;
+		}
+
+		_observedScriptPath = normalizedObservedPath;
+		_currentBindingLease = null;
+		_pendingBindingReservation = null;
+		_state = ScriptEditorLifecycleState.BindingPending;
+		update = new ScriptEditorTransitionUpdate(
+			_currentTransition.Value,
+			0,
+			0,
+			BeganNewTransition: false,
+			ObservationDisposition: ScriptEditorTransitionObservationDisposition.ExpectedTransitionObserved
+		);
+		return true;
+	}
+
 	internal bool MarkBindingPending(long transitionId)
 	{
 		if (!IsCurrentTransition(transitionId))
@@ -206,6 +261,7 @@ internal sealed class ScriptEditorLifecycleCoordinator
 			return false;
 
 		_currentBindingLease = null;
+		_pendingBindingReservation = null;
 		_state = ScriptEditorLifecycleState.BindingPending;
 		return true;
 	}
@@ -224,18 +280,21 @@ internal sealed class ScriptEditorLifecycleCoordinator
 			&& _state == ScriptEditorLifecycleState.BindingPending;
 	}
 
-	internal bool TryCommitBinding(
+	internal bool TryReserveBinding(
 		string managedAssemblyGeneration,
 		long hostInstanceToken,
 		long transitionId,
+		long reloadReadyEpoch,
 		ScriptEditorBindingIdentity identity,
-		out EditorBindingLease lease
+		out EditorBindingReservation reservation
 	)
 	{
-		lease = default;
+		reservation = default;
+		if (_pendingBindingReservation.HasValue)
+			return false;
 		if (!CanResolveBinding(managedAssemblyGeneration, transitionId))
 			return false;
-		if (hostInstanceToken <= 0)
+		if (hostInstanceToken <= 0 || reloadReadyEpoch <= 0)
 			return false;
 		if (
 			identity.ScriptEditorInstanceId == 0
@@ -259,19 +318,86 @@ internal sealed class ScriptEditorLifecycleCoordinator
 			return false;
 		}
 
-		lease = new EditorBindingLease(
+		reservation = new EditorBindingReservation(
 			_managedAssemblyGeneration,
 			hostInstanceToken,
 			transitionId,
+			reloadReadyEpoch,
 			NextPositive(ref _nextBindingEpoch),
 			identity.ScriptEditorInstanceId,
 			identity.ScriptEditorBaseInstanceId,
 			identity.CodeEditInstanceId,
 			normalizedScriptPath
 		);
+		_pendingBindingReservation = reservation;
+		return true;
+	}
+
+	internal bool TryCommitReservedBinding(
+		EditorBindingReservation reservation,
+		out EditorBindingLease lease
+	)
+	{
+		lease = default;
+		if (!_pendingBindingReservation.HasValue)
+			return false;
+		if (!_pendingBindingReservation.Value.Equals(reservation))
+			return false;
+		if (!CanResolveBinding(reservation.ManagedAssemblyGeneration, reservation.ScriptTransitionId))
+			return false;
+		if (
+			reservation.HostInstanceToken <= 0
+			|| reservation.ReloadReadyEpoch <= 0
+			|| reservation.BindingEpoch <= 0
+			|| reservation.ScriptEditorInstanceId == 0
+			|| reservation.ScriptEditorBaseInstanceId == 0
+			|| reservation.CodeEditInstanceId == 0
+		)
+		{
+			return false;
+		}
+
+		string normalizedScriptPath = ScriptPathUtility.Normalize(reservation.ScriptResourcePath);
+		if (string.IsNullOrWhiteSpace(normalizedScriptPath))
+			return false;
+		if (!string.Equals(normalizedScriptPath, reservation.ScriptResourcePath, StringComparison.Ordinal))
+			return false;
+
+		string authoritativePath = GetCurrentAuthoritativeScriptPath();
+		if (
+			!string.IsNullOrWhiteSpace(authoritativePath)
+			&& !PathsEqual(authoritativePath, normalizedScriptPath)
+		)
+		{
+			return false;
+		}
+
+		lease = new EditorBindingLease(
+			reservation.ManagedAssemblyGeneration,
+			reservation.HostInstanceToken,
+			reservation.ScriptTransitionId,
+			reservation.ReloadReadyEpoch,
+			reservation.BindingEpoch,
+			reservation.ScriptEditorInstanceId,
+			reservation.ScriptEditorBaseInstanceId,
+			reservation.CodeEditInstanceId,
+			normalizedScriptPath
+		);
 		_currentBindingLease = lease;
+		_pendingBindingReservation = null;
 		_state = ScriptEditorLifecycleState.Stable;
 		return true;
+	}
+
+	internal void AbandonBindingReservation(EditorBindingReservation reservation)
+	{
+		if (
+			_pendingBindingReservation.HasValue
+			&& _pendingBindingReservation.Value.Equals(reservation)
+		)
+		{
+			_pendingBindingReservation = null;
+		}
 	}
 
 	internal bool TryCompleteWithoutBinding(
@@ -295,6 +421,7 @@ internal sealed class ScriptEditorLifecycleCoordinator
 		}
 
 		_currentBindingLease = null;
+		_pendingBindingReservation = null;
 		_state = ScriptEditorLifecycleState.Stable;
 		return true;
 	}
@@ -342,6 +469,7 @@ internal sealed class ScriptEditorLifecycleCoordinator
 		_currentTransition = null;
 		_observedScriptPath = "";
 		_currentBindingLease = null;
+		_pendingBindingReservation = null;
 		_state = ScriptEditorLifecycleState.Detached;
 		return previous;
 	}
@@ -382,6 +510,7 @@ internal sealed class ScriptEditorLifecycleCoordinator
 			transition?.ExpectedScriptPath ?? "",
 			_observedScriptPath ?? "",
 			binding?.BindingEpoch ?? 0,
+			binding?.ReloadReadyEpoch ?? 0,
 			binding?.HostInstanceToken ?? 0,
 			binding?.ScriptEditorInstanceId ?? 0,
 			binding?.ScriptEditorBaseInstanceId ?? 0,

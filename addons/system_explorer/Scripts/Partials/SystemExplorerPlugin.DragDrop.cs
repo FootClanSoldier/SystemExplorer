@@ -149,6 +149,7 @@ public partial class SystemExplorerPlugin
 		);
 
 		bool moved = false;
+		PersistentTreeSelection? movedSelection = null;
 		SystemsAndFolderBindingsSnapshot snapshot = null;
 
 		if (draggedMetadata.StartsWith("system::") && targetMetadata.StartsWith("system::"))
@@ -174,6 +175,14 @@ public partial class SystemExplorerPlugin
 
 			snapshot = CaptureSystemsAndFolderBindingsSnapshot();
 			moved = MoveSystem(draggedMetadata, targetMetadata);
+
+			if (moved)
+			{
+				movedSelection = new PersistentTreeSelection(
+					draggedSystemName,
+					$"system::{draggedSystemName}"
+				);
+			}
 		}
 		else if (
 			IsScriptOrSceneMetadata(draggedMetadata)
@@ -203,8 +212,12 @@ public partial class SystemExplorerPlugin
 				sourceFolderPath,
 				sourceEntry,
 				sourceEntries,
-				sourceIndex
+				sourceIndex,
+				out PersistentTreeSelection relocatedSelection
 			);
+
+			if (moved)
+				movedSelection = relocatedSelection;
 		}
 		else if (
 			draggedMetadata != targetMetadata
@@ -214,8 +227,12 @@ public partial class SystemExplorerPlugin
 		{
 			if (CanMoveSystemEntry(draggedMetadata, targetMetadata))
 			{
+				string draggedSystemName = GetSystemNameFromEntryMetadata(draggedMetadata);
 				snapshot = CaptureSystemsAndFolderBindingsSnapshot();
 				moved = MoveSystemEntry(draggedMetadata, targetMetadata);
+
+				if (moved)
+					movedSelection = new PersistentTreeSelection(draggedSystemName, draggedMetadata);
 			}
 		}
 
@@ -249,6 +266,32 @@ public partial class SystemExplorerPlugin
 		}
 
 		BuildTree();
+
+		if (movedSelection.HasValue)
+		{
+			RestoreMovedTreeSelectionAfterRebuild(movedSelection.Value);
+		}
+	}
+
+	private void RestoreMovedTreeSelectionAfterRebuild(
+		PersistentTreeSelection movedSelection
+	)
+	{
+		try
+		{
+			if (TryRestoreTreeSelectionByIdentity(movedSelection, "Drag Move post-rebuild"))
+				return;
+
+			DebugLogger.LogOperation(
+				"Drag Move selection restore warning: exact moved occurrence not found",
+				$"system='{movedSelection.SystemName}', metadata='{movedSelection.Metadata}'"
+			);
+			ClearPersistentTreeSelectionAndTreeSelection();
+		}
+		finally
+		{
+			CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		}
 	}
 
 	private bool TryResolveDraggedSourceContext(
@@ -403,9 +446,11 @@ public partial class SystemExplorerPlugin
 		string sourceFolderPath,
 		string draggedEntry,
 		List<string> sourceEntries,
-		int sourceIndex
+		int sourceIndex,
+		out PersistentTreeSelection movedSelection
 	)
 	{
+		movedSelection = default;
 		if (!EnsureSystemsLoadedForTreeOperation("Move Script/Scene"))
 			return false;
 
@@ -535,6 +580,11 @@ public partial class SystemExplorerPlugin
 		DebugLogger.LogOperation(
 			"Move Script/Scene Mutated",
 			$"{sourceSystemName}:{draggedEntry} -> {targetSystemName}:{newEntry}"
+		);
+
+		movedSelection = new PersistentTreeSelection(
+			targetSystemName,
+			IsSceneEntry(newEntry) ? $"sceneLink::{newEntry}" : $"script::{newEntry}"
 		);
 
 		return true;

@@ -80,12 +80,188 @@ public partial class SystemExplorerPlugin
 			ScriptEditorTransitionOrigin.SystemExplorerNavigation,
 			expectedScriptPath
 		);
-		LogScriptEditorLifecycleSupersededIfNeeded(update, "SystemExplorerNavigation");
-		LogScriptEditorLifecycle(
-			"ScriptEditor lifecycle transition begun",
-			$"Reason='SystemExplorerNavigation', {DescribeScriptEditorTransition(update.Transition)}"
-		);
 		return update.Transition;
+	}
+
+	private void QueueDeferredSystemExplorerSameScriptTransitionObservation(
+		ScriptEditorTransition transition,
+		string expectedScriptPath
+	)
+	{
+		string normalizedExpectedPath = ScriptPathUtility.Normalize(expectedScriptPath);
+		if (
+			transition.TransitionId <= 0
+			|| string.IsNullOrWhiteSpace(transition.ManagedAssemblyGeneration)
+			|| string.IsNullOrWhiteSpace(normalizedExpectedPath)
+		)
+		{
+			return;
+		}
+
+		CallDeferred(
+			nameof(ApplyDeferredSystemExplorerSameScriptTransitionObservation),
+			transition.ManagedAssemblyGeneration,
+			transition.TransitionId,
+			normalizedExpectedPath
+		);
+	}
+
+	private void ApplyDeferredSystemExplorerSameScriptTransitionObservation(
+		string scheduledManagedAssemblyGeneration,
+		long scheduledScriptTransitionId,
+		string scheduledExpectedScriptPath
+	)
+	{
+		string normalizedExpectedPath = ScriptPathUtility.Normalize(
+			scheduledExpectedScriptPath
+		);
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+			|| scheduledScriptTransitionId <= 0
+			|| string.IsNullOrWhiteSpace(normalizedExpectedPath)
+			|| !IsAutocompletePluginBoundaryAvailable()
+		)
+		{
+			return;
+		}
+
+		ScriptEditorLifecycleCoordinator coordinator = ScriptEditorLifecycleCoordinator;
+		ScriptEditorLifecycleSnapshot snapshot = coordinator.Snapshot;
+		if (
+			!IsExactSystemExplorerSameScriptTransitionObservationTarget(
+				snapshot,
+				scheduledManagedAssemblyGeneration,
+				scheduledScriptTransitionId,
+				normalizedExpectedPath
+			)
+		)
+		{
+			return;
+		}
+
+		if (!TryGetActiveScriptPath(out string activeScriptPath))
+			return;
+
+		string normalizedActiveScriptPath = ScriptPathUtility.Normalize(activeScriptPath);
+		if (
+			!string.Equals(
+				normalizedActiveScriptPath,
+				normalizedExpectedPath,
+				StringComparison.OrdinalIgnoreCase
+			)
+		)
+		{
+			return;
+		}
+
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		ScriptEditorLifecycleSnapshot revalidatedSnapshot = coordinator.Snapshot;
+		if (
+			!IsExactSystemExplorerSameScriptTransitionObservationTarget(
+				revalidatedSnapshot,
+				scheduledManagedAssemblyGeneration,
+				scheduledScriptTransitionId,
+				normalizedExpectedPath
+			)
+		)
+		{
+			return;
+		}
+
+		if (revalidatedSnapshot.State == ScriptEditorLifecycleState.ScriptTransitionPending)
+		{
+			if (
+				!coordinator.TryObserveExpectedSystemExplorerTransition(
+					scheduledScriptTransitionId,
+					normalizedActiveScriptPath,
+					out _
+				)
+			)
+			{
+				return;
+			}
+		}
+
+		ScriptEditorLifecycleSnapshot bindingPendingSnapshot = coordinator.Snapshot;
+		if (
+			!IsExactSystemExplorerSameScriptTransitionObservationTarget(
+				bindingPendingSnapshot,
+				scheduledManagedAssemblyGeneration,
+				scheduledScriptTransitionId,
+				normalizedExpectedPath
+			)
+			|| bindingPendingSnapshot.State != ScriptEditorLifecycleState.BindingPending
+		)
+		{
+			return;
+		}
+
+		QueueDeferredAutocompleteScriptChangeRebind(
+			"SystemExplorerSameScriptPostEditObservation"
+		);
+	}
+
+	private static bool IsExactSystemExplorerSameScriptTransitionObservationTarget(
+		ScriptEditorLifecycleSnapshot snapshot,
+		string scheduledManagedAssemblyGeneration,
+		long scheduledScriptTransitionId,
+		string normalizedExpectedPath
+	)
+	{
+		if (
+			!string.Equals(
+				snapshot.ManagedAssemblyGeneration,
+				scheduledManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+			|| snapshot.ScriptTransitionId != scheduledScriptTransitionId
+			|| snapshot.TransitionOrigin
+				!= ScriptEditorTransitionOrigin.SystemExplorerNavigation
+			|| !string.Equals(
+				ScriptPathUtility.Normalize(snapshot.ExpectedScriptPath),
+				normalizedExpectedPath,
+				StringComparison.OrdinalIgnoreCase
+			)
+		)
+		{
+			return false;
+		}
+
+		if (
+			snapshot.State != ScriptEditorLifecycleState.ScriptTransitionPending
+			&& snapshot.State != ScriptEditorLifecycleState.BindingPending
+		)
+		{
+			return false;
+		}
+
+		if (snapshot.State == ScriptEditorLifecycleState.BindingPending)
+		{
+			string authoritativePath = !string.IsNullOrWhiteSpace(snapshot.ObservedScriptPath)
+				? snapshot.ObservedScriptPath
+				: snapshot.ExpectedScriptPath;
+			return string.Equals(
+				ScriptPathUtility.Normalize(authoritativePath),
+				normalizedExpectedPath,
+				StringComparison.OrdinalIgnoreCase
+			);
+		}
+
+		return true;
 	}
 
 	private ScriptEditorTransition ObserveScriptEditorLifecycleScriptChange(
@@ -115,15 +291,6 @@ public partial class SystemExplorerPlugin
 		string observedPath = ScriptPathUtility.Normalize(observedScriptPath);
 		ScriptEditorTransitionUpdate update =
 			ScriptEditorLifecycleCoordinator.ObserveScriptChange(observedPath);
-		LogScriptEditorLifecycleSupersededIfNeeded(update, "ObservedScriptChange");
-		LogScriptEditorLifecycle(
-			"ScriptEditor lifecycle script change observed",
-			$"Callback='{callbackName ?? ""}', Disposition='{update.ObservationDisposition}', ObservedScriptPath='{observedPath}', BeganNewTransition='{update.BeganNewTransition}', {DescribeScriptEditorTransition(update.Transition)}"
-		);
-		LogScriptEditorLifecycle(
-			"ScriptEditor lifecycle binding pending",
-			DescribeScriptEditorLifecycleSnapshot(ScriptEditorLifecycleCoordinator.Snapshot)
-		);
 		return update.Transition;
 	}
 
@@ -181,11 +348,6 @@ public partial class SystemExplorerPlugin
 				""
 			);
 			coordinator.MarkBindingPending(update.Transition.TransitionId);
-			LogScriptEditorLifecycleSupersededIfNeeded(update, origin);
-			LogScriptEditorLifecycle(
-				"ScriptEditor lifecycle transition begun",
-				$"Reason='{origin ?? ""}', {DescribeScriptEditorTransition(update.Transition)}"
-			);
 			snapshot = coordinator.Snapshot;
 		}
 		else if (
@@ -221,11 +383,6 @@ public partial class SystemExplorerPlugin
 				""
 			);
 			coordinator.MarkBindingPending(update.Transition.TransitionId);
-			LogScriptEditorLifecycleSupersededIfNeeded(update, origin);
-			LogScriptEditorLifecycle(
-				"ScriptEditor lifecycle transition begun",
-				$"Reason='{origin ?? ""}', {DescribeScriptEditorTransition(update.Transition)}"
-			);
 		}
 		else if (snapshot.State == ScriptEditorLifecycleState.Detached)
 		{
@@ -234,11 +391,6 @@ public partial class SystemExplorerPlugin
 				""
 			);
 			coordinator.MarkBindingPending(update.Transition.TransitionId);
-			LogScriptEditorLifecycleSupersededIfNeeded(update, origin);
-			LogScriptEditorLifecycle(
-				"ScriptEditor lifecycle transition begun",
-				$"Reason='{origin ?? ""}', {DescribeScriptEditorTransition(update.Transition)}"
-			);
 		}
 		else if (snapshot.State == ScriptEditorLifecycleState.ScriptTransitionPending)
 		{
@@ -254,10 +406,13 @@ public partial class SystemExplorerPlugin
 		if (_autocompleteHost == null || _autocompleteHostInstanceToken <= 0)
 			return false;
 
-		return ScriptEditorLifecycleCoordinator.TryGetCurrentBindingLease(
-			out EditorBindingLease lease
-		)
+		return IsAutocompleteReloadStabilizationReady()
+			&& ScriptEditorLifecycleCoordinator.TryGetCurrentBindingLease(
+				out EditorBindingLease lease
+			)
 			&& lease.HostInstanceToken == _autocompleteHostInstanceToken
+			&& lease.ReloadReadyEpoch > 0
+			&& lease.ReloadReadyEpoch == CurrentAutocompleteReloadReadyEpoch
 			&& string.Equals(
 				lease.ManagedAssemblyGeneration,
 				ManagedAssemblyGeneration,
@@ -280,20 +435,6 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private void LogScriptEditorLifecycleSupersededIfNeeded(
-		ScriptEditorTransitionUpdate update,
-		string reason
-	)
-	{
-		if (update.SupersededTransitionId <= 0 && update.SupersededBindingEpoch <= 0)
-			return;
-
-		LogScriptEditorLifecycle(
-			"ScriptEditor lifecycle transition superseded",
-			$"Reason='{reason ?? ""}', Disposition='{update.ObservationDisposition}', SupersededScriptTransitionId='{update.SupersededTransitionId}', SupersededBindingEpoch='{update.SupersededBindingEpoch}', CurrentScriptTransitionId='{update.Transition.TransitionId}', ManagedAssemblyGeneration='{update.Transition.ManagedAssemblyGeneration}'"
-		);
-	}
-
 	private void LogScriptEditorLifecycle(string operation, string details)
 	{
 		try
@@ -305,19 +446,12 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private string DescribeScriptEditorTransition(ScriptEditorTransition transition)
-	{
-		ScriptEditorLifecycleState state = ScriptEditorLifecycleCoordinator.Snapshot.State;
-		return
-			$"ManagedAssemblyGeneration='{transition.ManagedAssemblyGeneration}', LifecycleState='{state}', ScriptTransitionId='{transition.TransitionId}', TransitionOrigin='{transition.Origin}', ExpectedScriptPath='{transition.ExpectedScriptPath}'";
-	}
-
 	private string DescribeScriptEditorLifecycleForDiagnostics()
 	{
 		if (_scriptEditorLifecycleCoordinator == null)
 		{
 			return
-				$"LifecycleState='{ScriptEditorLifecycleState.Detached}', ScriptTransitionId='0', TransitionOrigin='<none>', ExpectedScriptPath='', ObservedScriptPath='', BindingEpoch='0', BindingHostInstanceToken='0', BindingScriptEditorInstanceId='0', BindingScriptEditorBaseInstanceId='0', BindingCodeEditInstanceId='0', BindingScriptResourcePath=''";
+				$"LifecycleState='{ScriptEditorLifecycleState.Detached}', ScriptTransitionId='0', TransitionOrigin='<none>', ExpectedScriptPath='', ObservedScriptPath='', BindingEpoch='0', ReloadReadyEpoch='0', BindingHostInstanceToken='0', BindingScriptEditorInstanceId='0', BindingScriptEditorBaseInstanceId='0', BindingCodeEditInstanceId='0', BindingScriptResourcePath=''";
 		}
 
 		return DescribeScriptEditorLifecycleSnapshot(
@@ -330,7 +464,7 @@ public partial class SystemExplorerPlugin
 	)
 	{
 		return
-			$"ManagedAssemblyGeneration='{snapshot.ManagedAssemblyGeneration}', LifecycleState='{snapshot.State}', ScriptTransitionId='{snapshot.ScriptTransitionId}', TransitionOrigin='{snapshot.TransitionOrigin?.ToString() ?? "<none>"}', ExpectedScriptPath='{snapshot.ExpectedScriptPath}', ObservedScriptPath='{snapshot.ObservedScriptPath}', BindingEpoch='{snapshot.BindingEpoch}', BindingHostInstanceToken='{snapshot.HostInstanceToken}', BindingScriptEditorInstanceId='{snapshot.ScriptEditorInstanceId}', BindingScriptEditorBaseInstanceId='{snapshot.ScriptEditorBaseInstanceId}', BindingCodeEditInstanceId='{snapshot.CodeEditInstanceId}', BindingScriptResourcePath='{snapshot.BoundScriptResourcePath}'";
+			$"ManagedAssemblyGeneration='{snapshot.ManagedAssemblyGeneration}', LifecycleState='{snapshot.State}', ScriptTransitionId='{snapshot.ScriptTransitionId}', TransitionOrigin='{snapshot.TransitionOrigin?.ToString() ?? "<none>"}', ExpectedScriptPath='{snapshot.ExpectedScriptPath}', ObservedScriptPath='{snapshot.ObservedScriptPath}', BindingEpoch='{snapshot.BindingEpoch}', ReloadReadyEpoch='{snapshot.ReloadReadyEpoch}', BindingHostInstanceToken='{snapshot.HostInstanceToken}', BindingScriptEditorInstanceId='{snapshot.ScriptEditorInstanceId}', BindingScriptEditorBaseInstanceId='{snapshot.ScriptEditorBaseInstanceId}', BindingCodeEditInstanceId='{snapshot.CodeEditInstanceId}', BindingScriptResourcePath='{snapshot.BoundScriptResourcePath}'";
 	}
 
 	#endregion

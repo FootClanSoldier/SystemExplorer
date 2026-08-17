@@ -71,12 +71,13 @@ public partial class SystemExplorerPlugin
 			persistentWorkerDiagnosticLog,
 			() => DebugState,
 			() => _autocompleteHostInstanceToken,
+			() => CurrentAutocompleteReloadReadyEpoch,
+			() => IsAutocompleteReloadStabilizationReady(),
 			ScriptEditorLifecycleCoordinator,
 			RequestScriptEditorLifecycleRebind,
 			semanticMemberPipelineEnabled: false,
 			cancelNativeCompletionOnRebind: false,
 			activeDocumentSyntaxOverlayEnabled: false,
-			cancelNativeCompletionOnTextChangedValidation: false,
 			automaticUsingInsertTextExecutionEnabled: true,
 			automaticUsingDeferInsertTextAfterGuiInputEnabled: true,
 			automaticUsingComplexOperationWrapperEnabled: false
@@ -240,11 +241,6 @@ public partial class SystemExplorerPlugin
 		_autocompleteDeferredScriptChangeRebindQueued = true;
 		_autocompleteDeferredScriptChangeCoalescedCount = 0;
 
-		DebugLogger.LogOperation(
-			"C# autocomplete ScriptEditor rebind deferred",
-			() =>
-				$"Token='{token}', TargetScriptTransitionId='{_autocompleteDeferredScriptChangeTargetTransitionId}', HostInstanceToken='{scheduledHostInstanceToken}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', ScriptEditorChangedCallbackDepth='{_autocompleteScriptEditorChangedCallbackDepth}', TreeKeyboardNavigationBurstActive='{IsTreeKeyboardNavigationBurstActive}', NamespaceRefactorQuiescenceActive='{_namespaceRefactorAutocompleteQuiescenceActive}'"
-		);
 
 		try
 		{
@@ -421,7 +417,7 @@ public partial class SystemExplorerPlugin
 		{
 			DebugLogger.LogOperation(
 				"C# autocomplete automatic using deferred InsertText scheduling failed",
-				$"Token='{token}', Name='{request.CompletionName}', Namespace='{request.NamespaceName}', CodeEditNativeInstanceId='{request.CodeEditNativeInstanceId}', ScriptPath='{request.ScriptPath}', HostInstanceToken='{hostInstanceToken}', ManagedAssemblyGeneration='{managedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}', ExceptionType='{exception.GetType().FullName}', Exception='{exception}'"
+				$"Token='{token}', Name='{request.CompletionName}', Namespace='{request.NamespaceName}', OriginatingCompletionPublicationId='{request.OriginatingCompletionPublicationId}', CodeEditNativeInstanceId='{request.CodeEditNativeInstanceId}', ScriptPath='{request.ScriptPath}', ScriptTransitionId='{request.BindingLease.ScriptTransitionId}', BindingEpoch='{request.BindingLease.BindingEpoch}', ReloadReadyEpoch='{request.BindingLease.ReloadReadyEpoch}', HostInstanceToken='{hostInstanceToken}', ManagedAssemblyGeneration='{managedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}', ExceptionType='{exception.GetType().FullName}', Exception='{exception}'"
 			);
 			ResetDeferredAutocompleteUsingInsertionState(invalidateToken: true);
 			RefreshEditorPluginProcessingState();
@@ -430,7 +426,7 @@ public partial class SystemExplorerPlugin
 
 		DebugLogger.LogOperation(
 			"C# autocomplete automatic using deferred InsertText scheduled",
-			$"Token='{token}', Name='{request.CompletionName}', Namespace='{request.NamespaceName}', CodeEditNativeInstanceId='{request.CodeEditNativeInstanceId}', ScriptPath='{request.ScriptPath}', HostInstanceToken='{hostInstanceToken}', ManagedAssemblyGeneration='{managedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}'"
+			$"Token='{token}', Name='{request.CompletionName}', Namespace='{request.NamespaceName}', OriginatingCompletionPublicationId='{request.OriginatingCompletionPublicationId}', CodeEditNativeInstanceId='{request.CodeEditNativeInstanceId}', ScriptPath='{request.ScriptPath}', ScriptTransitionId='{request.BindingLease.ScriptTransitionId}', BindingEpoch='{request.BindingLease.BindingEpoch}', ReloadReadyEpoch='{request.BindingLease.ReloadReadyEpoch}', HostInstanceToken='{hostInstanceToken}', ManagedAssemblyGeneration='{managedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}'"
 		);
 		RefreshEditorPluginProcessingState();
 	}
@@ -643,14 +639,15 @@ public partial class SystemExplorerPlugin
 				scheduledHostInstanceToken,
 				scheduledManagedAssemblyGeneration,
 				applyResult?.CurrentCodeEditNativeInstanceId ?? 0UL,
-				applyResult?.CurrentScriptPath ?? ""
+				applyResult?.CurrentScriptPath ?? "",
+				applyResult?.CurrentBindingLease
 			);
 		}
 		catch (Exception exception)
 		{
 			DebugLogger.LogOperation(
 				"C# autocomplete automatic using deferred InsertText failed after confirmation",
-				$"UsingAction='{AutocompleteProjectTypeConfirmationService.UsingActionFailedAfterConfirmationDeferred}', Token='{token}', Name='{request?.CompletionName ?? ""}', Namespace='{request?.NamespaceName ?? ""}', CodeEditNativeInstanceId='{request?.CodeEditNativeInstanceId ?? 0UL}', ScriptPath='{request?.ScriptPath ?? ""}', HostInstanceToken='{scheduledHostInstanceToken}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}', ExceptionType='{exception.GetType().FullName}', Exception='{exception}'"
+				$"UsingAction='{AutocompleteProjectTypeConfirmationService.UsingActionFailedAfterConfirmationDeferred}', Token='{token}', Name='{request?.CompletionName ?? ""}', Namespace='{request?.NamespaceName ?? ""}', OriginatingCompletionPublicationId='{request?.OriginatingCompletionPublicationId ?? 0}', CodeEditNativeInstanceId='{request?.CodeEditNativeInstanceId ?? 0UL}', ScriptPath='{request?.ScriptPath ?? ""}', ExpectedScriptTransitionId='{request?.BindingLease.ScriptTransitionId ?? 0}', ExpectedBindingEpoch='{request?.BindingLease.BindingEpoch ?? 0}', ExpectedReloadReadyEpoch='{request?.BindingLease.ReloadReadyEpoch ?? 0}', HostInstanceToken='{scheduledHostInstanceToken}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}', ExceptionType='{exception.GetType().FullName}', Exception='{exception}'"
 			);
 			ResetDeferredAutocompleteUsingInsertionState(invalidateToken: true);
 			RefreshEditorPluginProcessingState();
@@ -664,7 +661,8 @@ public partial class SystemExplorerPlugin
 		long scheduledHostInstanceToken,
 		string scheduledManagedAssemblyGeneration,
 		ulong currentCodeEditNativeInstanceId = 0,
-		string currentScriptPath = ""
+		string currentScriptPath = "",
+		EditorBindingLease? currentBindingLease = null
 	)
 	{
 		LogAutocompleteDeferredUsingInsertionRejection(
@@ -674,7 +672,8 @@ public partial class SystemExplorerPlugin
 			scheduledHostInstanceToken,
 			scheduledManagedAssemblyGeneration,
 			currentCodeEditNativeInstanceId,
-			currentScriptPath
+			currentScriptPath,
+			currentBindingLease
 		);
 		ResetDeferredAutocompleteUsingInsertionState(invalidateToken: true);
 		RefreshEditorPluginProcessingState();
@@ -687,7 +686,8 @@ public partial class SystemExplorerPlugin
 		long scheduledHostInstanceToken,
 		string scheduledManagedAssemblyGeneration,
 		ulong currentCodeEditNativeInstanceId,
-		string currentScriptPath
+		string currentScriptPath,
+		EditorBindingLease? currentBindingLease = null
 	)
 	{
 		string currentCodeEditIdentity = currentCodeEditNativeInstanceId == 0
@@ -696,7 +696,7 @@ public partial class SystemExplorerPlugin
 
 		DebugLogger.LogOperation(
 			"C# autocomplete automatic using deferred InsertText rejected",
-			$"Reason='{reason ?? ""}', Token='{token}', Name='{request?.CompletionName ?? ""}', Namespace='{request?.NamespaceName ?? ""}', ExpectedCodeEditNativeInstanceId='{request?.CodeEditNativeInstanceId ?? 0UL}', CurrentCodeEditNativeInstanceId='{currentCodeEditIdentity}', ScriptPath='{request?.ScriptPath ?? ""}', CurrentScriptPath='{currentScriptPath ?? ""}', ScheduledHostInstanceToken='{scheduledHostInstanceToken}', CurrentHostInstanceToken='{_autocompleteHostInstanceToken}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}', SuppressedTextChanged='{_suppressedAutocompleteDeferredUsingTextChangedCount}', SuppressedValidation='{_suppressedAutocompleteDeferredUsingValidationCount}', SuppressedCompletionRequested='{_suppressedAutocompleteDeferredUsingCompletionRequestedCount}', SuppressedGuiInput='{_suppressedAutocompleteDeferredUsingGuiInputCount}'"
+			$"Reason='{reason ?? ""}', Token='{token}', Name='{request?.CompletionName ?? ""}', Namespace='{request?.NamespaceName ?? ""}', OriginatingCompletionPublicationId='{request?.OriginatingCompletionPublicationId ?? 0}', ExpectedCodeEditNativeInstanceId='{request?.CodeEditNativeInstanceId ?? 0UL}', CurrentCodeEditNativeInstanceId='{currentCodeEditIdentity}', ScriptPath='{request?.ScriptPath ?? ""}', CurrentScriptPath='{currentScriptPath ?? ""}', ExpectedScriptTransitionId='{request?.BindingLease.ScriptTransitionId ?? 0}', CurrentScriptTransitionId='{currentBindingLease?.ScriptTransitionId ?? 0}', ExpectedBindingEpoch='{request?.BindingLease.BindingEpoch ?? 0}', CurrentBindingEpoch='{currentBindingLease?.BindingEpoch ?? 0}', ExpectedReloadReadyEpoch='{request?.BindingLease.ReloadReadyEpoch ?? 0}', CurrentReloadReadyEpoch='{currentBindingLease?.ReloadReadyEpoch ?? 0}', ScheduledHostInstanceToken='{scheduledHostInstanceToken}', CurrentHostInstanceToken='{_autocompleteHostInstanceToken}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', GuiInputCallbackDepth='{_autocompleteCodeEditGuiInputCallbackDepth}', SuppressedTextChanged='{_suppressedAutocompleteDeferredUsingTextChangedCount}', SuppressedValidation='{_suppressedAutocompleteDeferredUsingValidationCount}', SuppressedCompletionRequested='{_suppressedAutocompleteDeferredUsingCompletionRequestedCount}', SuppressedGuiInput='{_suppressedAutocompleteDeferredUsingGuiInputCount}'"
 		);
 	}
 
@@ -1127,11 +1127,6 @@ public partial class SystemExplorerPlugin
 
 	private bool EnsureAutocompleteLifecycleCurrent()
 	{
-		DebugLogger.LogOperation(
-			"C# autocomplete EnsureAutocompleteLifecycleCurrent begin",
-			() =>
-				$"HostNull='{_autocompleteHost == null}', HostInstanceToken='{_autocompleteHostInstanceToken}', HostManagedAssemblyGeneration='{_autocompleteHostManagedAssemblyGeneration}', ManagedRecoveryInProgress='{_isRecoveringManagedAssemblyState}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}', ScriptEditorChangedCallbackDepth='{_autocompleteScriptEditorChangedCallbackDepth}', DeferredScriptChangeRebindPending='{_autocompleteDeferredScriptChangeRebindPending}', {DescribeScriptEditorLifecycleForDiagnostics()}"
-		);
 		bool lifecycleCurrent =
 			TryEnsureAutocompleteHost(out AutocompletePluginHost host)
 			&& host.EnsureLifecycleCurrent();
@@ -1140,16 +1135,13 @@ public partial class SystemExplorerPlugin
 			EnsureScriptEditorLifecycleRecoveryQueued("EnsureAutocompleteLifecycleCurrent");
 
 		RefreshEditorPluginProcessingState();
-		DebugLogger.LogOperation(
-			"C# autocomplete EnsureAutocompleteLifecycleCurrent completed",
-			() =>
-				$"Result='{lifecycleCurrent}', HostNull='{_autocompleteHost == null}', HostInstanceToken='{_autocompleteHostInstanceToken}', HostManagedAssemblyGeneration='{_autocompleteHostManagedAssemblyGeneration}', DeferredScriptChangeRebindPending='{_autocompleteDeferredScriptChangeRebindPending}', {DescribeScriptEditorLifecycleForDiagnostics()}"
-		);
 		return lifecycleCurrent;
 	}
 
 	private void ResetAutocompleteTransientStateAfterManagedAssemblyReload()
 	{
+		InvalidateAutocompletePostReloadObservationIsolationAuthority();
+		InvalidateAutocompleteScriptTransitionStabilizationAuthority();
 		InvalidateScriptEditorLifecycle(
 			"ResetAutocompleteTransientStateAfterManagedAssemblyReload"
 		);
@@ -1202,7 +1194,10 @@ public partial class SystemExplorerPlugin
 
 	private void ShutdownAutocomplete()
 	{
+		InvalidateAutocompletePostReloadObservationIsolationAuthority();
+		InvalidateAutocompleteScriptTransitionStabilizationAuthority();
 		InvalidateScriptEditorLifecycle("ShutdownAutocomplete");
+		InvalidateAutocompleteReloadStabilizationAuthority(parkObservation: true);
 		DebugLogger.LogOperation(
 			"C# autocomplete ShutdownAutocomplete begin",
 			() =>
@@ -1379,8 +1374,6 @@ public partial class SystemExplorerPlugin
 
 		_autocompleteDeferredScriptChangeRebindQueued = false;
 		_autocompleteDeferredScriptChangeRebindExecutionActive = true;
-		bool crashTailReachedHandleScriptChanged = false;
-		string crashTailTargetScriptPath = "";
 		try
 		{
 			if (!IsAutocompletePluginBoundaryAvailable())
@@ -1489,21 +1482,7 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			ScriptEditorLifecycleSnapshot lifecycleSnapshotBeforeEnsure =
-				ScriptEditorLifecycleCoordinator.Snapshot;
-			crashTailTargetScriptPath = !string.IsNullOrWhiteSpace(
-				lifecycleSnapshotBeforeEnsure.ObservedScriptPath
-			)
-				? lifecycleSnapshotBeforeEnsure.ObservedScriptPath
-				: lifecycleSnapshotBeforeEnsure.ExpectedScriptPath;
-			Action<string, string> lifecycleEnsureDiagnosticPhase =
-				CreateDeferredScriptRebindLifecycleEnsureDiagnosticPhase(
-					token,
-					scheduledHostInstanceToken,
-					crashTailTargetScriptPath
-				);
-
-			if (!host.EnsureLifecycleCurrent(lifecycleEnsureDiagnosticPhase))
+			if (!host.EnsureLifecycleCurrent())
 			{
 				DebugLogger.LogOperation(
 					"C# autocomplete deferred ScriptEditor rebind aborted",
@@ -1532,36 +1511,130 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			ScriptEditorLifecycleSnapshot lifecycleSnapshot =
-				ScriptEditorLifecycleCoordinator.Snapshot;
-			crashTailTargetScriptPath = !string.IsNullOrWhiteSpace(
-				lifecycleSnapshot.ObservedScriptPath
+			if (
+				TryHandleAutocompletePostReloadObservationIsolationAdmission(
+					host,
+					scheduledHostInstanceToken,
+					targetTransitionId
+				)
 			)
-				? lifecycleSnapshot.ObservedScriptPath
-				: lifecycleSnapshot.ExpectedScriptPath;
-			crashTailReachedHandleScriptChanged = true;
+			{
+				ConsumeDeferredAutocompleteScriptChangeRebind(token);
+				RefreshEditorPluginProcessingState();
+				return;
+			}
+
+			if (
+				!TryGetAutocompleteReloadRebindAdmission(
+					scheduledHostInstanceToken,
+					targetTransitionId,
+					out long reloadReadyEpoch,
+					out AutocompleteEditorBindingCandidate? requiredActivationCandidate
+				)
+			)
+			{
+				ArmAutocompleteReloadStabilizationObservation();
+				ConsumeDeferredAutocompleteScriptChangeRebind(token);
+				RefreshEditorPluginProcessingState();
+				return;
+			}
+
+			AutocompleteBindingActivationStabilizationKind stabilizationKind =
+				AutocompleteBindingActivationStabilizationKind.None;
+			if (requiredActivationCandidate.HasValue)
+			{
+				stabilizationKind = AutocompleteBindingActivationStabilizationKind.Reload;
+			}
+			else
+			{
+				ScriptEditorLifecycleSnapshot lifecycle =
+					ScriptEditorLifecycleCoordinator.Snapshot;
+				if (
+					ShouldRequireAutocompleteScriptTransitionStabilization(
+						reloadReadyEpoch,
+						lifecycle
+					)
+				)
+				{
+					if (
+						!TryGetAutocompleteScriptTransitionRebindAdmission(
+							scheduledHostInstanceToken,
+							targetTransitionId,
+							out AutocompleteEditorBindingCandidate ordinaryCandidate
+						)
+					)
+					{
+						ConsumeDeferredAutocompleteScriptChangeRebind(token);
+						RefreshEditorPluginProcessingState();
+						return;
+					}
+
+					requiredActivationCandidate = ordinaryCandidate;
+					stabilizationKind =
+						AutocompleteBindingActivationStabilizationKind.ScriptTransition;
+				}
+			}
 
 			try
 			{
-				LogCompactScriptEditorCrashTail(
-					"DeferredScriptRebind",
-					"HandleScriptChanged.Begin",
-					operationToken: token,
-					targetScriptPath: crashTailTargetScriptPath,
-					hostInstanceToken: scheduledHostInstanceToken
+				bool bindingResolved = host.HandleScriptChanged(
+					targetTransitionId,
+					reloadReadyEpoch,
+					requiredActivationCandidate
 				);
-				bool bindingResolved = host.HandleScriptChanged(targetTransitionId);
-				LogCompactScriptEditorCrashTail(
-					"DeferredScriptRebind",
-					"HandleScriptChanged.Returned",
-					operationToken: token,
-					targetScriptPath: crashTailTargetScriptPath,
-					hostInstanceToken: scheduledHostInstanceToken,
-					extraDetails: $"BindingResolved='{bindingResolved}'"
-				);
+
+				switch (stabilizationKind)
+				{
+					case AutocompleteBindingActivationStabilizationKind.Reload:
+						if (bindingResolved)
+						{
+							bindingResolved = TryCompleteAutocompleteReloadActivation(
+								reloadReadyEpoch,
+								requiredActivationCandidate.Value
+							);
+						}
+						else
+						{
+							RestartAutocompleteReloadActivation(
+								"BindingResolutionRejected"
+							);
+						}
+						break;
+
+					case AutocompleteBindingActivationStabilizationKind.ScriptTransition:
+						if (bindingResolved)
+						{
+							bindingResolved =
+								TryCompleteAutocompleteScriptTransitionActivation(
+									reloadReadyEpoch,
+									requiredActivationCandidate.Value
+								);
+						}
+						else
+						{
+							RestartAutocompleteScriptTransitionActivation(
+								"BindingResolutionRejected"
+							);
+						}
+						break;
+				}
 			}
 			catch (Exception exception)
 			{
+				switch (stabilizationKind)
+				{
+					case AutocompleteBindingActivationStabilizationKind.Reload:
+						RestartAutocompleteReloadActivation(
+							"BindingResolutionException"
+						);
+						break;
+					case AutocompleteBindingActivationStabilizationKind.ScriptTransition:
+						RestartAutocompleteScriptTransitionActivation(
+							"BindingResolutionException"
+						);
+						break;
+				}
+
 				DebugLogger.LogOperation(
 					"C# autocomplete deferred ScriptEditor rebind failed",
 					exception.ToString()
@@ -1570,36 +1643,12 @@ public partial class SystemExplorerPlugin
 			finally
 			{
 				ConsumeDeferredAutocompleteScriptChangeRebind(token);
-				LogCompactScriptEditorCrashTail(
-					"DeferredScriptRebind",
-					"RefreshProcessing.Begin",
-					operationToken: token,
-					targetScriptPath: crashTailTargetScriptPath,
-					hostInstanceToken: scheduledHostInstanceToken
-				);
 				RefreshEditorPluginProcessingState();
-				LogCompactScriptEditorCrashTail(
-					"DeferredScriptRebind",
-					"RefreshProcessing.Returned",
-					operationToken: token,
-					targetScriptPath: crashTailTargetScriptPath,
-					hostInstanceToken: scheduledHostInstanceToken
-				);
 			}
 		}
 		finally
 		{
 			_autocompleteDeferredScriptChangeRebindExecutionActive = false;
-			if (crashTailReachedHandleScriptChanged)
-			{
-				LogCompactScriptEditorCrashTail(
-					"DeferredScriptRebind",
-					"CallbackExit",
-					operationToken: token,
-					targetScriptPath: crashTailTargetScriptPath,
-					hostInstanceToken: scheduledHostInstanceToken
-				);
-			}
 		}
 	}
 
@@ -1642,37 +1691,101 @@ public partial class SystemExplorerPlugin
 
 	private void OnAutocompleteCodeCompletionRequested()
 	{
-		if (!IsAutocompletePluginBoundaryAvailable())
+		AutocompletePluginHost host = null;
+
+		try
 		{
-			LogAutocompleteCallbackBoundaryRejection("CodeCompletionRequested");
-			return;
-		}
+			if (!IsAutocompletePluginBoundaryAvailable())
+			{
+				LogAutocompleteCallbackBoundaryRejection("CodeCompletionRequested");
+				return;
+			}
 
-		if (IsAutocompleteDeferredUsingInsertionBarrierActive)
-		{
-			IncrementAutocompleteDeferredUsingSuppression(
-				ref _suppressedAutocompleteDeferredUsingCompletionRequestedCount
-			);
-			return;
-		}
+			if (IsAutocompleteDeferredUsingInsertionBarrierActive)
+			{
+				IncrementAutocompleteDeferredUsingSuppression(
+					ref _suppressedAutocompleteDeferredUsingCompletionRequestedCount
+				);
+				return;
+			}
 
-		if (IsAutocompleteScriptChangeRebindBarrierActive)
-			return;
+			if (IsAutocompleteScriptChangeRebindBarrierActive)
+				return;
 
-		if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Completion Requested"))
-			return;
+			if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Completion Requested"))
+				return;
 
-		if (_namespaceRefactorAutocompleteQuiescenceActive)
-		{
-			_suppressedNamespaceRefactorAutocompleteCompletionRequestedCount++;
+			if (_namespaceRefactorAutocompleteQuiescenceActive)
+			{
+				_suppressedNamespaceRefactorAutocompleteCompletionRequestedCount++;
+				RefreshEditorPluginProcessingState();
+				return;
+			}
+
+			if (TryEnsureAutocompleteHost(out host))
+			{
+				host.HandleCompletionRequested();
+				if (host.IsCompletionPipelineFaulted)
+				{
+					CancelDeferredAutocompleteUsingInsertion(
+						"CompletionPipelineFaulted"
+					);
+				}
+			}
+
 			RefreshEditorPluginProcessingState();
-			return;
 		}
+		catch (Exception exception)
+		{
+			try
+			{
+				AutocompletePluginHost faultHost = host;
+				if (
+					faultHost == null
+					&& _autocompleteHost != null
+					&& string.Equals(
+						_autocompleteHostManagedAssemblyGeneration,
+						ManagedAssemblyGeneration,
+						StringComparison.Ordinal
+					)
+				)
+				{
+					faultHost = _autocompleteHost;
+				}
 
-		if (TryEnsureAutocompleteHost(out AutocompletePluginHost host))
-			host.HandleCompletionRequested();
+				faultHost?.MarkCompletionPipelineFaultedFromCallbackBoundary(exception);
+			}
+			catch
+			{
+			}
 
-		RefreshEditorPluginProcessingState();
+			try
+			{
+				CancelDeferredAutocompleteUsingInsertion("CompletionPipelineFaulted");
+			}
+			catch
+			{
+			}
+
+			try
+			{
+				DebugLogger.LogOperation(
+					"C# autocomplete completion signal callback failed",
+					$"HostInstanceToken='{_autocompleteHostInstanceToken}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}', Stage='PluginSignalBoundary', ExceptionType='{exception.GetType().FullName}', Exception='{exception}'"
+				);
+			}
+			catch
+			{
+			}
+
+			try
+			{
+				RefreshEditorPluginProcessingState();
+			}
+			catch
+			{
+			}
+		}
 	}
 
 	private void OnAutocompleteCodeEditGuiInput(InputEvent inputEvent)
@@ -1796,6 +1909,9 @@ public partial class SystemExplorerPlugin
 			long hostInstanceToken = _autocompleteHostInstanceToken;
 			long validationGeneration = host.BeginTextChangedValidation();
 			RefreshEditorPluginProcessingState();
+			if (host.IsCompletionPipelineFaulted)
+				return;
+
 			CallDeferred(
 				nameof(ValidateAutocompleteAfterTextChangedDeferred),
 				validationGeneration,
@@ -1994,38 +2110,8 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		LogCompactScriptEditorCrashTail(
-			"TextChangedValidation",
-			"HostValidate.Begin",
-			operationToken: validationGeneration,
-			hostInstanceToken: scheduledHostInstanceToken
-		);
 		currentHost.ValidateAfterTextChanged(validationGeneration);
-		LogCompactScriptEditorCrashTail(
-			"TextChangedValidation",
-			"HostValidate.Returned",
-			operationToken: validationGeneration,
-			hostInstanceToken: scheduledHostInstanceToken
-		);
-		LogCompactScriptEditorCrashTail(
-			"TextChangedValidation",
-			"RefreshProcessing.Begin",
-			operationToken: validationGeneration,
-			hostInstanceToken: scheduledHostInstanceToken
-		);
 		RefreshEditorPluginProcessingState();
-		LogCompactScriptEditorCrashTail(
-			"TextChangedValidation",
-			"RefreshProcessing.Returned",
-			operationToken: validationGeneration,
-			hostInstanceToken: scheduledHostInstanceToken
-		);
-		LogCompactScriptEditorCrashTail(
-			"TextChangedValidation",
-			"CallbackExit",
-			operationToken: validationGeneration,
-			hostInstanceToken: scheduledHostInstanceToken
-		);
 	}
 
 	private void LogStaleDeferredAutocompleteOperation(

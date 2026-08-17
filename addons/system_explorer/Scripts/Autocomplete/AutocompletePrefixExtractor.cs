@@ -13,6 +13,7 @@ internal sealed class AutocompletePrefixExtractor
 			out _,
 			out _,
 			out _,
+			out _,
 			out _
 		);
 	}
@@ -30,6 +31,7 @@ internal sealed class AutocompletePrefixExtractor
 			out caretLine,
 			out caretColumn,
 			out _,
+			out _,
 			out _
 		);
 	}
@@ -43,11 +45,33 @@ internal sealed class AutocompletePrefixExtractor
 		out int prefixStartColumn
 	)
 	{
+		return TryExtract(
+			codeEdit,
+			out prefix,
+			out caretLine,
+			out caretColumn,
+			out kind,
+			out prefixStartColumn,
+			out _
+		);
+	}
+
+	internal bool TryExtract(
+		CodeEdit codeEdit,
+		out string prefix,
+		out int caretLine,
+		out int caretColumn,
+		out AutocompleteRequestKind kind,
+		out int prefixStartColumn,
+		out string lineText
+	)
+	{
 		prefix = "";
 		caretLine = -1;
 		caretColumn = -1;
 		kind = AutocompleteRequestKind.Identifier;
 		prefixStartColumn = -1;
+		lineText = "";
 
 		if (!IsValidGodotObject(codeEdit) || codeEdit.HasSelection(0))
 			return false;
@@ -85,6 +109,7 @@ internal sealed class AutocompletePrefixExtractor
 			caretColumn = columnIndex;
 			prefixStartColumn = columnIndex;
 			kind = ClassifyRequestKind(line, columnIndex);
+			lineText = line;
 			return true;
 		}
 
@@ -93,6 +118,7 @@ internal sealed class AutocompletePrefixExtractor
 		caretColumn = columnIndex;
 		prefixStartColumn = prefixStart;
 		kind = ClassifyRequestKind(line, prefixStart);
+		lineText = line;
 		return true;
 	}
 

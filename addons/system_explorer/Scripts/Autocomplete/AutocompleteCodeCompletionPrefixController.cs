@@ -24,9 +24,12 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 
 			try
 			{
-				return HasMemberAccessPrefix(
-					CopyPrefixes(codeEdit.CodeCompletionPrefixes)
-				);
+				string[] currentPrefixes = CopyPrefixes(codeEdit.CodeCompletionPrefixes);
+				if (PrefixesEqual(currentPrefixes, activeSnapshot.AppliedPrefixes))
+					return true;
+
+				ForgetOwnedState(codeEdit);
+				return false;
 			}
 			catch
 			{
@@ -43,28 +46,29 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 		{
 			return false;
 		}
+
 		if (HasMemberAccessPrefix(previousPrefixes))
 			return true;
 
-		var snapshot = new PrefixSnapshot(codeEdit, previousPrefixes);
+		string[] intendedAppliedPrefixes = CreatePrefixesWithMemberAccessArray(previousPrefixes);
+		var snapshot = new PrefixSnapshot(
+			codeEdit,
+			previousPrefixes,
+			intendedAppliedPrefixes
+		);
 		_snapshot = snapshot;
 
 		try
 		{
-			codeEdit.CodeCompletionPrefixes = CreatePrefixesWithMemberAccess(
-				previousPrefixes
-			);
-
-			if (
-				!HasMemberAccessPrefix(
-					CopyPrefixes(codeEdit.CodeCompletionPrefixes)
-				)
-			)
+			codeEdit.CodeCompletionPrefixes = CreatePrefixes(intendedAppliedPrefixes);
+			string[] verifiedAppliedPrefixes = CopyPrefixes(codeEdit.CodeCompletionPrefixes);
+			if (!PrefixesEqual(verifiedAppliedPrefixes, intendedAppliedPrefixes))
 			{
 				Restore(codeEdit);
 				return false;
 			}
 
+			snapshot.SetAppliedPrefixes(verifiedAppliedPrefixes);
 			return true;
 		}
 		catch
@@ -85,12 +89,14 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 		CodeEdit codeEdit,
 		out ulong codeEditInstanceId,
 		out bool prefixOwned,
-		out string[] previousPrefixes
+		out string[] previousPrefixes,
+		out string[] appliedPrefixes
 	)
 	{
 		codeEditInstanceId = 0;
 		prefixOwned = false;
 		previousPrefixes = Array.Empty<string>();
+		appliedPrefixes = Array.Empty<string>();
 
 		if (codeEdit == null)
 			return false;
@@ -105,58 +111,89 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 		codeEditInstanceId = snapshot.CodeEditInstanceId;
 		prefixOwned = true;
 		previousPrefixes = CopyPrefixes(snapshot.PreviousPrefixes);
+		appliedPrefixes = CopyPrefixes(snapshot.AppliedPrefixes);
 		return true;
 	}
 
-	internal bool TryRestoreOwnedPrefixesFromNativeBridge(
+	internal AutocompletePresentationRestoreResult TryRestoreOwnedPrefixesFromNativeBridge(
 		CodeEdit codeEdit,
+		IReadOnlyList<string> expectedAppliedPrefixes,
 		IReadOnlyList<string> previousPrefixes
 	)
 	{
 		if (
 			!IsValidGodotObject(codeEdit)
+			|| expectedAppliedPrefixes == null
 			|| previousPrefixes == null
-			|| HasMemberAccessPrefix(previousPrefixes)
 		)
 		{
-			return false;
+			return AutocompletePresentationRestoreResult.Failure();
 		}
 
 		try
 		{
+			string[] currentPrefixes = CopyPrefixes(codeEdit.CodeCompletionPrefixes);
+			if (!PrefixesEqual(currentPrefixes, expectedAppliedPrefixes))
+				return AutocompletePresentationRestoreResult.Success(currentStateChanged: true);
+
 			codeEdit.CodeCompletionPrefixes = CreatePrefixes(previousPrefixes);
-			return true;
+			return AutocompletePresentationRestoreResult.Success();
 		}
 		catch
 		{
-			return false;
+			return AutocompletePresentationRestoreResult.Failure();
 		}
 	}
 
-	internal void Restore(CodeEdit codeEdit)
+	internal AutocompletePresentationRestoreResult Restore(CodeEdit codeEdit)
 	{
 		PrefixSnapshot snapshot = _snapshot;
 		if (snapshot == null)
-			return;
+			return AutocompletePresentationRestoreResult.Success();
 
-		if (!IsValidGodotObject(codeEdit))
-		{
-			if (ReferenceEquals(snapshot.CodeEdit, codeEdit))
-				_snapshot = null;
-			return;
-		}
-
-		if (snapshot.CodeEditInstanceId != codeEdit.GetInstanceId())
-			return;
+		if (!ReferenceEquals(snapshot.CodeEdit, codeEdit))
+			return AutocompletePresentationRestoreResult.Success();
 
 		try
 		{
+			if (!IsValidGodotObject(codeEdit))
+				return AutocompletePresentationRestoreResult.Failure();
+			if (snapshot.CodeEditInstanceId != codeEdit.GetInstanceId())
+				return AutocompletePresentationRestoreResult.Success(currentStateChanged: true);
+
+			string[] currentPrefixes = CopyPrefixes(codeEdit.CodeCompletionPrefixes);
+			if (!PrefixesEqual(currentPrefixes, snapshot.AppliedPrefixes))
+				return AutocompletePresentationRestoreResult.Success(currentStateChanged: true);
+
 			codeEdit.CodeCompletionPrefixes = CreatePrefixes(snapshot.PreviousPrefixes);
+			return AutocompletePresentationRestoreResult.Success();
+		}
+		catch
+		{
+			return AutocompletePresentationRestoreResult.Failure();
 		}
 		finally
 		{
 			if (ReferenceEquals(_snapshot, snapshot))
 				_snapshot = null;
+		}
+	}
+
+	internal void ForgetOwnedState(CodeEdit codeEdit)
+	{
+		PrefixSnapshot snapshot = _snapshot;
+		if (snapshot == null)
+			return;
+
+		if (
+			ReferenceEquals(snapshot.CodeEdit, codeEdit)
+			|| (
+				IsValidGodotObject(codeEdit)
+				&& snapshot.CodeEditInstanceId == codeEdit.GetInstanceId()
+			)
+		)
+		{
+			_snapshot = null;
 		}
 	}
 
@@ -167,17 +204,19 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 			return;
 
 		Restore(snapshot.CodeEdit);
-
-		if (ReferenceEquals(_snapshot, snapshot) && !IsValidGodotObject(snapshot.CodeEdit))
+		if (ReferenceEquals(_snapshot, snapshot))
 			_snapshot = null;
 	}
 
-	private static Godot.Collections.Array<string> CreatePrefixesWithMemberAccess(
+	private static string[] CreatePrefixesWithMemberAccessArray(
 		IReadOnlyList<string> previousPrefixes
 	)
 	{
-		var prefixes = CreatePrefixes(previousPrefixes);
-		prefixes.Add(MemberAccessPrefix);
+		int previousCount = previousPrefixes?.Count ?? 0;
+		var prefixes = new string[previousCount + 1];
+		for (int index = 0; index < previousCount; index++)
+			prefixes[index] = previousPrefixes[index];
+		prefixes[previousCount] = MemberAccessPrefix;
 		return prefixes;
 	}
 
@@ -242,6 +281,25 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 		return false;
 	}
 
+	private static bool PrefixesEqual(
+		IReadOnlyList<string> left,
+		IReadOnlyList<string> right
+	)
+	{
+		if (ReferenceEquals(left, right))
+			return true;
+		if (left == null || right == null || left.Count != right.Count)
+			return false;
+
+		for (int index = 0; index < left.Count; index++)
+		{
+			if (!string.Equals(left[index], right[index], StringComparison.Ordinal))
+				return false;
+		}
+
+		return true;
+	}
+
 	private static bool IsValidGodotObject(GodotObject source)
 	{
 		return source != null && GodotObject.IsInstanceValid(source);
@@ -249,16 +307,27 @@ internal sealed class AutocompleteCodeCompletionPrefixController
 
 	private sealed class PrefixSnapshot
 	{
-		internal PrefixSnapshot(CodeEdit codeEdit, string[] previousPrefixes)
+		internal PrefixSnapshot(
+			CodeEdit codeEdit,
+			string[] previousPrefixes,
+			string[] appliedPrefixes
+		)
 		{
 			CodeEdit = codeEdit ?? throw new ArgumentNullException(nameof(codeEdit));
 			CodeEditInstanceId = codeEdit.GetInstanceId();
 			PreviousPrefixes = previousPrefixes ?? Array.Empty<string>();
+			AppliedPrefixes = appliedPrefixes ?? Array.Empty<string>();
 		}
 
 		internal CodeEdit CodeEdit { get; }
 		internal ulong CodeEditInstanceId { get; }
 		internal IReadOnlyList<string> PreviousPrefixes { get; }
+		internal IReadOnlyList<string> AppliedPrefixes { get; private set; }
+
+		internal void SetAppliedPrefixes(string[] appliedPrefixes)
+		{
+			AppliedPrefixes = appliedPrefixes ?? Array.Empty<string>();
+		}
 	}
 }
 #endif

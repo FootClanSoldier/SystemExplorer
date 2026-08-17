@@ -15,6 +15,16 @@ namespace SystemExplorer.Autocomplete;
 
 internal sealed class AutocompletePluginHost
 {
+	private const int MaxTrackedCompletionProvenanceCodeEdits = 256;
+
+	private enum CompletionRequestProvenance
+	{
+		SystemExplorerDormantRecovery,
+		SystemExplorerForcedMemberFollowUp,
+		SystemExplorerConfirmationNativeFollowUp,
+		UnattributedNativeOrExternal,
+	}
+
 	private readonly AutocompleteIndexLifetime _indexLifetime;
 	private readonly CSharpProjectIndex _projectIndex;
 	private readonly CSharpProjectIndexPersistentCacheStore _persistentCacheStore;
@@ -34,6 +44,7 @@ internal sealed class AutocompletePluginHost
 	private readonly AutocompleteCodeEditThemeController _themeController;
 	private readonly AutocompletePrefixExtractor _prefixExtractor;
 	private readonly AutocompleteCodeEditPresenter _presenter;
+	private readonly AutocompleteCodeEditMutationCoordinator _codeEditMutationCoordinator;
 	private readonly AutocompleteCompletionMatchPolicy _matchPolicy;
 	private readonly AutocompleteMemberCompletionFollowUp _memberCompletionFollowUp;
 	private readonly ProjectTypeCompletionSource _projectTypeCompletionSource;
@@ -45,16 +56,29 @@ internal sealed class AutocompletePluginHost
 	private readonly bool _semanticMemberPipelineEnabled;
 	private readonly bool _cancelNativeCompletionOnRebind;
 	private readonly bool _activeDocumentSyntaxOverlayEnabled;
-	private readonly bool _cancelNativeCompletionOnTextChangedValidation;
 	private readonly bool _automaticUsingInsertTextExecutionEnabled;
 	private readonly bool _automaticUsingDeferInsertTextAfterGuiInputEnabled;
 	private readonly bool _automaticUsingComplexOperationWrapperEnabled;
 	private readonly Action<string, string> _debugLog;
 	private readonly Func<bool> _debugEnabled;
 	private readonly Func<long> _hostInstanceTokenProvider;
+	private readonly Func<long> _currentReloadReadyEpochProvider;
+	private readonly Func<bool> _reloadStabilizationReadyProvider;
 	private readonly ScriptEditorLifecycleCoordinator _scriptEditorLifecycleCoordinator;
 	private readonly Action<string> _requestScriptEditorLifecycleRebind;
+	private readonly HashSet<ulong> _trackedUnattributedCompletionProvenanceCodeEditIds = new();
+	private readonly HashSet<ulong> _loggedUnattributedWithoutTextChangedCodeEditIds = new();
+	private readonly Dictionary<ulong, long> _lastLoggedUnattributedTextChangedSequenceByCodeEditId = new();
 	private bool _isIssuingForcedMemberCompletionRequest;
+	private bool _isHandlingSystemExplorerCompletionConfirmation;
+	private long _completionRequestObservationSequence;
+	private long _textChangedObservationSequence;
+	private long _lastTextChangedBindingEpoch;
+	private ulong _lastTextChangedCodeEditInstanceId;
+	private bool _completionPipelineFaulted;
+	private bool _completionPipelineSuppressionLogged;
+
+	internal bool IsCompletionPipelineFaulted => _completionPipelineFaulted;
 
 	internal AutocompletePluginHost(
 		string managedAssemblyGeneration,
@@ -72,12 +96,13 @@ internal sealed class AutocompletePluginHost
 		Action<string, string> persistentWorkerDiagnosticLog,
 		Func<bool> debugEnabled,
 		Func<long> hostInstanceTokenProvider,
+		Func<long> currentReloadReadyEpochProvider,
+		Func<bool> reloadStabilizationReadyProvider,
 		ScriptEditorLifecycleCoordinator scriptEditorLifecycleCoordinator,
 		Action<string> requestScriptEditorLifecycleRebind,
 		bool semanticMemberPipelineEnabled,
 		bool cancelNativeCompletionOnRebind,
 		bool activeDocumentSyntaxOverlayEnabled,
-		bool cancelNativeCompletionOnTextChangedValidation,
 		bool automaticUsingInsertTextExecutionEnabled,
 		bool automaticUsingDeferInsertTextAfterGuiInputEnabled,
 		bool automaticUsingComplexOperationWrapperEnabled
@@ -92,8 +117,6 @@ internal sealed class AutocompletePluginHost
 		_semanticMemberPipelineEnabled = semanticMemberPipelineEnabled;
 		_cancelNativeCompletionOnRebind = cancelNativeCompletionOnRebind;
 		_activeDocumentSyntaxOverlayEnabled = activeDocumentSyntaxOverlayEnabled;
-		_cancelNativeCompletionOnTextChangedValidation =
-			cancelNativeCompletionOnTextChangedValidation;
 		_automaticUsingInsertTextExecutionEnabled =
 			automaticUsingInsertTextExecutionEnabled;
 		_automaticUsingDeferInsertTextAfterGuiInputEnabled =
@@ -105,6 +128,12 @@ internal sealed class AutocompletePluginHost
 		_hostInstanceTokenProvider =
 			hostInstanceTokenProvider
 			?? throw new ArgumentNullException(nameof(hostInstanceTokenProvider));
+		_currentReloadReadyEpochProvider =
+			currentReloadReadyEpochProvider
+			?? throw new ArgumentNullException(nameof(currentReloadReadyEpochProvider));
+		_reloadStabilizationReadyProvider =
+			reloadStabilizationReadyProvider
+			?? throw new ArgumentNullException(nameof(reloadStabilizationReadyProvider));
 		_scriptEditorLifecycleCoordinator =
 			scriptEditorLifecycleCoordinator
 			?? throw new ArgumentNullException(nameof(scriptEditorLifecycleCoordinator));
@@ -114,7 +143,7 @@ internal sealed class AutocompletePluginHost
 		Trace("C# autocomplete host constructor begin");
 		_prefixExtractor = new AutocompletePrefixExtractor();
 		_metadataCodec = new AutocompleteCompletionOptionMetadataCodec();
-		_presenter = new AutocompleteCodeEditPresenter(_metadataCodec);
+		_presenter = new AutocompleteCodeEditPresenter(_metadataCodec, _debugLog);
 		var completionContextBuilder = new CSharpDocumentCompletionContextBuilder();
 		var completionContextResolver = new CSharpCompletionContextResolver();
 		_projectTypeConfirmationService = new AutocompleteProjectTypeConfirmationService(
@@ -127,8 +156,20 @@ internal sealed class AutocompletePluginHost
 			_automaticUsingDeferInsertTextAfterGuiInputEnabled,
 			_automaticUsingComplexOperationWrapperEnabled
 		);
+		_codeEditMutationCoordinator = new AutocompleteCodeEditMutationCoordinator(
+			_managedAssemblyGeneration,
+			_hostInstanceTokenProvider,
+			_currentReloadReadyEpochProvider,
+			_reloadStabilizationReadyProvider,
+			_scriptEditorLifecycleCoordinator,
+			_presenter,
+			_projectTypeConfirmationService,
+			IsCompletionBindingCurrent,
+			_debugLog
+		);
 		_confirmationBridge = new AutocompleteCompletionConfirmationBridge(
 			_metadataCodec,
+			_codeEditMutationCoordinator,
 			_projectTypeConfirmationService,
 			_debugLog
 		);
@@ -195,24 +236,24 @@ internal sealed class AutocompletePluginHost
 			() => _activeDocumentIndex.CurrentSnapshot
 		);
 
-		IAutocompleteCompletionSource[] completionSources = _semanticMemberPipelineEnabled
-			? new IAutocompleteCompletionSource[]
-			{
-				_projectTypeCompletionSource,
-				_projectMemberCompletionSource,
-			}
-			: new IAutocompleteCompletionSource[]
-			{
-				_projectTypeCompletionSource,
-			};
+		AutocompleteCompletionSourceRegistration[] completionSources =
+			_semanticMemberPipelineEnabled
+				? new AutocompleteCompletionSourceRegistration[]
+				{
+					new("ProjectType", _projectTypeCompletionSource),
+					new("ProjectMember", _projectMemberCompletionSource),
+				}
+				: new AutocompleteCompletionSourceRegistration[]
+				{
+					new("ProjectType", _projectTypeCompletionSource),
+				};
 
 		_completionCoordinator = new AutocompleteCompletionCoordinator(
 			_prefixExtractor,
-			_presenter,
+			_codeEditMutationCoordinator,
 			_matchPolicy,
 			completionSources,
-			_debugLog,
-			_cancelNativeCompletionOnTextChangedValidation
+			_debugLog
 		);
 
 		if (!_semanticMemberPipelineEnabled)
@@ -231,13 +272,6 @@ internal sealed class AutocompletePluginHost
 			);
 		}
 
-		if (!_cancelNativeCompletionOnTextChangedValidation)
-		{
-			Trace(
-				"C# autocomplete TextChanged validation native completion cancellation isolated",
-				"Enabled='False', Mode='DiagnosticIsolation', Scope='AutocompleteCompletionCoordinator.ValidateAfterTextChanged', ManagedSessionInvalidationRetained='True', DormantSessionStateRetained='True', RequestTimeCoordinatorCancellationRetained='True', ShutdownCancellationRetained='True'"
-			);
-		}
 
 		Trace(
 			"C# autocomplete automatic using execution diagnostic mode",
@@ -262,6 +296,9 @@ internal sealed class AutocompletePluginHost
 			_managedAssemblyGeneration,
 			_cancelNativeCompletionOnRebind,
 			_scriptEditorLifecycleCoordinator,
+			_codeEditMutationCoordinator,
+			_currentReloadReadyEpochProvider,
+			_reloadStabilizationReadyProvider,
 			scriptEditorProvider,
 			connectPluginSignal,
 			disconnectPluginSignal,
@@ -288,15 +325,8 @@ internal sealed class AutocompletePluginHost
 		Trace("C# autocomplete host constructor completed");
 	}
 
-	internal bool EnsureLifecycleCurrent(
-		Action<string, string> diagnosticPhase = null
-	)
+	internal bool EnsureLifecycleCurrent()
 	{
-		Trace("C# autocomplete host EnsureLifecycleCurrent begin");
-		InvokeLifecycleEnsureDiagnosticPhase(
-			diagnosticPhase,
-			"EnsureLifecycleCurrent.EditorBinding.Begin"
-		);
 		bool editorBindingCurrent = _editorBinding.EnsureLifecycleCurrent(
 			out bool bindingResolutionRequired
 		);
@@ -310,21 +340,8 @@ internal sealed class AutocompletePluginHost
 			_requestScriptEditorLifecycleRebind("ScriptEditorIdentityChanged");
 		}
 
-		InvokeLifecycleEnsureDiagnosticPhase(
-			diagnosticPhase,
-			"EnsureLifecycleCurrent.ProjectIndexLifecycle.Begin",
-			$"EditorBindingCurrent='{editorBindingCurrent}', BindingResolutionRequired='{bindingResolutionRequired}'"
-		);
 		EnsureProjectIndexLifecycleCurrentBestEffort();
-		InvokeLifecycleEnsureDiagnosticPhase(
-			diagnosticPhase,
-			"EnsureLifecycleCurrent.FirstDrain.Begin"
-		);
 		DrainIndexBuildResults();
-		InvokeLifecycleEnsureDiagnosticPhase(
-			diagnosticPhase,
-			"EnsureLifecycleCurrent.PostFirstDrainFeatureGates.Begin"
-		);
 		EnsureSemanticProjectStateBestEffort();
 
 		if (
@@ -335,20 +352,7 @@ internal sealed class AutocompletePluginHost
 			CaptureActiveDocumentIfNeededBestEffort("Ensure lifecycle current");
 		}
 
-		InvokeLifecycleEnsureDiagnosticPhase(
-			diagnosticPhase,
-			"EnsureLifecycleCurrent.SecondDrain.Begin"
-		);
 		DrainIndexBuildResults();
-		InvokeLifecycleEnsureDiagnosticPhase(
-			diagnosticPhase,
-			"EnsureLifecycleCurrent.Returned",
-			$"EditorBindingCurrent='{editorBindingCurrent}', BindingResolutionRequired='{bindingResolutionRequired}'"
-		);
-		Trace(
-			"C# autocomplete host EnsureLifecycleCurrent completed",
-			$"EditorBindingCurrent='{editorBindingCurrent}', LifecycleState='{_scriptEditorLifecycleCoordinator.Snapshot.State}', ScriptTransitionId='{_scriptEditorLifecycleCoordinator.Snapshot.ScriptTransitionId}', BindingEpoch='{_scriptEditorLifecycleCoordinator.Snapshot.BindingEpoch}'"
-		);
 		return editorBindingCurrent;
 	}
 
@@ -389,8 +393,38 @@ internal sealed class AutocompletePluginHost
 		);
 	}
 
+	internal AutocompleteEditorBindingCandidateObservationKind TryObserveCodeEditBindingCandidate(
+		long scriptTransitionId,
+		long hostInstanceToken,
+		out AutocompleteEditorBindingCandidate candidate
+	)
+	{
+		return _editorBinding.TryObserveCodeEditBindingCandidate(
+			scriptTransitionId,
+			hostInstanceToken,
+			out candidate
+		);
+	}
+
+	private void ResetManagedStateForScriptChange()
+	{
+		DrainIndexBuildResults();
+		_memberCompletionFollowUp.Clear();
+		_completionCoordinator.InvalidatePendingValidations();
+		_semanticMemberCoordinator.ResetActiveDocument();
+		_activeDocumentIndexLifecycle.ResetForScriptChange();
+	}
+
+	internal void HandleScriptChangedWithoutCodeEditBinding()
+	{
+		ResetManagedStateForScriptChange();
+		DrainIndexBuildResults();
+	}
+
 	internal bool HandleScriptChanged(
 		long scriptTransitionId,
+		long reloadReadyEpoch,
+		AutocompleteEditorBindingCandidate? requiredActivationCandidate,
 		Action<string, ScriptEditor, CodeEdit> diagnosticPhase = null,
 		Action<string, string> nativeBoundaryDiagnosticPhase = null
 	)
@@ -399,11 +433,7 @@ internal sealed class AutocompletePluginHost
 			diagnosticPhase,
 			"HandleScriptChanged.Begin"
 		);
-		DrainIndexBuildResults();
-		_memberCompletionFollowUp.Clear();
-		_completionCoordinator.InvalidatePendingValidations();
-		_semanticMemberCoordinator.ResetActiveDocument();
-		_activeDocumentIndexLifecycle.ResetForScriptChange();
+		ResetManagedStateForScriptChange();
 
 		InvokeScriptChangeDiagnosticPhase(
 			diagnosticPhase,
@@ -412,10 +442,12 @@ internal sealed class AutocompletePluginHost
 		bool bindingResolved = _editorBinding.ResolveCodeEditBinding(
 			scriptTransitionId,
 			_hostInstanceTokenProvider(),
+			reloadReadyEpoch,
+			requiredActivationCandidate,
 			diagnosticPhase,
 			nativeBoundaryDiagnosticPhase
 		);
-		if (bindingResolved)
+		if (bindingResolved && !requiredActivationCandidate.HasValue)
 		{
 			CaptureActiveDocumentIfNeededBestEffort(
 				"Active script changed",
@@ -433,32 +465,89 @@ internal sealed class AutocompletePluginHost
 
 	internal void HandleCompletionRequested()
 	{
-		DrainIndexBuildResults();
-
-		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath))
+		if (_completionPipelineFaulted)
 		{
-			_requestScriptEditorLifecycleRebind("HandleCompletionRequested");
+			LogCompletionPipelineSuppressionOnce();
 			return;
 		}
 
-		EnsureProjectIndexLifecycleCurrentBestEffort();
-		DrainIndexBuildResults();
-		EnsureSemanticProjectStateBestEffort();
-		CaptureActiveDocumentIfNeededBestEffort(
-			codeEdit,
-			scriptPath,
-			"Code completion requested"
-		);
-		DrainIndexBuildResults();
+		string stage = "CaptureProvenance";
+		long requestObservationSequence = 0;
+		EditorBindingLease? capturedBindingLease = null;
+		string capturedScriptPath = "";
 
-		bool published = _completionCoordinator.HandleCompletionRequested(
-			codeEdit,
-			scriptPath
-		);
+		try
+		{
+			CompletionRequestProvenance requestProvenance =
+				CaptureCompletionRequestProvenance();
+			requestObservationSequence = AdvancePositiveSequence(
+				ref _completionRequestObservationSequence
+			);
 
-		if (published)
-			_memberCompletionFollowUp.Clear();
-		DrainIndexBuildResults();
+			stage = "ResolveBinding";
+			DrainIndexBuildResults();
+
+			if (
+				!_editorBinding.TryGetActiveCodeEdit(
+					out CodeEdit codeEdit,
+					out string scriptPath,
+					out EditorBindingLease requestBindingLease
+				)
+			)
+			{
+				_requestScriptEditorLifecycleRebind("HandleCompletionRequested");
+				return;
+			}
+
+			capturedBindingLease = requestBindingLease;
+			capturedScriptPath = scriptPath ?? "";
+
+			_codeEditMutationCoordinator.RetireOwnedPublication(
+				"CodeCompletionRequested"
+			);
+
+			LogCompletionRequestedProvenanceIfNeeded(
+				requestProvenance,
+				requestObservationSequence,
+				requestBindingLease,
+				scriptPath
+			);
+
+			stage = "PrepareProjectState";
+			EnsureProjectIndexLifecycleCurrentBestEffort();
+			DrainIndexBuildResults();
+			EnsureSemanticProjectStateBestEffort();
+			CaptureActiveDocumentIfNeededBestEffort(
+				codeEdit,
+				scriptPath,
+				"Code completion requested"
+			);
+			DrainIndexBuildResults();
+
+			stage = "CompletionCoordinator";
+			bool published = _completionCoordinator.HandleCompletionRequested(
+				codeEdit,
+				scriptPath,
+				requestBindingLease,
+				requestObservationSequence
+			);
+
+			if (published)
+				_memberCompletionFollowUp.Clear();
+
+			stage = "PostCompletionDrain";
+			DrainIndexBuildResults();
+		}
+		catch (Exception exception)
+		{
+			FaultCompletionPipeline(
+				stage,
+				requestObservationSequence,
+				capturedBindingLease,
+				capturedScriptPath,
+				exception
+			);
+		}
 	}
 
 	internal AutocompleteDeferredUsingInsertionRequest HandleCodeEditGuiInput(
@@ -467,11 +556,14 @@ internal sealed class AutocompletePluginHost
 	{
 		if (inputEvent == null)
 			return null;
+		if (_completionPipelineFaulted)
+			return null;
 
 		if (
 			!_editorBinding.TryGetActiveCodeEdit(
 				out CodeEdit codeEdit,
-				out string scriptPath
+				out string scriptPath,
+				out EditorBindingLease bindingLease
 			)
 		)
 		{
@@ -479,11 +571,24 @@ internal sealed class AutocompletePluginHost
 			return null;
 		}
 
-		_confirmationBridge.TryHandleGuiInput(
-			codeEdit,
-			inputEvent,
-			out AutocompleteDeferredUsingInsertionCandidate candidate
-		);
+		AutocompleteDeferredUsingInsertionCandidate candidate;
+		bool previousConfirmationScope = _isHandlingSystemExplorerCompletionConfirmation;
+		_isHandlingSystemExplorerCompletionConfirmation = true;
+
+		try
+		{
+			_confirmationBridge.TryHandleGuiInput(
+				codeEdit,
+				scriptPath,
+				bindingLease,
+				inputEvent,
+				out candidate
+			);
+		}
+		finally
+		{
+			_isHandlingSystemExplorerCompletionConfirmation = previousConfirmationScope;
+		}
 
 		if (candidate == null || candidate.Plan == null)
 			return null;
@@ -493,8 +598,8 @@ internal sealed class AutocompletePluginHost
 			return new AutocompleteDeferredUsingInsertionRequest(
 				candidate.CompletionName ?? "",
 				candidate.NamespaceName ?? "",
-				ScriptPathUtility.Normalize(scriptPath),
-				codeEdit.GetInstanceId(),
+				candidate.OriginatingCompletionPublicationId,
+				candidate.BindingLease,
 				candidate.Plan
 			);
 		}
@@ -521,11 +626,18 @@ internal sealed class AutocompletePluginHost
 				"PluginUnavailable"
 			);
 		}
+		if (_completionPipelineFaulted)
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"CompletionPipelineFaulted"
+			);
+		}
 
 		if (
 			!_editorBinding.TryGetActiveCodeEdit(
 				out CodeEdit codeEdit,
-				out string scriptPath
+				out string scriptPath,
+				out EditorBindingLease currentBindingLease
 			)
 		)
 		{
@@ -548,45 +660,61 @@ internal sealed class AutocompletePluginHost
 		}
 
 		string normalizedScriptPath = ScriptPathUtility.Normalize(scriptPath);
+		string normalizedRequestScriptPath = ScriptPathUtility.Normalize(
+			request.BindingLease.ScriptResourcePath
+		);
+		if (!currentBindingLease.Equals(request.BindingLease))
+		{
+			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
+				"BindingLeaseChanged",
+				currentCodeEditNativeInstanceId,
+				normalizedScriptPath,
+				currentBindingLease
+			);
+		}
 		if (currentCodeEditNativeInstanceId != request.CodeEditNativeInstanceId)
 		{
 			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
 				"CodeEditChanged",
 				currentCodeEditNativeInstanceId,
-				normalizedScriptPath
+				normalizedScriptPath,
+				currentBindingLease
 			);
 		}
-
 		if (
-			!string.Equals(
+			string.IsNullOrWhiteSpace(normalizedScriptPath)
+			|| !string.Equals(
 				normalizedScriptPath,
-				request.ScriptPath,
+				normalizedRequestScriptPath,
 				StringComparison.OrdinalIgnoreCase
 			)
 		)
 		{
 			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
-				"ScriptChanged",
+				"BindingLeaseChanged",
 				currentCodeEditNativeInstanceId,
-				normalizedScriptPath
+				normalizedScriptPath,
+				currentBindingLease
 			);
 		}
 
-		return _projectTypeConfirmationService.ApplyDeferredUsingInsertion(
+		return _codeEditMutationCoordinator.TryExecuteDeferredUsingInsertion(
 			codeEdit,
+			normalizedScriptPath,
+			currentBindingLease,
 			request,
-			new AutocompleteDeferredUsingInsertionExecutionContext(
-				currentCodeEditNativeInstanceId,
-				normalizedScriptPath,
-				hostInstanceToken,
-				managedAssemblyGeneration ?? "",
-				guiInputCallbackDepth
-			)
+			hostInstanceToken,
+			managedAssemblyGeneration ?? "",
+			guiInputCallbackDepth
 		);
 	}
 
 	internal long BeginTextChangedValidation()
 	{
+		if (_completionPipelineFaulted)
+			return _completionCoordinator.BeginTextChangedValidation();
+
+		ObserveTextChangedForCurrentBinding();
 		_memberCompletionFollowUp.Clear();
 		_activeDocumentIndexLifecycle.MarkDirty();
 		return _completionCoordinator.BeginTextChangedValidation();
@@ -599,6 +727,9 @@ internal sealed class AutocompletePluginHost
 
 	internal void ValidateAfterTextChanged(long generation)
 	{
+		if (_completionPipelineFaulted)
+			return;
+
 		DrainIndexBuildResults();
 
 		if (!_completionCoordinator.IsValidationCurrent(generation))
@@ -607,7 +738,8 @@ internal sealed class AutocompletePluginHost
 		if (
 			!_editorBinding.TryGetActiveCodeEdit(
 				out CodeEdit codeEdit,
-				out string scriptPath
+				out string scriptPath,
+				out EditorBindingLease bindingLease
 			)
 		)
 		{
@@ -630,6 +762,7 @@ internal sealed class AutocompletePluginHost
 		_completionCoordinator.ValidateAfterTextChanged(
 			codeEdit,
 			scriptPath,
+			bindingLease,
 			generation
 		);
 		DrainIndexBuildResults();
@@ -664,7 +797,7 @@ internal sealed class AutocompletePluginHost
 		_semanticMemberCoordinator.Shutdown();
 		_cacheCoordinator.Shutdown();
 		_indexLifetime.Shutdown();
-		_completionCoordinator.InvalidatePendingValidations();
+		_completionCoordinator.InvalidatePendingValidations("Shutdown");
 		_editorBinding.Shutdown();
 		_themeController.Reset();
 		Trace("C# autocomplete host Shutdown completed");
@@ -672,7 +805,7 @@ internal sealed class AutocompletePluginHost
 
 	internal bool HasPendingCompletionProcessWork()
 	{
-		return _memberCompletionFollowUp.HasPendingWork;
+		return !_completionPipelineFaulted && _memberCompletionFollowUp.HasPendingWork;
 	}
 
 	internal void ClearPendingCompletionProcessWork()
@@ -682,6 +815,12 @@ internal sealed class AutocompletePluginHost
 
 	internal void ProcessPendingCompletionWork()
 	{
+		if (_completionPipelineFaulted)
+		{
+			_memberCompletionFollowUp.Clear();
+			return;
+		}
+
 		if (_isIssuingForcedMemberCompletionRequest)
 			return;
 
@@ -699,7 +838,8 @@ internal sealed class AutocompletePluginHost
 		if (
 			!_editorBinding.TryGetActiveCodeEdit(
 				out CodeEdit codeEdit,
-				out string scriptPath
+				out string scriptPath,
+				out EditorBindingLease bindingLease
 			)
 		)
 		{
@@ -806,7 +946,13 @@ internal sealed class AutocompletePluginHost
 
 		try
 		{
-			codeEdit.RequestCodeCompletion(true);
+			_codeEditMutationCoordinator.TryRequestCodeCompletion(
+				codeEdit,
+				scriptPath,
+				bindingLease,
+				force: true,
+				retirementReason: "ForcedMemberFollowUpRequest"
+			);
 		}
 		catch (Exception exception)
 		{
@@ -922,6 +1068,321 @@ internal sealed class AutocompletePluginHost
 		}
 		catch
 		{
+		}
+	}
+
+	private CompletionRequestProvenance CaptureCompletionRequestProvenance()
+	{
+		if (_completionCoordinator.IsIssuingDormantRecoveryRequest)
+			return CompletionRequestProvenance.SystemExplorerDormantRecovery;
+
+		if (_isIssuingForcedMemberCompletionRequest)
+			return CompletionRequestProvenance.SystemExplorerForcedMemberFollowUp;
+
+		if (_isHandlingSystemExplorerCompletionConfirmation)
+			return CompletionRequestProvenance.SystemExplorerConfirmationNativeFollowUp;
+
+		return CompletionRequestProvenance.UnattributedNativeOrExternal;
+	}
+
+	private void ObserveTextChangedForCurrentBinding()
+	{
+		ScriptEditorLifecycleSnapshot snapshot = _scriptEditorLifecycleCoordinator.Snapshot;
+		if (
+			snapshot.State != ScriptEditorLifecycleState.Stable
+			|| snapshot.BindingEpoch <= 0
+			|| snapshot.CodeEditInstanceId == 0
+		)
+		{
+			return;
+		}
+
+		_lastTextChangedBindingEpoch = snapshot.BindingEpoch;
+		_lastTextChangedCodeEditInstanceId = snapshot.CodeEditInstanceId;
+		AdvancePositiveSequence(ref _textChangedObservationSequence);
+	}
+
+	private void LogCompletionRequestedProvenanceIfNeeded(
+		CompletionRequestProvenance requestProvenance,
+		long requestObservationSequence,
+		EditorBindingLease requestBindingLease,
+		string resolvedScriptPath
+	)
+	{
+		string normalizedResolvedScriptPath = ScriptPathUtility.Normalize(resolvedScriptPath);
+		string normalizedBoundScriptPath = ScriptPathUtility.Normalize(
+			requestBindingLease.ScriptResourcePath
+		);
+
+		if (
+			requestBindingLease.BindingEpoch <= 0
+			|| requestBindingLease.CodeEditInstanceId == 0
+			|| !string.Equals(
+				normalizedBoundScriptPath,
+				normalizedResolvedScriptPath,
+				StringComparison.OrdinalIgnoreCase
+			)
+		)
+		{
+			return;
+		}
+
+		ulong codeEditInstanceId = requestBindingLease.CodeEditInstanceId;
+		bool reloadNeutralizedInCurrentGeneration =
+			_editorBinding.WasReloadNeutralizedInCurrentGeneration(codeEditInstanceId);
+		if (requestBindingLease.ReloadReadyEpoch <= 1 && !reloadNeutralizedInCurrentGeneration)
+			return;
+
+		bool textChangedObservedForCurrentBinding =
+			_textChangedObservationSequence > 0
+			&& _lastTextChangedBindingEpoch == requestBindingLease.BindingEpoch
+			&& _lastTextChangedCodeEditInstanceId == codeEditInstanceId;
+
+		if (
+			requestProvenance == CompletionRequestProvenance.UnattributedNativeOrExternal
+			&& !ShouldLogUnattributedCompletionRequest(
+				codeEditInstanceId,
+				textChangedObservedForCurrentBinding
+			)
+		)
+		{
+			return;
+		}
+
+		Trace(
+			"C# autocomplete CodeCompletionRequested provenance",
+			$"ManagedAssemblyGeneration='{_managedAssemblyGeneration}', "
+				+ $"HostInstanceToken='{requestBindingLease.HostInstanceToken}', "
+				+ $"RequestObservationSequence='{requestObservationSequence}', "
+				+ $"RequestProvenance='{requestProvenance}', "
+				+ $"ScriptTransitionId='{requestBindingLease.ScriptTransitionId}', "
+				+ $"BindingEpoch='{requestBindingLease.BindingEpoch}', "
+				+ $"ReloadReadyEpoch='{requestBindingLease.ReloadReadyEpoch}', "
+				+ $"CodeEditInstanceId='{codeEditInstanceId}', "
+				+ $"ScriptPath='{normalizedResolvedScriptPath}', "
+				+ $"ReloadNeutralizedInCurrentGeneration='{reloadNeutralizedInCurrentGeneration}', "
+				+ $"TextChangedObservedForCurrentBinding='{textChangedObservedForCurrentBinding}', "
+				+ $"TextChangedObservationSequence='{_textChangedObservationSequence}', "
+				+ $"LastTextChangedBindingEpoch='{_lastTextChangedBindingEpoch}', "
+				+ $"LastTextChangedCodeEditInstanceId='{_lastTextChangedCodeEditInstanceId}'"
+		);
+	}
+
+	private bool ShouldLogUnattributedCompletionRequest(
+		ulong codeEditInstanceId,
+		bool textChangedObservedForCurrentBinding
+	)
+	{
+		if (!_trackedUnattributedCompletionProvenanceCodeEditIds.Contains(codeEditInstanceId))
+		{
+			if (
+				_trackedUnattributedCompletionProvenanceCodeEditIds.Count
+				>= MaxTrackedCompletionProvenanceCodeEdits
+			)
+			{
+				return false;
+			}
+
+			_trackedUnattributedCompletionProvenanceCodeEditIds.Add(codeEditInstanceId);
+		}
+
+		if (!textChangedObservedForCurrentBinding)
+			return _loggedUnattributedWithoutTextChangedCodeEditIds.Add(codeEditInstanceId);
+
+		if (
+			_lastLoggedUnattributedTextChangedSequenceByCodeEditId.TryGetValue(
+				codeEditInstanceId,
+				out long lastLoggedSequence
+			)
+			&& lastLoggedSequence == _textChangedObservationSequence
+		)
+		{
+			return false;
+		}
+
+		_lastLoggedUnattributedTextChangedSequenceByCodeEditId[codeEditInstanceId] =
+			_textChangedObservationSequence;
+		return true;
+	}
+
+	private static long AdvancePositiveSequence(ref long sequence)
+	{
+		unchecked
+		{
+			sequence++;
+			if (sequence <= 0)
+				sequence = 1;
+		}
+
+		return sequence;
+	}
+
+	private bool IsCompletionBindingCurrent(
+		EditorBindingLease expectedLease,
+		CodeEdit expectedCodeEdit,
+		string expectedScriptPath
+	)
+	{
+		if (
+			!_editorBinding.TryGetActiveCodeEdit(
+				out CodeEdit currentCodeEdit,
+				out string currentScriptPath,
+				out EditorBindingLease currentBindingLease
+			)
+		)
+		{
+			return false;
+		}
+
+		if (!currentBindingLease.Equals(expectedLease))
+			return false;
+		if (expectedLease.CodeEditInstanceId == 0)
+			return false;
+
+		try
+		{
+			if (
+				currentCodeEdit.GetInstanceId() != expectedLease.CodeEditInstanceId
+				|| !IsValidGodotObject(expectedCodeEdit)
+				|| expectedCodeEdit.GetInstanceId() != expectedLease.CodeEditInstanceId
+			)
+			{
+				return false;
+			}
+		}
+		catch
+		{
+			return false;
+		}
+
+		string normalizedLeasePath = ScriptPathUtility.Normalize(
+			expectedLease.ScriptResourcePath
+		);
+		return string.Equals(
+			ScriptPathUtility.Normalize(currentScriptPath),
+			normalizedLeasePath,
+			StringComparison.OrdinalIgnoreCase
+		)
+			&& string.Equals(
+				ScriptPathUtility.Normalize(expectedScriptPath),
+				normalizedLeasePath,
+				StringComparison.OrdinalIgnoreCase
+			);
+	}
+
+	internal void MarkCompletionPipelineFaultedFromCallbackBoundary(Exception exception)
+	{
+		FaultCompletionPipeline(
+			"PluginSignalBoundary",
+			_completionRequestObservationSequence,
+			null,
+			"",
+			exception
+		);
+	}
+
+	private void FaultCompletionPipeline(
+		string stage,
+		long requestObservationSequence,
+		EditorBindingLease? bindingLease,
+		string scriptPath,
+		Exception exception
+	)
+	{
+		if (_completionPipelineFaulted)
+			return;
+
+		_completionPipelineFaulted = true;
+
+		try
+		{
+			_memberCompletionFollowUp.Clear();
+		}
+		catch
+		{
+		}
+
+		try
+		{
+			_completionCoordinator.InvalidatePendingValidations(
+				"CompletionPipelineFault"
+			);
+		}
+		catch
+		{
+			try
+			{
+				_codeEditMutationCoordinator.RetireOwnedPublication(
+					"CompletionPipelineFault"
+				);
+			}
+			catch
+			{
+			}
+		}
+
+		LogCompletionPipelineFault(
+			stage,
+			requestObservationSequence,
+			bindingLease,
+			scriptPath,
+			exception
+		);
+	}
+
+	private void LogCompletionPipelineFault(
+		string stage,
+		long requestObservationSequence,
+		EditorBindingLease? bindingLease,
+		string scriptPath,
+		Exception exception
+	)
+	{
+		try
+		{
+			EditorBindingLease capturedLease = bindingLease.GetValueOrDefault();
+			string capturedScriptPath = !string.IsNullOrWhiteSpace(scriptPath)
+				? scriptPath
+				: capturedLease.ScriptResourcePath ?? "";
+
+			_debugLog(
+				"C# autocomplete completion pipeline faulted",
+				$"HostInstanceToken='{_hostInstanceTokenProvider()}', "
+					+ $"ManagedAssemblyGeneration='{_managedAssemblyGeneration}', "
+					+ $"Stage='{stage ?? ""}', "
+					+ $"RequestObservationSequence='{requestObservationSequence}', "
+					+ $"ScriptTransitionId='{capturedLease.ScriptTransitionId}', "
+					+ $"BindingEpoch='{capturedLease.BindingEpoch}', "
+					+ $"ReloadReadyEpoch='{capturedLease.ReloadReadyEpoch}', "
+					+ $"CodeEditInstanceId='{capturedLease.CodeEditInstanceId}', "
+					+ $"ScriptPath='{capturedScriptPath}', "
+					+ $"ExceptionType='{exception?.GetType().FullName ?? ""}', "
+					+ $"Exception='{exception}', "
+					+ "Recovery='ColdHostRecreationRequired'"
+			);
+		}
+		catch
+		{
+			// Fault containment diagnostics must never escape the completion callback.
+		}
+	}
+
+	private void LogCompletionPipelineSuppressionOnce()
+	{
+		if (_completionPipelineSuppressionLogged)
+			return;
+
+		_completionPipelineSuppressionLogged = true;
+		try
+		{
+			_debugLog(
+				"C# autocomplete completion pipeline request suppressed",
+				$"HostInstanceToken='{_hostInstanceTokenProvider()}', ManagedAssemblyGeneration='{_managedAssemblyGeneration}', Reason='PipelineFaulted'"
+			);
+		}
+		catch
+		{
+			// Suppression diagnostics must never affect fail-closed behavior.
 		}
 	}
 
@@ -1197,21 +1658,6 @@ internal sealed class AutocompletePluginHost
 		);
 	}
 
-	private static void InvokeLifecycleEnsureDiagnosticPhase(
-		Action<string, string> diagnosticPhase,
-		string phase,
-		string details = ""
-	)
-	{
-		try
-		{
-			diagnosticPhase?.Invoke(phase ?? "", details ?? "");
-		}
-		catch
-		{
-			// Observation-only lifecycle diagnostics must never affect autocomplete control flow.
-		}
-	}
 
 	private static void InvokeProjectFilesystemDiagnosticPhase(
 		Action<string, string> diagnosticPhase,

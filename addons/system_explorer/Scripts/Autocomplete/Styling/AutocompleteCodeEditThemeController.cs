@@ -2,6 +2,7 @@
 using Godot;
 using System;
 using System.Collections.Generic;
+using SystemExplorer.Autocomplete;
 
 namespace SystemExplorer.Autocomplete.Styling;
 
@@ -60,10 +61,22 @@ internal sealed class AutocompleteCodeEditThemeController
 				&& activeSnapshot.CodeEditInstanceId == codeEdit.GetInstanceId()
 			)
 			{
-				return;
+				if (IsSnapshotStillExactlyApplied(codeEdit, activeSnapshot))
+					return;
+
+				ForgetOwnedState(codeEdit);
+				throw new InvalidOperationException(
+					"Autocomplete theme ownership changed before repeated Apply."
+				);
 			}
 
-			Restore(activeSnapshot.CodeEdit);
+			AutocompletePresentationRestoreResult previousRestore = Restore(activeSnapshot.CodeEdit);
+			if (!previousRestore.Succeeded)
+			{
+				throw new InvalidOperationException(
+					"Previous autocomplete theme ownership could not be restored safely."
+				);
+			}
 		}
 
 		StyleBoxFlat completionStyleboxOverride = CreateCompletionStyleOverride(codeEdit);
@@ -147,13 +160,15 @@ internal sealed class AutocompleteCodeEditThemeController
 		out ulong codeEditInstanceId,
 		out bool completionExistingColorOwned,
 		out bool hadPreviousOverride,
-		out Color previousColor
+		out Color previousColor,
+		out Color appliedColor
 	)
 	{
 		codeEditInstanceId = 0;
 		completionExistingColorOwned = false;
 		hadPreviousOverride = false;
 		previousColor = default;
+		appliedColor = default;
 
 		if (codeEdit == null)
 			return false;
@@ -180,22 +195,33 @@ internal sealed class AutocompleteCodeEditThemeController
 		completionExistingColorOwned = true;
 		hadPreviousOverride = colorSnapshot.HadOverride;
 		previousColor = colorSnapshot.PreviousValue;
+		appliedColor = colorSnapshot.AppliedValue;
 		return true;
 	}
 
-	internal bool TryRestoreCompletionExistingColorFromNativeBridge(
+	internal AutocompletePresentationRestoreResult TryRestoreCompletionExistingColorFromNativeBridge(
 		CodeEdit codeEdit,
 		bool hadPreviousOverride,
-		Color previousColor
+		Color previousColor,
+		Color expectedAppliedColor
 	)
 	{
 		if (!IsValidGodotObject(codeEdit))
-			return false;
+			return AutocompletePresentationRestoreResult.Failure();
 
 		try
 		{
-			codeEdit.BeginBulkThemeOverride();
+			bool hasCurrentOverride = codeEdit.HasThemeColorOverride(
+				CompletionExistingColorThemeKey
+			);
+			if (!hasCurrentOverride)
+				return AutocompletePresentationRestoreResult.Success(currentStateChanged: true);
 
+			Color currentOverride = codeEdit.GetThemeColor(CompletionExistingColorThemeKey);
+			if (!currentOverride.Equals(expectedAppliedColor))
+				return AutocompletePresentationRestoreResult.Success(currentStateChanged: true);
+
+			codeEdit.BeginBulkThemeOverride();
 			try
 			{
 				if (hadPreviousOverride)
@@ -215,89 +241,197 @@ internal sealed class AutocompleteCodeEditThemeController
 				codeEdit.EndBulkThemeOverride();
 			}
 
-			return true;
+			return AutocompletePresentationRestoreResult.Success();
 		}
 		catch
 		{
-			return false;
+			return AutocompletePresentationRestoreResult.Failure();
 		}
 	}
 
-	internal void Restore(CodeEdit codeEdit)
+	internal AutocompletePresentationRestoreResult Restore(CodeEdit codeEdit)
 	{
 		AutocompleteThemeSnapshot snapshot = _snapshot;
 
 		if (snapshot == null)
-			return;
-
-		if (!IsValidGodotObject(codeEdit))
-		{
-			_snapshot = null;
-			return;
-		}
-
-		if (snapshot.CodeEditInstanceId != codeEdit.GetInstanceId())
-			return;
+			return AutocompletePresentationRestoreResult.Success();
+		if (!ReferenceEquals(snapshot.CodeEdit, codeEdit))
+			return AutocompletePresentationRestoreResult.Success();
 
 		try
 		{
-			codeEdit.BeginBulkThemeOverride();
+			if (!IsValidGodotObject(codeEdit))
+				return AutocompletePresentationRestoreResult.Failure();
+			if (snapshot.CodeEditInstanceId != codeEdit.GetInstanceId())
+				return AutocompletePresentationRestoreResult.Success(currentStateChanged: true);
 
-			try
+			var colorRestoreKeys = new List<string>();
+			var constantRestoreKeys = new List<string>();
+			bool restoreStylebox = false;
+			bool currentStateChanged = false;
+
+			foreach (
+				KeyValuePair<string, AutocompleteThemeSnapshot.ColorOverrideSnapshot> entry
+					in snapshot.ColorOverrides
+			)
 			{
-				foreach (
-					KeyValuePair<
-						string,
-						AutocompleteThemeSnapshot.ColorOverrideSnapshot
-					> entry in snapshot.ColorOverrides
+				bool hasOverride = codeEdit.HasThemeColorOverride(entry.Key);
+				if (
+					hasOverride
+					&& codeEdit.GetThemeColor(entry.Key).Equals(entry.Value.AppliedValue)
 				)
 				{
-					if (entry.Value.HadOverride)
-						codeEdit.AddThemeColorOverride(entry.Key, entry.Value.PreviousValue);
-					else
-						codeEdit.RemoveThemeColorOverride(entry.Key);
+					colorRestoreKeys.Add(entry.Key);
 				}
+				else
+				{
+					currentStateChanged = true;
+				}
+			}
 
-				foreach (
-					KeyValuePair<
-						string,
-						AutocompleteThemeSnapshot.ConstantOverrideSnapshot
-					> entry in snapshot.ConstantOverrides
+			foreach (
+				KeyValuePair<string, AutocompleteThemeSnapshot.ConstantOverrideSnapshot> entry
+					in snapshot.ConstantOverrides
+			)
+			{
+				bool hasOverride = codeEdit.HasThemeConstantOverride(entry.Key);
+				if (
+					hasOverride
+					&& codeEdit.GetThemeConstant(entry.Key) == entry.Value.AppliedValue
 				)
 				{
-					if (entry.Value.HadOverride)
-						codeEdit.AddThemeConstantOverride(entry.Key, entry.Value.PreviousValue);
-					else
-						codeEdit.RemoveThemeConstantOverride(entry.Key);
+					constantRestoreKeys.Add(entry.Key);
 				}
+				else
+				{
+					currentStateChanged = true;
+				}
+			}
 
-				if (snapshot.HasCompletionStyleboxSnapshot)
+			if (snapshot.HasCompletionStyleboxSnapshot)
+			{
+				bool hasOverride = codeEdit.HasThemeStyleboxOverride(
+					CompletionStyleboxThemeKey
+				);
+				StyleBox currentOverride = hasOverride
+					? codeEdit.GetThemeStylebox(CompletionStyleboxThemeKey)
+					: null;
+				if (
+					hasOverride
+					&& IsValidGodotObject(currentOverride)
+					&& snapshot.AppliedCompletionStyleboxInstanceId != 0
+					&& currentOverride.GetInstanceId()
+						== snapshot.AppliedCompletionStyleboxInstanceId
+				)
 				{
 					if (
 						snapshot.HadCompletionStyleboxOverride
-						&& IsValidGodotObject(snapshot.PreviousCompletionStylebox)
+						&& !IsValidGodotObject(snapshot.PreviousCompletionStylebox)
 					)
 					{
-						codeEdit.AddThemeStyleboxOverride(
-							CompletionStyleboxThemeKey,
-							snapshot.PreviousCompletionStylebox
-						);
+						return AutocompletePresentationRestoreResult.Failure();
 					}
-					else
-					{
-						codeEdit.RemoveThemeStyleboxOverride(CompletionStyleboxThemeKey);
-					}
+
+					restoreStylebox = true;
+				}
+				else
+				{
+					currentStateChanged = true;
 				}
 			}
-			finally
+
+			if (
+				colorRestoreKeys.Count > 0
+				|| constantRestoreKeys.Count > 0
+				|| restoreStylebox
+			)
 			{
-				codeEdit.EndBulkThemeOverride();
+				codeEdit.BeginBulkThemeOverride();
+				try
+				{
+					foreach (string themeKey in colorRestoreKeys)
+					{
+						AutocompleteThemeSnapshot.ColorOverrideSnapshot value =
+							snapshot.ColorOverrides[themeKey];
+						if (value.HadOverride)
+							codeEdit.AddThemeColorOverride(themeKey, value.PreviousValue);
+						else
+							codeEdit.RemoveThemeColorOverride(themeKey);
+					}
+
+					foreach (string themeKey in constantRestoreKeys)
+					{
+						AutocompleteThemeSnapshot.ConstantOverrideSnapshot value =
+							snapshot.ConstantOverrides[themeKey];
+						if (value.HadOverride)
+							codeEdit.AddThemeConstantOverride(themeKey, value.PreviousValue);
+						else
+							codeEdit.RemoveThemeConstantOverride(themeKey);
+					}
+
+					if (restoreStylebox)
+					{
+						if (snapshot.HadCompletionStyleboxOverride)
+						{
+							codeEdit.AddThemeStyleboxOverride(
+								CompletionStyleboxThemeKey,
+								snapshot.PreviousCompletionStylebox
+							);
+						}
+						else
+						{
+							codeEdit.RemoveThemeStyleboxOverride(CompletionStyleboxThemeKey);
+						}
+					}
+				}
+				finally
+				{
+					codeEdit.EndBulkThemeOverride();
+				}
 			}
+
+			return AutocompletePresentationRestoreResult.Success(currentStateChanged);
+		}
+		catch
+		{
+			return AutocompletePresentationRestoreResult.Failure();
 		}
 		finally
 		{
 			if (ReferenceEquals(_snapshot, snapshot))
 				_snapshot = null;
+		}
+	}
+
+	internal AutocompletePresentationRestoreResult RestoreRemainingOwnedStateAfterCompletionExistingColorBridge(
+		CodeEdit codeEdit
+	)
+	{
+		AutocompleteThemeSnapshot snapshot = _snapshot;
+		if (snapshot == null)
+			return AutocompletePresentationRestoreResult.Success();
+		if (!ReferenceEquals(snapshot.CodeEdit, codeEdit))
+			return AutocompletePresentationRestoreResult.Success();
+
+		snapshot.ColorOverrides.Remove(CompletionExistingColorThemeKey);
+		return Restore(codeEdit);
+	}
+
+	internal void ForgetOwnedState(CodeEdit codeEdit)
+	{
+		AutocompleteThemeSnapshot snapshot = _snapshot;
+		if (snapshot == null)
+			return;
+
+		if (
+			ReferenceEquals(snapshot.CodeEdit, codeEdit)
+			|| (
+				IsValidGodotObject(codeEdit)
+				&& snapshot.CodeEditInstanceId == codeEdit.GetInstanceId()
+			)
+		)
+		{
+			_snapshot = null;
 		}
 	}
 
@@ -309,6 +443,8 @@ internal sealed class AutocompleteCodeEditThemeController
 			return;
 
 		Restore(snapshot.CodeEdit);
+		if (ReferenceEquals(_snapshot, snapshot))
+			_snapshot = null;
 	}
 
 	private bool HasColorOrConstantOverrides()
@@ -351,10 +487,24 @@ internal sealed class AutocompleteCodeEditThemeController
 
 		bool hadOverride = codeEdit.HasThemeColorOverride(themeKey);
 		Color previousValue = hadOverride ? codeEdit.GetThemeColor(themeKey) : default;
+		Color appliedValue = value.Value;
 
 		snapshot.ColorOverrides[themeKey] =
-			new AutocompleteThemeSnapshot.ColorOverrideSnapshot(hadOverride, previousValue);
-		codeEdit.AddThemeColorOverride(themeKey, value.Value);
+			new AutocompleteThemeSnapshot.ColorOverrideSnapshot(
+				hadOverride,
+				previousValue,
+				appliedValue
+			);
+		codeEdit.AddThemeColorOverride(themeKey, appliedValue);
+		if (
+			!codeEdit.HasThemeColorOverride(themeKey)
+			|| !codeEdit.GetThemeColor(themeKey).Equals(appliedValue)
+		)
+		{
+			throw new InvalidOperationException(
+				$"Theme color override '{themeKey}' did not retain the applied value."
+			);
+		}
 	}
 
 	private static void ApplyConstantOverrideIfSet(
@@ -369,10 +519,24 @@ internal sealed class AutocompleteCodeEditThemeController
 
 		bool hadOverride = codeEdit.HasThemeConstantOverride(themeKey);
 		int previousValue = hadOverride ? codeEdit.GetThemeConstant(themeKey) : default;
+		int appliedValue = value.Value;
 
 		snapshot.ConstantOverrides[themeKey] =
-			new AutocompleteThemeSnapshot.ConstantOverrideSnapshot(hadOverride, previousValue);
-		codeEdit.AddThemeConstantOverride(themeKey, value.Value);
+			new AutocompleteThemeSnapshot.ConstantOverrideSnapshot(
+				hadOverride,
+				previousValue,
+				appliedValue
+			);
+		codeEdit.AddThemeConstantOverride(themeKey, appliedValue);
+		if (
+			!codeEdit.HasThemeConstantOverride(themeKey)
+			|| codeEdit.GetThemeConstant(themeKey) != appliedValue
+		)
+		{
+			throw new InvalidOperationException(
+				$"Theme constant override '{themeKey}' did not retain the applied value."
+			);
+		}
 	}
 
 	private StyleBoxFlat CreateCompletionStyleOverride(CodeEdit codeEdit)
@@ -457,14 +621,94 @@ internal sealed class AutocompleteCodeEditThemeController
 		);
 
 		if (snapshot.HadCompletionStyleboxOverride)
+		{
 			snapshot.PreviousCompletionStylebox = codeEdit.GetThemeStylebox(
 				CompletionStyleboxThemeKey
 			);
+		}
 
+		snapshot.AppliedCompletionStylebox = completionStyleboxOverride;
+		snapshot.AppliedCompletionStyleboxInstanceId = completionStyleboxOverride.GetInstanceId();
 		codeEdit.AddThemeStyleboxOverride(
 			CompletionStyleboxThemeKey,
 			completionStyleboxOverride
 		);
+
+		if (!codeEdit.HasThemeStyleboxOverride(CompletionStyleboxThemeKey))
+		{
+			throw new InvalidOperationException(
+				"Completion StyleBox override was not retained."
+			);
+		}
+
+		StyleBox currentOverride = codeEdit.GetThemeStylebox(CompletionStyleboxThemeKey);
+		if (
+			!IsValidGodotObject(currentOverride)
+			|| currentOverride.GetInstanceId() != snapshot.AppliedCompletionStyleboxInstanceId
+		)
+		{
+			throw new InvalidOperationException(
+				"Completion StyleBox override identity changed during Apply."
+			);
+		}
+	}
+
+	private static bool IsSnapshotStillExactlyApplied(
+		CodeEdit codeEdit,
+		AutocompleteThemeSnapshot snapshot
+	)
+	{
+		try
+		{
+			foreach (
+				KeyValuePair<string, AutocompleteThemeSnapshot.ColorOverrideSnapshot> entry
+					in snapshot.ColorOverrides
+			)
+			{
+				if (
+					!codeEdit.HasThemeColorOverride(entry.Key)
+					|| !codeEdit.GetThemeColor(entry.Key).Equals(entry.Value.AppliedValue)
+				)
+				{
+					return false;
+				}
+			}
+
+			foreach (
+				KeyValuePair<string, AutocompleteThemeSnapshot.ConstantOverrideSnapshot> entry
+					in snapshot.ConstantOverrides
+			)
+			{
+				if (
+					!codeEdit.HasThemeConstantOverride(entry.Key)
+					|| codeEdit.GetThemeConstant(entry.Key) != entry.Value.AppliedValue
+				)
+				{
+					return false;
+				}
+			}
+
+			if (snapshot.HasCompletionStyleboxSnapshot)
+			{
+				if (!codeEdit.HasThemeStyleboxOverride(CompletionStyleboxThemeKey))
+					return false;
+				StyleBox currentOverride = codeEdit.GetThemeStylebox(CompletionStyleboxThemeKey);
+				if (
+					!IsValidGodotObject(currentOverride)
+					|| currentOverride.GetInstanceId()
+						!= snapshot.AppliedCompletionStyleboxInstanceId
+				)
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
 	}
 
 	private static bool IsValidGodotObject(GodotObject source)

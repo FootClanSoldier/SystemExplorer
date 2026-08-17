@@ -590,6 +590,7 @@ public partial class SystemExplorerPlugin
 	private void ResetManagedAssemblyTransientStateAfterReload()
 	{
 		AdvanceManagedAssemblyRecoveryOperationToken();
+		BeginAutocompleteReloadStabilization();
 		InvalidateScriptEditorLifecycle("ResetManagedAssemblyTransientStateAfterReload");
 		_systemExplorerToggleFocusReturnTarget =
 			SystemExplorerToggleFocusReturnTarget.Tree;

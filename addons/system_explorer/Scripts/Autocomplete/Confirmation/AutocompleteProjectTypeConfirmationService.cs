@@ -32,10 +32,10 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			automaticUsingComplexOperationWrapperEnabled;
 	}
 
-	internal AutocompleteProjectTypeConfirmationResult Confirm(
+	internal AutocompleteProjectTypeConfirmationPreparation PrepareConfirmation(
 		CodeEdit codeEdit,
 		AutocompleteCompletionOptionMetadata metadata,
-		bool replace
+		bool requestedReplace
 	)
 	{
 		if (codeEdit == null)
@@ -43,10 +43,16 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		if (metadata == null)
 			throw new ArgumentNullException(nameof(metadata));
 
-		bool effectiveReplace = replace || metadata.UsesQualifiedInsertion;
+		bool effectiveReplace = requestedReplace || metadata.UsesQualifiedInsertion;
 		string usingAction = DetermineEligibilityAction(codeEdit, metadata);
 		if (!string.Equals(usingAction, UsingActionEligible, StringComparison.Ordinal))
-			return ConfirmNativeOnly(codeEdit, effectiveReplace, usingAction);
+		{
+			return new AutocompleteProjectTypeConfirmationPreparation(
+				effectiveReplace,
+				usingAction,
+				AutocompleteProjectTypeConfirmationExecutionMode.NativeOnly
+			);
+		}
 
 		CSharpUsingInsertionPlan plan;
 		try
@@ -61,52 +67,124 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		catch (Exception exception)
 		{
 			LogPlannerFailure(metadata, exception);
-			return ConfirmNativeOnly(codeEdit, effectiveReplace, UsingActionPlannerUnsafe);
+			return new AutocompleteProjectTypeConfirmationPreparation(
+				effectiveReplace,
+				UsingActionPlannerUnsafe,
+				AutocompleteProjectTypeConfirmationExecutionMode.NativeOnly
+			);
 		}
 
 		if (plan == null || plan.Kind == CSharpUsingInsertionPlanKind.Unsafe)
 		{
 			LogPlannerUnsafe(metadata, plan);
-			return ConfirmNativeOnly(codeEdit, effectiveReplace, UsingActionPlannerUnsafe);
+			return new AutocompleteProjectTypeConfirmationPreparation(
+				effectiveReplace,
+				UsingActionPlannerUnsafe,
+				AutocompleteProjectTypeConfirmationExecutionMode.NativeOnly
+			);
 		}
 
 		if (plan.Kind == CSharpUsingInsertionPlanKind.NotRequired)
-			return ConfirmNativeOnly(codeEdit, effectiveReplace, UsingActionNotRequired);
+		{
+			return new AutocompleteProjectTypeConfirmationPreparation(
+				effectiveReplace,
+				UsingActionNotRequired,
+				AutocompleteProjectTypeConfirmationExecutionMode.NativeOnly
+			);
+		}
 
 		if (!_automaticUsingInsertTextExecutionEnabled)
 		{
-			return ConfirmNativeOnly(
-				codeEdit,
-				replace,
-				UsingActionAutomaticUsingMutationIsolated
+			return new AutocompleteProjectTypeConfirmationPreparation(
+				requestedReplace,
+				UsingActionAutomaticUsingMutationIsolated,
+				AutocompleteProjectTypeConfirmationExecutionMode.NativeOnly
 			);
 		}
 
 		if (_automaticUsingDeferInsertTextAfterGuiInputEnabled)
-			return ConfirmWithDeferredUsingInsertion(codeEdit, metadata, replace, plan);
+		{
+			return new AutocompleteProjectTypeConfirmationPreparation(
+				requestedReplace,
+				UsingActionDeferredInsertPending,
+				AutocompleteProjectTypeConfirmationExecutionMode.DeferredUsingInsertion,
+				plan
+			);
+		}
 
 		return _automaticUsingComplexOperationWrapperEnabled
-			? ConfirmWithUsingInsertionComplexOperation(codeEdit, metadata, replace, plan)
-			: ConfirmWithUsingInsertionWithoutComplexOperation(
-				codeEdit,
-				metadata,
-				replace,
+			? new AutocompleteProjectTypeConfirmationPreparation(
+				requestedReplace,
+				UsingActionInserted,
+				AutocompleteProjectTypeConfirmationExecutionMode.ImmediateUsingInsertionComplexOperation,
+				plan
+			)
+			: new AutocompleteProjectTypeConfirmationPreparation(
+				requestedReplace,
+				UsingActionInsertedWithoutComplexOperation,
+				AutocompleteProjectTypeConfirmationExecutionMode.ImmediateUsingInsertionWithoutComplexOperation,
 				plan
 			);
 	}
 
-	private AutocompleteProjectTypeConfirmationResult ConfirmWithDeferredUsingInsertion(
+	internal AutocompleteProjectTypeConfirmationResult ExecutePreparedConfirmation(
 		CodeEdit codeEdit,
 		AutocompleteCompletionOptionMetadata metadata,
-		bool replace,
-		CSharpUsingInsertionPlan plan
+		AutocompleteProjectTypeConfirmationPreparation preparation
 	)
 	{
+		if (codeEdit == null)
+			throw new ArgumentNullException(nameof(codeEdit));
+		if (metadata == null)
+			throw new ArgumentNullException(nameof(metadata));
+		if (preparation == null)
+			throw new ArgumentNullException(nameof(preparation));
+
+		return preparation.ExecutionMode switch
+		{
+			AutocompleteProjectTypeConfirmationExecutionMode.NativeOnly =>
+				ExecuteNativeOnly(codeEdit, preparation),
+			AutocompleteProjectTypeConfirmationExecutionMode.DeferredUsingInsertion =>
+				ExecuteDeferredUsingInsertion(codeEdit, metadata, preparation),
+			AutocompleteProjectTypeConfirmationExecutionMode.ImmediateUsingInsertionWithoutComplexOperation =>
+				ExecuteUsingInsertionWithoutComplexOperation(
+					codeEdit,
+					metadata,
+					preparation
+				),
+			AutocompleteProjectTypeConfirmationExecutionMode.ImmediateUsingInsertionComplexOperation =>
+				ExecuteUsingInsertionComplexOperation(codeEdit, metadata, preparation),
+			_ => throw new InvalidOperationException(
+				$"Unknown project-type confirmation execution mode '{preparation.ExecutionMode}'."
+			),
+		};
+	}
+
+	private static AutocompleteProjectTypeConfirmationResult ExecuteNativeOnly(
+		CodeEdit codeEdit,
+		AutocompleteProjectTypeConfirmationPreparation preparation
+	)
+	{
+		ConfirmNative(codeEdit, preparation.NativeReplace);
+		return new AutocompleteProjectTypeConfirmationResult(
+			true,
+			preparation.UsingAction,
+			preparation.NativeReplace
+		);
+	}
+
+	private AutocompleteProjectTypeConfirmationResult ExecuteDeferredUsingInsertion(
+		CodeEdit codeEdit,
+		AutocompleteCompletionOptionMetadata metadata,
+		AutocompleteProjectTypeConfirmationPreparation preparation
+	)
+	{
+		CSharpUsingInsertionPlan plan = RequireInsertPlan(preparation);
 		bool confirmationSucceeded = false;
 
 		try
 		{
-			codeEdit.ConfirmCodeCompletion(replace);
+			ConfirmNative(codeEdit, preparation.NativeReplace);
 			confirmationSucceeded = true;
 		}
 		catch (Exception exception)
@@ -115,30 +193,30 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			return new AutocompleteProjectTypeConfirmationResult(
 				false,
 				UsingActionConfirmationFailed,
-				replace
+				preparation.NativeReplace
 			);
 		}
 
 		return new AutocompleteProjectTypeConfirmationResult(
 			true,
-			UsingActionDeferredInsertPending,
-			replace,
+			preparation.UsingAction,
+			preparation.NativeReplace,
 			plan
 		);
 	}
 
-	private AutocompleteProjectTypeConfirmationResult ConfirmWithUsingInsertionWithoutComplexOperation(
+	private AutocompleteProjectTypeConfirmationResult ExecuteUsingInsertionWithoutComplexOperation(
 		CodeEdit codeEdit,
 		AutocompleteCompletionOptionMetadata metadata,
-		bool replace,
-		CSharpUsingInsertionPlan plan
+		AutocompleteProjectTypeConfirmationPreparation preparation
 	)
 	{
+		CSharpUsingInsertionPlan plan = RequireInsertPlan(preparation);
 		bool confirmationSucceeded = false;
 
 		try
 		{
-			codeEdit.ConfirmCodeCompletion(replace);
+			ConfirmNative(codeEdit, preparation.NativeReplace);
 			confirmationSucceeded = true;
 		}
 		catch (Exception exception)
@@ -147,7 +225,7 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			return new AutocompleteProjectTypeConfirmationResult(
 				false,
 				UsingActionConfirmationFailed,
-				replace
+				preparation.NativeReplace
 			);
 		}
 
@@ -163,8 +241,8 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 
 			return new AutocompleteProjectTypeConfirmationResult(
 				true,
-				UsingActionInsertedWithoutComplexOperation,
-				replace
+				preparation.UsingAction,
+				preparation.NativeReplace
 			);
 		}
 		catch (Exception exception)
@@ -173,28 +251,28 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			return new AutocompleteProjectTypeConfirmationResult(
 				true,
 				UsingActionFailedAfterConfirmation,
-				replace
+				preparation.NativeReplace
 			);
 		}
 	}
 
-	private AutocompleteProjectTypeConfirmationResult ConfirmWithUsingInsertionComplexOperation(
+	private AutocompleteProjectTypeConfirmationResult ExecuteUsingInsertionComplexOperation(
 		CodeEdit codeEdit,
 		AutocompleteCompletionOptionMetadata metadata,
-		bool replace,
-		CSharpUsingInsertionPlan plan
+		AutocompleteProjectTypeConfirmationPreparation preparation
 	)
 	{
+		CSharpUsingInsertionPlan plan = RequireInsertPlan(preparation);
 		bool complexOperationStarted = false;
 		bool confirmationSucceeded = false;
-		string usingAction = UsingActionInserted;
+		string usingAction = preparation.UsingAction;
 
 		try
 		{
 			codeEdit.BeginComplexOperation();
 			complexOperationStarted = true;
 
-			codeEdit.ConfirmCodeCompletion(replace);
+			ConfirmNative(codeEdit, preparation.NativeReplace);
 			confirmationSucceeded = true;
 
 			try
@@ -219,7 +297,7 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 				confirmationSucceeded
 					? UsingActionFailedAfterConfirmation
 					: UsingActionConfirmationFailed,
-				replace
+				preparation.NativeReplace
 			);
 		}
 		finally
@@ -242,8 +320,19 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		return new AutocompleteProjectTypeConfirmationResult(
 			confirmationSucceeded,
 			usingAction,
-			replace
+			preparation.NativeReplace
 		);
+	}
+
+	private static CSharpUsingInsertionPlan RequireInsertPlan(
+		AutocompleteProjectTypeConfirmationPreparation preparation
+	)
+	{
+		CSharpUsingInsertionPlan plan = preparation?.UsingInsertionPlan;
+		if (plan == null || plan.Kind != CSharpUsingInsertionPlanKind.Insert)
+			throw new InvalidOperationException("Prepared confirmation requires an Insert using plan.");
+
+		return plan;
 	}
 
 	internal AutocompleteDeferredUsingInsertionApplyResult ApplyDeferredUsingInsertion(
@@ -265,7 +354,8 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
 				"InvalidPlan",
 				executionContext.CurrentCodeEditNativeInstanceId,
-				executionContext.CurrentScriptPath
+				executionContext.CurrentScriptPath,
+				executionContext.CurrentBindingLease
 			);
 		}
 
@@ -280,7 +370,8 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			LogDeferredInsertTextBoundary(request, executionContext, "Returned");
 			return AutocompleteDeferredUsingInsertionApplyResult.Success(
 				executionContext.CurrentCodeEditNativeInstanceId,
-				executionContext.CurrentScriptPath
+				executionContext.CurrentScriptPath,
+				executionContext.CurrentBindingLease
 			);
 		}
 		catch (Exception exception)
@@ -289,7 +380,8 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			return AutocompleteDeferredUsingInsertionApplyResult.Rejected(
 				UsingActionFailedAfterConfirmationDeferred,
 				executionContext.CurrentCodeEditNativeInstanceId,
-				executionContext.CurrentScriptPath
+				executionContext.CurrentScriptPath,
+				executionContext.CurrentBindingLease
 			);
 		}
 	}
@@ -326,18 +418,9 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 		);
 	}
 
-	private static AutocompleteProjectTypeConfirmationResult ConfirmNativeOnly(
-		CodeEdit codeEdit,
-		bool replace,
-		string usingAction
-	)
+	private static void ConfirmNative(CodeEdit codeEdit, bool replace)
 	{
 		codeEdit.ConfirmCodeCompletion(replace);
-		return new AutocompleteProjectTypeConfirmationResult(
-			true,
-			usingAction,
-			replace
-		);
 	}
 
 	private static string DetermineEligibilityAction(
@@ -484,9 +567,17 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 			_debugLog(
 				operation,
 				$"Name='{request?.CompletionName ?? ""}', Namespace='{request?.NamespaceName ?? ""}', "
+					+ $"OriginatingCompletionPublicationId='{request?.OriginatingCompletionPublicationId ?? 0}', "
+					+ $"MutationTransactionId='{executionContext?.MutationTransactionId ?? 0}', "
 					+ $"ExpectedCodeEditNativeInstanceId='{request?.CodeEditNativeInstanceId ?? 0UL}', "
 					+ $"CurrentCodeEditNativeInstanceId='{executionContext?.CurrentCodeEditNativeInstanceId ?? 0UL}', "
 					+ $"ScriptPath='{request?.ScriptPath ?? ""}', "
+					+ $"ExpectedScriptTransitionId='{request?.BindingLease.ScriptTransitionId ?? 0}', "
+					+ $"CurrentScriptTransitionId='{executionContext?.CurrentBindingLease.ScriptTransitionId ?? 0}', "
+					+ $"ExpectedBindingEpoch='{request?.BindingLease.BindingEpoch ?? 0}', "
+					+ $"CurrentBindingEpoch='{executionContext?.CurrentBindingLease.BindingEpoch ?? 0}', "
+					+ $"ExpectedReloadReadyEpoch='{request?.BindingLease.ReloadReadyEpoch ?? 0}', "
+					+ $"CurrentReloadReadyEpoch='{executionContext?.CurrentBindingLease.ReloadReadyEpoch ?? 0}', "
 					+ $"HostInstanceToken='{executionContext?.HostInstanceToken ?? 0}', "
 					+ $"ManagedAssemblyGeneration='{executionContext?.ManagedAssemblyGeneration ?? ""}', "
 					+ $"GuiInputCallbackDepth='{executionContext?.GuiInputCallbackDepth ?? -1}', {detail}"
@@ -516,6 +607,21 @@ internal sealed class AutocompleteProjectTypeConfirmationService
 	internal const string UsingActionConfirmationFailed = "ConfirmationFailed";
 	private const string UsingActionEligible = "Eligible";
 }
+
+internal enum AutocompleteProjectTypeConfirmationExecutionMode
+{
+	NativeOnly,
+	DeferredUsingInsertion,
+	ImmediateUsingInsertionWithoutComplexOperation,
+	ImmediateUsingInsertionComplexOperation,
+}
+
+internal sealed record AutocompleteProjectTypeConfirmationPreparation(
+	bool NativeReplace,
+	string UsingAction,
+	AutocompleteProjectTypeConfirmationExecutionMode ExecutionMode,
+	CSharpUsingInsertionPlan UsingInsertionPlan = null
+);
 
 internal sealed record AutocompleteProjectTypeConfirmationResult(
 	bool ConfirmationSucceeded,

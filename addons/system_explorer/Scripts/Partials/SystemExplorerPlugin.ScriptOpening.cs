@@ -1,5 +1,6 @@
 #if TOOLS
 using Godot;
+using System;
 using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
@@ -20,6 +21,14 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(normalizedScriptPath))
 			normalizedScriptPath = ScriptPathUtility.Normalize(script.ResourcePath);
+
+		bool expectedScriptAlreadyActiveBeforeEdit =
+			TryGetActiveScriptPath(out string activeScriptPathBeforeEdit)
+			&& string.Equals(
+				ScriptPathUtility.Normalize(activeScriptPathBeforeEdit),
+				normalizedScriptPath,
+				StringComparison.OrdinalIgnoreCase
+			);
 
 		ScriptEditorTransition scriptTransition =
 			BeginSystemExplorerScriptEditorTransition(normalizedScriptPath);
@@ -46,6 +55,15 @@ public partial class SystemExplorerPlugin
 		);
 		EditorInterface.Singleton.EditScript(script);
 		CompleteEditScriptDiagnosticBoundary(editBoundary);
+
+		if (expectedScriptAlreadyActiveBeforeEdit)
+		{
+			QueueDeferredSystemExplorerSameScriptTransitionObservation(
+				scriptTransition,
+				normalizedScriptPath
+			);
+		}
+
 		QueueSystemExplorerScriptActivationDeferredCheck(sourceActivationToken);
 
 		if (releaseTreeFocusAfterNavigation)

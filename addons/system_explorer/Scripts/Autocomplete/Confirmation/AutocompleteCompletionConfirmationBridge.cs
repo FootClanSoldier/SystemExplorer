@@ -1,6 +1,7 @@
 #if TOOLS
 using Godot;
 using System;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 namespace SystemExplorer.Autocomplete.Confirmation;
 
@@ -11,17 +12,22 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 	private const string DefaultValueKey = "default_value";
 
 	private readonly AutocompleteCompletionOptionMetadataCodec _metadataCodec;
+	private readonly AutocompleteCodeEditMutationCoordinator _codeEditMutationCoordinator;
 	private readonly AutocompleteProjectTypeConfirmationService _projectTypeConfirmationService;
 	private readonly Action<string, string> _debugLog;
 
 	internal AutocompleteCompletionConfirmationBridge(
 		AutocompleteCompletionOptionMetadataCodec metadataCodec,
+		AutocompleteCodeEditMutationCoordinator codeEditMutationCoordinator,
 		AutocompleteProjectTypeConfirmationService projectTypeConfirmationService,
 		Action<string, string> debugLog
 	)
 	{
 		_metadataCodec =
 			metadataCodec ?? throw new ArgumentNullException(nameof(metadataCodec));
+		_codeEditMutationCoordinator =
+			codeEditMutationCoordinator
+			?? throw new ArgumentNullException(nameof(codeEditMutationCoordinator));
 		_projectTypeConfirmationService =
 			projectTypeConfirmationService
 			?? throw new ArgumentNullException(nameof(projectTypeConfirmationService));
@@ -30,6 +36,8 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 
 	internal bool TryHandleGuiInput(
 		CodeEdit codeEdit,
+		string scriptPath,
+		EditorBindingLease bindingLease,
 		InputEvent inputEvent,
 		out AutocompleteDeferredUsingInsertionCandidate deferredUsingInsertionCandidate
 	)
@@ -42,6 +50,7 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 			return false;
 
 		bool confirmationSucceeded = false;
+		long consumedPublicationId = 0;
 
 		try
 		{
@@ -88,8 +97,30 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 				return false;
 			}
 
-			AutocompleteProjectTypeConfirmationResult result =
-				_projectTypeConfirmationService.Confirm(codeEdit, metadata, replace);
+			AutocompleteProjectTypeConfirmationPreparation preparation =
+				_projectTypeConfirmationService.PrepareConfirmation(
+					codeEdit,
+					metadata,
+					replace
+				);
+
+			if (
+				!_codeEditMutationCoordinator.TryExecuteOwnedConfirmation(
+					codeEdit,
+					scriptPath,
+					bindingLease,
+					metadata,
+					replace,
+					preparation,
+					out AutocompleteOwnedCompletionPublicationLease consumedPublication,
+					out AutocompleteProjectTypeConfirmationResult result
+				)
+			)
+			{
+				return false;
+			}
+
+			consumedPublicationId = consumedPublication.PublicationId;
 			confirmationSucceeded = result?.ConfirmationSucceeded == true;
 			if (!confirmationSucceeded)
 				return false;
@@ -100,7 +131,8 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 				selectedIndex,
 				replace,
 				result.EffectiveReplace,
-				result.UsingAction
+				result.UsingAction,
+				consumedPublicationId
 			);
 
 			if (result.DeferredUsingInsertionPlan != null)
@@ -109,6 +141,8 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 					new AutocompleteDeferredUsingInsertionCandidate(
 						metadata.Name ?? "",
 						metadata.NamespaceName ?? "",
+						consumedPublicationId,
+						consumedPublication.BindingLease,
 						result.DeferredUsingInsertionPlan
 					);
 			}
@@ -118,7 +152,7 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 		catch (Exception exception)
 		{
 			deferredUsingInsertionCandidate = null;
-			LogFailure(exception, confirmationSucceeded);
+			LogFailure(exception, confirmationSucceeded, consumedPublicationId);
 			return confirmationSucceeded;
 		}
 	}
@@ -128,7 +162,8 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 		int selectedIndex,
 		bool requestedReplace,
 		bool effectiveReplace,
-		string usingAction
+		string usingAction,
+		long publicationId
 	)
 	{
 		try
@@ -138,6 +173,7 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 				$"Source='{metadata?.Source ?? ""}', "
 					+ $"Name='{metadata?.Name ?? ""}', "
 					+ $"Namespace='{metadata?.NamespaceName ?? ""}', "
+					+ $"PublicationId='{publicationId}', "
 					+ $"SelectedIndex={selectedIndex}, "
 					+ $"RequestedReplace={requestedReplace}, "
 					+ $"EffectiveReplace={effectiveReplace}, "
@@ -150,13 +186,18 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 		}
 	}
 
-	private void LogFailure(Exception exception, bool confirmationSucceeded)
+	private void LogFailure(
+		Exception exception,
+		bool confirmationSucceeded,
+		long publicationId
+	)
 	{
 		try
 		{
 			_debugLog(
 				"C# autocomplete confirmation interception failed",
 				$"ConfirmationSucceeded={confirmationSucceeded}, "
+					+ $"ConsumedPublicationId='{publicationId}', "
 					+ $"ExceptionType='{exception?.GetType().FullName ?? ""}', "
 					+ $"Exception='{exception}'"
 			);

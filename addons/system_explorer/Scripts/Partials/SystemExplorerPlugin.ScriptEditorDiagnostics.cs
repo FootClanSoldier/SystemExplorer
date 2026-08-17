@@ -132,6 +132,7 @@ public partial class SystemExplorerPlugin
 				+ $"LifecycleState='{lifecycle.State}', "
 				+ $"ScriptTransitionId='{lifecycle.ScriptTransitionId}', "
 				+ $"BindingEpoch='{lifecycle.BindingEpoch}', "
+				+ $"ReloadReadyEpoch='{CurrentAutocompleteReloadReadyEpoch}', "
 				+ $"BindingCodeEditInstanceId='{lifecycle.CodeEditInstanceId}', "
 				+ $"TargetScriptPath='{NormalizeScriptEditorDiagnosticText(effectiveTargetScriptPath)}', "
 				+ $"EditScriptCallDepth='{_editScriptCallDepth}'";
@@ -148,28 +149,6 @@ public partial class SystemExplorerPlugin
 		{
 			// Compact crash-tail diagnostics are pure-managed, observation-only, and fail closed.
 		}
-	}
-
-	private Action<string, string> CreateDeferredScriptRebindLifecycleEnsureDiagnosticPhase(
-		long operationToken,
-		long hostInstanceToken,
-		string targetScriptPath
-	)
-	{
-		if (!DebugLogger.IsEnabled)
-			return null;
-
-		string capturedTargetScriptPath =
-			NormalizeScriptEditorDiagnosticText(targetScriptPath);
-		return (phase, details) =>
-			LogCompactScriptEditorCrashTail(
-				"DeferredScriptRebind",
-				phase,
-				operationToken: operationToken,
-				targetScriptPath: capturedTargetScriptPath,
-				hostInstanceToken: hostInstanceToken,
-				extraDetails: details
-			);
 	}
 
 	private long BeginBeautifyBatchDiagnosticContext()

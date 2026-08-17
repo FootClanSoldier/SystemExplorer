@@ -2,27 +2,40 @@
 using Godot;
 using System;
 using System.Globalization;
+using System.Collections.Generic;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 namespace SystemExplorer.Autocomplete;
 
 internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 {
-	private const int SchemaVersion = 1;
+	private const int LegacySchemaVersion = 1;
+	internal const int CurrentSchemaVersion = 2;
 	private const string MetadataKey =
 		"_system_explorer_autocomplete_code_edit_state_v1";
 	private const string SchemaVersionKey = "schema_version";
 	private const string OwnerManagedAssemblyGenerationKey =
 		"owner_managed_assembly_generation";
+	private const string OwnerHostInstanceTokenKey = "owner_host_instance_token";
+	private const string OwnerScriptTransitionIdKey = "owner_script_transition_id";
+	private const string OwnerReloadReadyEpochKey = "owner_reload_ready_epoch";
+	private const string OwnerBindingEpochKey = "owner_binding_epoch";
 	private const string CodeEditNativeInstanceIdKey = "code_edit_native_instance_id";
+	private const string ScriptResourcePathKey = "script_resource_path";
 	private const string PrefixOwnedKey = "prefix_owned";
 	private const string PreviousCodeCompletionPrefixesKey =
 		"previous_code_completion_prefixes";
+	private const string AppliedCodeCompletionPrefixesKey =
+		"applied_code_completion_prefixes";
 	private const string CompletionExistingColorOwnedKey =
 		"completion_existing_color_owned";
 	private const string HadPreviousCompletionExistingColorOverrideKey =
 		"had_previous_completion_existing_color_override";
 	private const string PreviousCompletionExistingColorKey =
 		"previous_completion_existing_color";
+	private const string AppliedCompletionExistingColorKey =
+		"applied_completion_existing_color";
+	private const string LegacyMemberAccessPrefix = ".";
 
 	internal enum MarkerReadStatus
 	{
@@ -34,35 +47,65 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 	internal sealed class OwnershipState
 	{
 		internal OwnershipState(
+			int schemaVersion,
+			bool isLegacy,
 			string ownerManagedAssemblyGeneration,
+			long ownerHostInstanceToken,
+			long ownerScriptTransitionId,
+			long ownerReloadReadyEpoch,
+			long ownerBindingEpoch,
 			ulong codeEditNativeInstanceId,
+			string scriptResourcePath,
 			bool prefixOwned,
 			string[] previousCodeCompletionPrefixes,
+			string[] appliedCodeCompletionPrefixes,
 			bool completionExistingColorOwned,
 			bool hadPreviousCompletionExistingColorOverride,
-			Color previousCompletionExistingColor
+			Color previousCompletionExistingColor,
+			Color appliedCompletionExistingColor
 		)
 		{
+			SchemaVersion = schemaVersion;
+			IsLegacy = isLegacy;
 			OwnerManagedAssemblyGeneration = ownerManagedAssemblyGeneration ?? "";
+			OwnerHostInstanceToken = ownerHostInstanceToken;
+			OwnerScriptTransitionId = ownerScriptTransitionId;
+			OwnerReloadReadyEpoch = ownerReloadReadyEpoch;
+			OwnerBindingEpoch = ownerBindingEpoch;
 			CodeEditNativeInstanceId = codeEditNativeInstanceId;
+			ScriptResourcePath = ScriptPathUtility.Normalize(scriptResourcePath);
 			PrefixOwned = prefixOwned;
-			PreviousCodeCompletionPrefixes =
-				previousCodeCompletionPrefixes == null
-					? Array.Empty<string>()
-					: (string[])previousCodeCompletionPrefixes.Clone();
+			PreviousCodeCompletionPrefixes = ClonePrefixes(previousCodeCompletionPrefixes);
+			AppliedCodeCompletionPrefixes = ClonePrefixes(appliedCodeCompletionPrefixes);
 			CompletionExistingColorOwned = completionExistingColorOwned;
 			HadPreviousCompletionExistingColorOverride =
 				hadPreviousCompletionExistingColorOverride;
 			PreviousCompletionExistingColor = previousCompletionExistingColor;
+			AppliedCompletionExistingColor = appliedCompletionExistingColor;
 		}
 
+		internal int SchemaVersion { get; }
+		internal bool IsLegacy { get; }
 		internal string OwnerManagedAssemblyGeneration { get; }
+		internal long OwnerHostInstanceToken { get; }
+		internal long OwnerScriptTransitionId { get; }
+		internal long OwnerReloadReadyEpoch { get; }
+		internal long OwnerBindingEpoch { get; }
 		internal ulong CodeEditNativeInstanceId { get; }
+		internal string ScriptResourcePath { get; }
 		internal bool PrefixOwned { get; }
 		internal string[] PreviousCodeCompletionPrefixes { get; }
+		internal string[] AppliedCodeCompletionPrefixes { get; }
 		internal bool CompletionExistingColorOwned { get; }
 		internal bool HadPreviousCompletionExistingColorOverride { get; }
 		internal Color PreviousCompletionExistingColor { get; }
+		internal Color AppliedCompletionExistingColor { get; }
+		internal bool HasOwnedReversibleState => PrefixOwned || CompletionExistingColorOwned;
+
+		private static string[] ClonePrefixes(string[] prefixes)
+		{
+			return prefixes == null ? Array.Empty<string>() : (string[])prefixes.Clone();
+		}
 	}
 
 	internal MarkerReadStatus Inspect(
@@ -133,12 +176,14 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
-			if (
-				!TryGetInt(dictionary, SchemaVersionKey, out int schemaVersion)
-				|| schemaVersion != SchemaVersion
-			)
+			if (!TryGetInt(dictionary, SchemaVersionKey, out int schemaVersion))
 			{
-				failureDetail = "Schema version is missing or unsupported.";
+				failureDetail = "Schema version is missing.";
+				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+			}
+			if (schemaVersion != LegacySchemaVersion && schemaVersion != CurrentSchemaVersion)
+			{
+				failureDetail = $"Schema version '{schemaVersion}' is unsupported.";
 				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
@@ -156,18 +201,11 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			}
 
 			if (
-				!TryGetString(
+				!TryGetPositiveUlongString(
 					dictionary,
 					CodeEditNativeInstanceIdKey,
-					out string codeEditNativeInstanceIdText
-				)
-				|| !ulong.TryParse(
-					codeEditNativeInstanceIdText,
-					NumberStyles.None,
-					CultureInfo.InvariantCulture,
 					out ulong codeEditNativeInstanceId
 				)
-				|| codeEditNativeInstanceId == 0
 			)
 			{
 				failureDetail = "CodeEdit native instance id is missing or invalid.";
@@ -191,74 +229,23 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
 			}
 
-			if (
-				!TryGetBool(dictionary, PrefixOwnedKey, out bool prefixOwned)
-				|| !TryGetStringArray(
+			return schemaVersion == LegacySchemaVersion
+				? DecodeLegacyState(
 					dictionary,
-					PreviousCodeCompletionPrefixesKey,
-					out string[] previousCodeCompletionPrefixes
+					ownerManagedAssemblyGeneration,
+					codeEditNativeInstanceId,
+					out state,
+					out failureDetail,
+					nativeBoundaryDiagnosticPhase
 				)
-			)
-			{
-				failureDetail = "Prefix ownership state is missing or invalid.";
-				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
-			}
-
-			if (!prefixOwned && previousCodeCompletionPrefixes.Length != 0)
-			{
-				failureDetail = "Unowned prefix state contains a previous-prefix snapshot.";
-				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
-			}
-
-			if (
-				!TryGetBool(
+				: DecodeCurrentState(
 					dictionary,
-					CompletionExistingColorOwnedKey,
-					out bool completionExistingColorOwned
-				)
-				|| !TryGetBool(
-					dictionary,
-					HadPreviousCompletionExistingColorOverrideKey,
-					out bool hadPreviousCompletionExistingColorOverride
-				)
-				|| !TryGetColor(
-					dictionary,
-					PreviousCompletionExistingColorKey,
-					out Color previousCompletionExistingColor
-				)
-				|| !IsFinite(previousCompletionExistingColor)
-			)
-			{
-				failureDetail = "completion_existing_color ownership state is invalid.";
-				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
-			}
-
-			if (
-				!completionExistingColorOwned
-				&& hadPreviousCompletionExistingColorOverride
-			)
-			{
-				failureDetail =
-					"Unowned completion_existing_color state claims a previous override.";
-				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
-			}
-
-			if (!prefixOwned && !completionExistingColorOwned)
-			{
-				failureDetail = "Marker does not describe any owned reversible state.";
-				return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
-			}
-
-			state = new OwnershipState(
-				ownerManagedAssemblyGeneration,
-				codeEditNativeInstanceId,
-				prefixOwned,
-				previousCodeCompletionPrefixes,
-				completionExistingColorOwned,
-				hadPreviousCompletionExistingColorOverride,
-				previousCompletionExistingColor
-			);
-			return CompleteMarkerDecode(MarkerReadStatus.Valid, nativeBoundaryDiagnosticPhase);
+					ownerManagedAssemblyGeneration,
+					codeEditNativeInstanceId,
+					out state,
+					out failureDetail,
+					nativeBoundaryDiagnosticPhase
+				);
 		}
 		catch (Exception exception)
 		{
@@ -277,37 +264,54 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 	{
 		failureDetail = "";
 
-		if (codeEdit == null)
+		if (!IsValidGodotObject(codeEdit))
 		{
-			failureDetail = "CodeEdit is null.";
+			failureDetail = "CodeEdit is null or invalid.";
 			return false;
 		}
 
-		if (!IsStateStructurallyValid(state))
+		if (!IsCurrentStateStructurallyValid(state))
 		{
-			failureDetail = "Ownership state is structurally invalid.";
+			failureDetail = "Ownership state is structurally invalid for schema v2.";
 			return false;
 		}
 
 		try
 		{
-			var previousPrefixes = new Godot.Collections.Array();
-			foreach (string prefix in state.PreviousCodeCompletionPrefixes)
-				previousPrefixes.Add(prefix);
+			var previousPrefixes = ToVariantArray(state.PreviousCodeCompletionPrefixes);
+			var appliedPrefixes = ToVariantArray(state.AppliedCodeCompletionPrefixes);
 
 			var dictionary = new Godot.Collections.Dictionary
 			{
-				{ SchemaVersionKey, SchemaVersion },
+				{ SchemaVersionKey, CurrentSchemaVersion },
 				{
 					OwnerManagedAssemblyGenerationKey,
 					state.OwnerManagedAssemblyGeneration
 				},
 				{
+					OwnerHostInstanceTokenKey,
+					state.OwnerHostInstanceToken.ToString(CultureInfo.InvariantCulture)
+				},
+				{
+					OwnerScriptTransitionIdKey,
+					state.OwnerScriptTransitionId.ToString(CultureInfo.InvariantCulture)
+				},
+				{
+					OwnerReloadReadyEpochKey,
+					state.OwnerReloadReadyEpoch.ToString(CultureInfo.InvariantCulture)
+				},
+				{
+					OwnerBindingEpochKey,
+					state.OwnerBindingEpoch.ToString(CultureInfo.InvariantCulture)
+				},
+				{
 					CodeEditNativeInstanceIdKey,
 					state.CodeEditNativeInstanceId.ToString(CultureInfo.InvariantCulture)
 				},
+				{ ScriptResourcePathKey, state.ScriptResourcePath },
 				{ PrefixOwnedKey, state.PrefixOwned },
 				{ PreviousCodeCompletionPrefixesKey, previousPrefixes },
+				{ AppliedCodeCompletionPrefixesKey, appliedPrefixes },
 				{
 					CompletionExistingColorOwnedKey,
 					state.CompletionExistingColorOwned
@@ -319,6 +323,10 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 				{
 					PreviousCompletionExistingColorKey,
 					state.PreviousCompletionExistingColor
+				},
+				{
+					AppliedCompletionExistingColorKey,
+					state.AppliedCompletionExistingColor
 				},
 			};
 
@@ -377,7 +385,6 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 			);
 			return true;
 		}
-
 		catch (Exception exception)
 		{
 			failureDetail =
@@ -386,47 +393,319 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 		}
 	}
 
-	internal bool TryClearOwnedMarkerForGeneration(
-		CodeEdit codeEdit,
-		string managedAssemblyGeneration,
-		out string failureDetail
-	)
+	internal static bool MatchesState(OwnershipState left, OwnershipState right)
 	{
-		failureDetail = "";
-
-		if (!IsValidGodotObject(codeEdit) || string.IsNullOrWhiteSpace(managedAssemblyGeneration))
-			return true;
-
-		MarkerReadStatus status = Inspect(codeEdit, out OwnershipState state, out string readFailure);
-		if (status == MarkerReadStatus.Missing)
-			return true;
-		if (status != MarkerReadStatus.Valid)
-		{
-			failureDetail = readFailure;
-			return false;
-		}
 		if (
-			!string.Equals(
-				state.OwnerManagedAssemblyGeneration,
-				managedAssemblyGeneration,
+			left == null
+			|| right == null
+			|| left.SchemaVersion != right.SchemaVersion
+			|| left.IsLegacy != right.IsLegacy
+			|| left.OwnerHostInstanceToken != right.OwnerHostInstanceToken
+			|| left.OwnerScriptTransitionId != right.OwnerScriptTransitionId
+			|| left.OwnerReloadReadyEpoch != right.OwnerReloadReadyEpoch
+			|| left.OwnerBindingEpoch != right.OwnerBindingEpoch
+			|| left.CodeEditNativeInstanceId != right.CodeEditNativeInstanceId
+			|| !string.Equals(
+				left.OwnerManagedAssemblyGeneration,
+				right.OwnerManagedAssemblyGeneration,
 				StringComparison.Ordinal
+			)
+			|| !string.Equals(
+				ScriptPathUtility.Normalize(left.ScriptResourcePath),
+				ScriptPathUtility.Normalize(right.ScriptResourcePath),
+				StringComparison.Ordinal
+			)
+			|| left.PrefixOwned != right.PrefixOwned
+			|| left.CompletionExistingColorOwned != right.CompletionExistingColorOwned
+			|| left.HadPreviousCompletionExistingColorOverride
+				!= right.HadPreviousCompletionExistingColorOverride
+			|| !left.PreviousCompletionExistingColor.Equals(
+				right.PreviousCompletionExistingColor
+			)
+			|| !left.AppliedCompletionExistingColor.Equals(
+				right.AppliedCompletionExistingColor
+			)
+			|| !PrefixesEqual(
+				left.PreviousCodeCompletionPrefixes,
+				right.PreviousCodeCompletionPrefixes
+			)
+			|| !PrefixesEqual(
+				left.AppliedCodeCompletionPrefixes,
+				right.AppliedCodeCompletionPrefixes
 			)
 		)
 		{
-			return true;
-		}
-
-		try
-		{
-			codeEdit.RemoveMeta(MetadataKey);
-			return true;
-		}
-		catch (Exception exception)
-		{
-			failureDetail =
-				$"Marker clear failed: {exception.GetType().Name}: {exception.Message}";
 			return false;
 		}
+
+		return true;
+	}
+
+	private static MarkerReadStatus DecodeLegacyState(
+		Godot.Collections.Dictionary dictionary,
+		string ownerManagedAssemblyGeneration,
+		ulong codeEditNativeInstanceId,
+		out OwnershipState state,
+		out string failureDetail,
+		Action<string, string> nativeBoundaryDiagnosticPhase
+	)
+	{
+		state = null;
+		failureDetail = "";
+
+		if (
+			!TryGetBool(dictionary, PrefixOwnedKey, out bool prefixOwned)
+			|| !TryGetStringArray(
+				dictionary,
+				PreviousCodeCompletionPrefixesKey,
+				out string[] previousCodeCompletionPrefixes
+			)
+		)
+		{
+			failureDetail = "Legacy prefix ownership state is missing or invalid.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+		if (!prefixOwned && previousCodeCompletionPrefixes.Length != 0)
+		{
+			failureDetail = "Legacy unowned prefix state contains a previous-prefix snapshot.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+
+		if (
+			!TryGetBool(
+				dictionary,
+				CompletionExistingColorOwnedKey,
+				out bool completionExistingColorOwned
+			)
+			|| !TryGetBool(
+				dictionary,
+				HadPreviousCompletionExistingColorOverrideKey,
+				out bool hadPreviousCompletionExistingColorOverride
+			)
+			|| !TryGetColor(
+				dictionary,
+				PreviousCompletionExistingColorKey,
+				out Color previousCompletionExistingColor
+			)
+			|| !IsFinite(previousCompletionExistingColor)
+		)
+		{
+			failureDetail = "Legacy completion_existing_color ownership state is invalid.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+		if (!completionExistingColorOwned && hadPreviousCompletionExistingColorOverride)
+		{
+			failureDetail =
+				"Legacy unowned completion_existing_color state claims a previous override.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+		if (!prefixOwned && !completionExistingColorOwned)
+		{
+			failureDetail = "Legacy marker does not describe any owned reversible state.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+
+		string[] appliedPrefixes = prefixOwned
+			? CreateLegacyAppliedPrefixes(previousCodeCompletionPrefixes)
+			: Array.Empty<string>();
+		state = new OwnershipState(
+			LegacySchemaVersion,
+			isLegacy: true,
+			ownerManagedAssemblyGeneration,
+			ownerHostInstanceToken: 0,
+			ownerScriptTransitionId: 0,
+			ownerReloadReadyEpoch: 0,
+			ownerBindingEpoch: 0,
+			codeEditNativeInstanceId,
+			scriptResourcePath: "",
+			prefixOwned,
+			previousCodeCompletionPrefixes,
+			appliedPrefixes,
+			completionExistingColorOwned,
+			hadPreviousCompletionExistingColorOverride,
+			previousCompletionExistingColor,
+			completionExistingColorOwned ? Colors.Transparent : default
+		);
+		return CompleteMarkerDecode(MarkerReadStatus.Valid, nativeBoundaryDiagnosticPhase);
+	}
+
+	private static MarkerReadStatus DecodeCurrentState(
+		Godot.Collections.Dictionary dictionary,
+		string ownerManagedAssemblyGeneration,
+		ulong codeEditNativeInstanceId,
+		out OwnershipState state,
+		out string failureDetail,
+		Action<string, string> nativeBoundaryDiagnosticPhase
+	)
+	{
+		state = null;
+		failureDetail = "";
+		if (
+			!TryGetPositiveLongString(dictionary, OwnerHostInstanceTokenKey, out long ownerHostInstanceToken)
+			|| !TryGetPositiveLongString(dictionary, OwnerScriptTransitionIdKey, out long ownerScriptTransitionId)
+			|| !TryGetPositiveLongString(dictionary, OwnerReloadReadyEpochKey, out long ownerReloadReadyEpoch)
+			|| !TryGetPositiveLongString(dictionary, OwnerBindingEpochKey, out long ownerBindingEpoch)
+		)
+		{
+			failureDetail = "Schema-v2 owner identity is missing or invalid.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+
+		if (
+			!TryGetString(dictionary, ScriptResourcePathKey, out string scriptResourcePath)
+			|| string.IsNullOrWhiteSpace(ScriptPathUtility.Normalize(scriptResourcePath))
+		)
+		{
+			failureDetail = "Schema-v2 script resource path is missing or invalid.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+		scriptResourcePath = ScriptPathUtility.Normalize(scriptResourcePath);
+
+		if (
+			!TryGetBool(dictionary, PrefixOwnedKey, out bool prefixOwned)
+			|| !TryGetStringArray(
+				dictionary,
+				PreviousCodeCompletionPrefixesKey,
+				out string[] previousCodeCompletionPrefixes
+			)
+			|| !TryGetStringArray(
+				dictionary,
+				AppliedCodeCompletionPrefixesKey,
+				out string[] appliedCodeCompletionPrefixes
+			)
+		)
+		{
+			failureDetail = "Schema-v2 prefix ownership state is missing or invalid.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+		if (
+			!prefixOwned
+			&& (
+				previousCodeCompletionPrefixes.Length != 0
+				|| appliedCodeCompletionPrefixes.Length != 0
+			)
+		)
+		{
+			failureDetail = "Schema-v2 unowned prefix state contains presentation snapshots.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+
+		if (
+			!TryGetBool(
+				dictionary,
+				CompletionExistingColorOwnedKey,
+				out bool completionExistingColorOwned
+			)
+			|| !TryGetBool(
+				dictionary,
+				HadPreviousCompletionExistingColorOverrideKey,
+				out bool hadPreviousCompletionExistingColorOverride
+			)
+			|| !TryGetColor(
+				dictionary,
+				PreviousCompletionExistingColorKey,
+				out Color previousCompletionExistingColor
+			)
+			|| !TryGetColor(
+				dictionary,
+				AppliedCompletionExistingColorKey,
+				out Color appliedCompletionExistingColor
+			)
+			|| !IsFinite(previousCompletionExistingColor)
+			|| !IsFinite(appliedCompletionExistingColor)
+		)
+		{
+			failureDetail = "Schema-v2 completion_existing_color ownership state is invalid.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+		if (!completionExistingColorOwned && hadPreviousCompletionExistingColorOverride)
+		{
+			failureDetail =
+				"Schema-v2 unowned completion_existing_color state claims a previous override.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+		if (!prefixOwned && !completionExistingColorOwned)
+		{
+			failureDetail = "Schema-v2 marker does not describe any owned reversible state.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+
+		state = new OwnershipState(
+			CurrentSchemaVersion,
+			isLegacy: false,
+			ownerManagedAssemblyGeneration,
+			ownerHostInstanceToken,
+			ownerScriptTransitionId,
+			ownerReloadReadyEpoch,
+			ownerBindingEpoch,
+			codeEditNativeInstanceId,
+			scriptResourcePath,
+			prefixOwned,
+			previousCodeCompletionPrefixes,
+			appliedCodeCompletionPrefixes,
+			completionExistingColorOwned,
+			hadPreviousCompletionExistingColorOverride,
+			previousCompletionExistingColor,
+			appliedCompletionExistingColor
+		);
+		if (!IsCurrentStateStructurallyValid(state))
+		{
+			state = null;
+			failureDetail = "Schema-v2 marker failed structural validation.";
+			return CompleteMarkerDecode(MarkerReadStatus.Malformed, nativeBoundaryDiagnosticPhase);
+		}
+
+		return CompleteMarkerDecode(MarkerReadStatus.Valid, nativeBoundaryDiagnosticPhase);
+	}
+
+	private static bool IsCurrentStateStructurallyValid(OwnershipState state)
+	{
+		return state != null
+			&& state.SchemaVersion == CurrentSchemaVersion
+			&& !state.IsLegacy
+			&& !string.IsNullOrWhiteSpace(state.OwnerManagedAssemblyGeneration)
+			&& state.OwnerHostInstanceToken > 0
+			&& state.OwnerScriptTransitionId > 0
+			&& state.OwnerReloadReadyEpoch > 0
+			&& state.OwnerBindingEpoch > 0
+			&& state.CodeEditNativeInstanceId != 0
+			&& !string.IsNullOrWhiteSpace(ScriptPathUtility.Normalize(state.ScriptResourcePath))
+			&& state.HasOwnedReversibleState
+			&& (
+				state.PrefixOwned
+				|| (
+					state.PreviousCodeCompletionPrefixes.Length == 0
+					&& state.AppliedCodeCompletionPrefixes.Length == 0
+				)
+			)
+			&& HasOnlyNonNullPrefixes(state.PreviousCodeCompletionPrefixes)
+			&& HasOnlyNonNullPrefixes(state.AppliedCodeCompletionPrefixes)
+			&& (
+				state.CompletionExistingColorOwned
+				|| !state.HadPreviousCompletionExistingColorOverride
+			)
+			&& IsFinite(state.PreviousCompletionExistingColor)
+			&& IsFinite(state.AppliedCompletionExistingColor);
+	}
+
+	private static string[] CreateLegacyAppliedPrefixes(IReadOnlyList<string> previousPrefixes)
+	{
+		int previousCount = previousPrefixes?.Count ?? 0;
+		var applied = new string[previousCount + 1];
+		for (int index = 0; index < previousCount; index++)
+			applied[index] = previousPrefixes[index];
+		applied[previousCount] = LegacyMemberAccessPrefix;
+		return applied;
+	}
+
+	private static Godot.Collections.Array ToVariantArray(IReadOnlyList<string> values)
+	{
+		var array = new Godot.Collections.Array();
+		if (values == null)
+			return array;
+		for (int index = 0; index < values.Count; index++)
+			array.Add(values[index]);
+		return array;
 	}
 
 	private static MarkerReadStatus CompleteMarkerDecode(
@@ -458,21 +737,6 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 		}
 	}
 
-	private static bool IsStateStructurallyValid(OwnershipState state)
-	{
-		return state != null
-			&& !string.IsNullOrWhiteSpace(state.OwnerManagedAssemblyGeneration)
-			&& state.CodeEditNativeInstanceId != 0
-			&& (state.PrefixOwned || state.CompletionExistingColorOwned)
-			&& (state.PrefixOwned || state.PreviousCodeCompletionPrefixes.Length == 0)
-			&& HasOnlyNonNullPrefixes(state.PreviousCodeCompletionPrefixes)
-			&& (
-				state.CompletionExistingColorOwned
-				|| !state.HadPreviousCompletionExistingColorOverride
-			)
-			&& IsFinite(state.PreviousCompletionExistingColor);
-	}
-
 	private static bool HasOnlyNonNullPrefixes(string[] prefixes)
 	{
 		if (prefixes == null)
@@ -487,45 +751,15 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 		return true;
 	}
 
-	private static bool MatchesState(OwnershipState left, OwnershipState right)
+	private static bool PrefixesEqual(IReadOnlyList<string> left, IReadOnlyList<string> right)
 	{
-		if (
-			left == null
-			|| right == null
-			|| left.CodeEditNativeInstanceId != right.CodeEditNativeInstanceId
-			|| !string.Equals(
-				left.OwnerManagedAssemblyGeneration,
-				right.OwnerManagedAssemblyGeneration,
-				StringComparison.Ordinal
-			)
-			|| left.PrefixOwned != right.PrefixOwned
-			|| left.CompletionExistingColorOwned != right.CompletionExistingColorOwned
-			|| left.HadPreviousCompletionExistingColorOverride
-				!= right.HadPreviousCompletionExistingColorOverride
-			|| !left.PreviousCompletionExistingColor.Equals(
-				right.PreviousCompletionExistingColor
-			)
-			|| left.PreviousCodeCompletionPrefixes.Length
-				!= right.PreviousCodeCompletionPrefixes.Length
-		)
-		{
+		if (left == null || right == null || left.Count != right.Count)
 			return false;
-		}
-
-		for (int index = 0; index < left.PreviousCodeCompletionPrefixes.Length; index++)
+		for (int index = 0; index < left.Count; index++)
 		{
-			if (
-				!string.Equals(
-					left.PreviousCodeCompletionPrefixes[index],
-					right.PreviousCodeCompletionPrefixes[index],
-					StringComparison.Ordinal
-				)
-			)
-			{
+			if (!string.Equals(left[index], right[index], StringComparison.Ordinal))
 				return false;
-			}
 		}
-
 		return true;
 	}
 
@@ -595,6 +829,40 @@ internal sealed class AutocompleteCodeEditNativeOwnershipBridge
 
 		value = rawValue.AsColor();
 		return true;
+	}
+
+	private static bool TryGetPositiveLongString(
+		Godot.Collections.Dictionary dictionary,
+		string key,
+		out long value
+	)
+	{
+		value = 0;
+		return TryGetString(dictionary, key, out string text)
+			&& long.TryParse(
+				text,
+				NumberStyles.None,
+				CultureInfo.InvariantCulture,
+				out value
+			)
+			&& value > 0;
+	}
+
+	private static bool TryGetPositiveUlongString(
+		Godot.Collections.Dictionary dictionary,
+		string key,
+		out ulong value
+	)
+	{
+		value = 0;
+		return TryGetString(dictionary, key, out string text)
+			&& ulong.TryParse(
+				text,
+				NumberStyles.None,
+				CultureInfo.InvariantCulture,
+				out value
+			)
+			&& value > 0;
 	}
 
 	private static bool TryGetStringArray(
