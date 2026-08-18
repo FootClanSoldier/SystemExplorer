@@ -256,6 +256,18 @@ internal sealed class AutocompletePluginHost
 			_debugLog
 		);
 
+		Trace(
+			"C# autocomplete feature profile",
+			$"SemanticMemberPipelineEnabled='{_semanticMemberPipelineEnabled}', "
+				+ $"ActiveDocumentSyntaxOverlayEnabled='{_activeDocumentSyntaxOverlayEnabled}', "
+				+ "ProjectTypeCompletionEnabled='True', "
+				+ $"ProjectMemberCompletionEnabled='{_semanticMemberPipelineEnabled}', "
+				+ $"AutomaticUsingInsertTextExecutionEnabled='{_automaticUsingInsertTextExecutionEnabled}', "
+				+ $"AutomaticUsingDeferredInsertEnabled='{_automaticUsingDeferInsertTextAfterGuiInputEnabled}', "
+				+ $"AutomaticUsingComplexOperationWrapperEnabled='{_automaticUsingComplexOperationWrapperEnabled}', "
+				+ $"CancelNativeCompletionOnRebind='{_cancelNativeCompletionOnRebind}'"
+		);
+
 		if (!_semanticMemberPipelineEnabled)
 		{
 			Trace(
@@ -274,7 +286,7 @@ internal sealed class AutocompletePluginHost
 
 
 		Trace(
-			"C# autocomplete automatic using execution diagnostic mode",
+			"C# autocomplete automatic using execution mode",
 			$"InsertTextExecutionEnabled='{_automaticUsingInsertTextExecutionEnabled}', "
 				+ $"DeferInsertTextAfterGuiInputEnabled='{_automaticUsingDeferInsertTextAfterGuiInputEnabled}', "
 				+ $"ComplexOperationWrapperEnabled='{_automaticUsingComplexOperationWrapperEnabled}', "
@@ -413,12 +425,6 @@ internal sealed class AutocompletePluginHost
 		_completionCoordinator.InvalidatePendingValidations();
 		_semanticMemberCoordinator.ResetActiveDocument();
 		_activeDocumentIndexLifecycle.ResetForScriptChange();
-	}
-
-	internal void HandleScriptChangedWithoutCodeEditBinding()
-	{
-		ResetManagedStateForScriptChange();
-		DrainIndexBuildResults();
 	}
 
 	internal bool HandleScriptChanged(

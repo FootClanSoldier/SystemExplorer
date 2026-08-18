@@ -16,14 +16,6 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
-			ProcessAutocompletePostReloadObservationIsolation();
-		}
-		catch
-		{
-		}
-
-		try
-		{
 			ProcessAutocompleteReloadStabilization();
 		}
 		catch
@@ -45,15 +37,6 @@ public partial class SystemExplorerPlugin
 		catch
 		{
 			ClearPendingAutocompleteProcessWork();
-		}
-
-		try
-		{
-			ProcessNavigationStress(delta);
-		}
-		catch (System.Exception exception)
-		{
-			FailNavigationStress(exception);
 		}
 
 		bool shouldReapplyBusyCursor = false;
@@ -82,11 +65,9 @@ public partial class SystemExplorerPlugin
 		TrySetEditorPluginProcessing(
 			busyCursorNeedsProcessing
 				|| HasPendingPersistentTreeStateProcessWork()
-				|| HasPendingAutocompletePostReloadObservationIsolationProcessWork()
 				|| HasPendingAutocompleteReloadStabilizationProcessWork()
 				|| HasPendingAutocompleteScriptTransitionStabilizationProcessWork()
 				|| HasPendingAutocompleteProcessWork()
-				|| HasPendingNavigationStressProcessWork()
 		);
 	}
 

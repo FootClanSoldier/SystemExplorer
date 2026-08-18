@@ -75,9 +75,9 @@ public partial class SystemExplorerPlugin
 			() => IsAutocompleteReloadStabilizationReady(),
 			ScriptEditorLifecycleCoordinator,
 			RequestScriptEditorLifecycleRebind,
-			semanticMemberPipelineEnabled: false,
+			semanticMemberPipelineEnabled: true,
 			cancelNativeCompletionOnRebind: false,
-			activeDocumentSyntaxOverlayEnabled: false,
+			activeDocumentSyntaxOverlayEnabled: true,
 			automaticUsingInsertTextExecutionEnabled: true,
 			automaticUsingDeferInsertTextAfterGuiInputEnabled: true,
 			automaticUsingComplexOperationWrapperEnabled: false
@@ -1140,7 +1140,6 @@ public partial class SystemExplorerPlugin
 
 	private void ResetAutocompleteTransientStateAfterManagedAssemblyReload()
 	{
-		InvalidateAutocompletePostReloadObservationIsolationAuthority();
 		InvalidateAutocompleteScriptTransitionStabilizationAuthority();
 		InvalidateScriptEditorLifecycle(
 			"ResetAutocompleteTransientStateAfterManagedAssemblyReload"
@@ -1194,7 +1193,6 @@ public partial class SystemExplorerPlugin
 
 	private void ShutdownAutocomplete()
 	{
-		InvalidateAutocompletePostReloadObservationIsolationAuthority();
 		InvalidateAutocompleteScriptTransitionStabilizationAuthority();
 		InvalidateScriptEditorLifecycle("ShutdownAutocomplete");
 		InvalidateAutocompleteReloadStabilizationAuthority(parkObservation: true);
@@ -1507,19 +1505,6 @@ public partial class SystemExplorerPlugin
 					"ScriptEditor lifecycle stale binding resolution rejected",
 					$"Reason='AuthorityChangedBeforeBindingResolution', OperationToken='{token}', TargetScriptTransitionId='{targetTransitionId}', {DescribeScriptEditorLifecycleForDiagnostics()}"
 				);
-				RefreshEditorPluginProcessingState();
-				return;
-			}
-
-			if (
-				TryHandleAutocompletePostReloadObservationIsolationAdmission(
-					host,
-					scheduledHostInstanceToken,
-					targetTransitionId
-				)
-			)
-			{
-				ConsumeDeferredAutocompleteScriptChangeRebind(token);
 				RefreshEditorPluginProcessingState();
 				return;
 			}

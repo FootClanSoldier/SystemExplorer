@@ -88,14 +88,6 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		AutocompleteReloadStabilizationSnapshot diagnosticReload = coordinator.Snapshot;
-		if (ShouldSuppressAutocompleteReloadCodeEditCandidateObservation(diagnosticReload))
-		{
-			// Diagnostic A/B: keep reload readiness quiescent until the separate
-			// pure-managed lifecycle-target coordinator authorizes completion.
-			return;
-		}
-
 		ScriptEditorLifecycleSnapshot lifecycleSnapshot =
 			ScriptEditorLifecycleCoordinator.Snapshot;
 		if (

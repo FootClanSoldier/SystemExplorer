@@ -219,7 +219,6 @@ public partial class SystemExplorerPlugin
 		EnsureEditorShortcutsRegistered();
 		BuildTree(keepCurrentExpansionState: true);
 		RestorePersistentTreeSelectionBestEffort(reason);
-		SynchronizeNavigationStressAfterTreeReady(reason);
 		CallDeferred(nameof(MakeSystemExplorerDockVisible), ManagedAssemblyGeneration);
 		DebugLogger.LogOperation("Managed assembly recovery completed", $"Reason='{reason}', Strategy='{strategy}'");
 		return true;
@@ -600,7 +599,6 @@ public partial class SystemExplorerPlugin
 		_boundFolderSyncRunning = false;
 		ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload();
 		ResetAutocompleteTransientStateAfterManagedAssemblyReload();
-		ResetNavigationStressTransientStateAfterManagedAssemblyReload();
 		CancelPendingScriptRenameEditorRestore();
 		ResetTreeOperationDialogQueuedStateAfterManagedAssemblyReload();
 		ResetUnsafePendingTreeOperationsAfterManagedAssemblyReload();

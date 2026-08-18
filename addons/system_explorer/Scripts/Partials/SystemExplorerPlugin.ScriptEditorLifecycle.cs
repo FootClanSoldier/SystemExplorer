@@ -10,7 +10,6 @@ public partial class SystemExplorerPlugin
 
 	private ScriptEditorLifecycleCoordinator _scriptEditorLifecycleCoordinator;
 	private AssemblyLoadContext _scriptEditorLifecycleAssemblyLoadContext;
-	private bool _scriptEditorLifecycleAssemblyUnloadRegistered;
 
 	private ScriptEditorLifecycleCoordinator ScriptEditorLifecycleCoordinator
 	{
@@ -38,18 +37,23 @@ public partial class SystemExplorerPlugin
 
 	private void EnsureScriptEditorLifecycleAssemblyUnloadRegistration()
 	{
-		if (_scriptEditorLifecycleAssemblyUnloadRegistered)
-			return;
-
 		AssemblyLoadContext loadContext = AssemblyLoadContext.GetLoadContext(
 			typeof(SystemExplorerPlugin).Assembly
 		);
 		if (loadContext == null)
 			return;
 
-		_scriptEditorLifecycleAssemblyLoadContext = loadContext;
+		if (object.ReferenceEquals(_scriptEditorLifecycleAssemblyLoadContext, loadContext))
+			return;
+
+		if (_scriptEditorLifecycleAssemblyLoadContext != null)
+		{
+			_scriptEditorLifecycleAssemblyLoadContext.Unloading -=
+				OnScriptEditorLifecycleAssemblyUnloading;
+		}
+
 		loadContext.Unloading += OnScriptEditorLifecycleAssemblyUnloading;
-		_scriptEditorLifecycleAssemblyUnloadRegistered = true;
+		_scriptEditorLifecycleAssemblyLoadContext = loadContext;
 	}
 
 	private void OnScriptEditorLifecycleAssemblyUnloading(AssemblyLoadContext context)
@@ -59,16 +63,12 @@ public partial class SystemExplorerPlugin
 
 	private void ShutdownScriptEditorLifecycleAssemblyUnloadRegistration()
 	{
-		if (
-			_scriptEditorLifecycleAssemblyUnloadRegistered
-			&& _scriptEditorLifecycleAssemblyLoadContext != null
-		)
+		if (_scriptEditorLifecycleAssemblyLoadContext != null)
 		{
 			_scriptEditorLifecycleAssemblyLoadContext.Unloading -=
 				OnScriptEditorLifecycleAssemblyUnloading;
 		}
 
-		_scriptEditorLifecycleAssemblyUnloadRegistered = false;
 		_scriptEditorLifecycleAssemblyLoadContext = null;
 	}
 

@@ -167,15 +167,6 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (ShouldSuppressAutocompleteScriptTransitionCodeEditCandidateObservation(reload))
-		{
-			// The pure-managed post-reload diagnostic coordinator is the sole
-			// stabilization authority in this mode. Retire any ordinary candidate
-			// authority before it can observe ScriptEditorBase/CodeEdit state.
-			coordinator.Invalidate();
-			return;
-		}
-
 		ScriptEditorLifecycleSnapshot lifecycle = ScriptEditorLifecycleCoordinator.Snapshot;
 		if (
 			lifecycle.State != ScriptEditorLifecycleState.BindingPending

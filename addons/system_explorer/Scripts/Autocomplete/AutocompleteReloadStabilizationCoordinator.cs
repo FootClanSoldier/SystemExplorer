@@ -193,34 +193,6 @@ internal sealed class AutocompleteReloadStabilizationCoordinator
 	}
 
 
-	internal bool TryCompleteDiagnosticIsolationWithoutCandidate(
-		string managedAssemblyGeneration,
-		out long reloadReadyEpoch
-	)
-	{
-		reloadReadyEpoch = 0;
-		if (
-			!string.Equals(
-				managedAssemblyGeneration,
-				_managedAssemblyGeneration,
-				StringComparison.Ordinal
-			)
-			|| (_state != AutocompleteReloadStabilizationState.ReloadQuiescent
-				&& _state != AutocompleteReloadStabilizationState.ReloadQuiescentParked)
-			|| CurrentReloadReadyEpoch != 0
-			|| _reloadReadyEpoch != 0
-		)
-		{
-			return false;
-		}
-
-		_reloadReadyEpoch = NextPositive(ref _nextReloadReadyEpoch);
-		_candidate = null;
-		_state = AutocompleteReloadStabilizationState.Ready;
-		reloadReadyEpoch = _reloadReadyEpoch;
-		return reloadReadyEpoch > 0;
-	}
-
 	internal bool CompleteActivation(
 		string managedAssemblyGeneration,
 		long hostInstanceToken,
