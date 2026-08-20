@@ -18,15 +18,19 @@ internal enum BeautifyEditorAutosaveFailure
 internal sealed class BeautifyEditorStateService
 {
 	private readonly Action<string> _debugLog;
-	private readonly Action<Action> _scheduleDeferred;
+	private readonly Action _scheduleDeferredEditorViewStateRestore;
 	private readonly List<BeautifyEditorViewState> _pendingEditorViewStates = new();
 	private int _pendingEditorViewStateRestorePasses;
 
-	internal BeautifyEditorStateService(Action<string> debugLog, Action<Action> scheduleDeferred)
+	internal BeautifyEditorStateService(
+		Action<string> debugLog,
+		Action scheduleDeferredEditorViewStateRestore
+	)
 	{
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
-		_scheduleDeferred =
-			scheduleDeferred ?? throw new ArgumentNullException(nameof(scheduleDeferred));
+		_scheduleDeferredEditorViewStateRestore =
+			scheduleDeferredEditorViewStateRestore
+			?? throw new ArgumentNullException(nameof(scheduleDeferredEditorViewStateRestore));
 	}
 
 	internal bool TryAutosaveOpenEditorIfNeeded(
@@ -241,7 +245,7 @@ internal sealed class BeautifyEditorStateService
 			_pendingEditorViewStateRestorePasses,
 			2
 		);
-		_scheduleDeferred(RestorePendingEditorViewStates);
+		_scheduleDeferredEditorViewStateRestore();
 	}
 
 	internal void RestoreOpenEditorAfterFailedWrite(
@@ -275,7 +279,7 @@ internal sealed class BeautifyEditorStateService
 			: detail.Replace('\r', ' ').Replace('\n', ' ').Trim();
 	}
 
-	private void RestorePendingEditorViewStates()
+	internal void ApplyPendingEditorViewStateRestorePass()
 	{
 		if (_pendingEditorViewStates.Count == 0)
 		{
@@ -292,7 +296,7 @@ internal sealed class BeautifyEditorStateService
 
 		if (_pendingEditorViewStateRestorePasses > 0)
 		{
-			_scheduleDeferred(RestorePendingEditorViewStates);
+			_scheduleDeferredEditorViewStateRestore();
 			return;
 		}
 

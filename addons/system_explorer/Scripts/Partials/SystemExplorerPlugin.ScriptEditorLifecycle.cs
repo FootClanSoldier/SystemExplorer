@@ -2,6 +2,7 @@
 using Godot;
 using System;
 using System.Runtime.Loader;
+using SystemExplorer.Autocomplete;
 using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
@@ -289,9 +290,97 @@ public partial class SystemExplorerPlugin
 	)
 	{
 		string observedPath = ScriptPathUtility.Normalize(observedScriptPath);
+		if (
+			TryHandleCreateScriptExternalMutationLifecycleObservation(
+				observedPath,
+				out ScriptEditorTransition protectedTransition
+			)
+		)
+		{
+			return protectedTransition;
+		}
+
 		ScriptEditorTransitionUpdate update =
 			ScriptEditorLifecycleCoordinator.ObserveScriptChange(observedPath);
 		return update.Transition;
+	}
+
+	private bool TryHandleCreateScriptExternalMutationLifecycleObservation(
+		string normalizedObservedPath,
+		out ScriptEditorTransition transition
+	)
+	{
+		transition = default;
+		if (
+			!IsAutocompleteExternalMutationActive
+			|| _autocompleteExternalMutationOrigin
+				!= AutocompleteExternalMutationOrigin.CreateScript
+		)
+		{
+			return false;
+		}
+
+		ScriptEditorLifecycleCoordinator coordinator = ScriptEditorLifecycleCoordinator;
+		ScriptEditorLifecycleSnapshot snapshot = coordinator.Snapshot;
+		coordinator.TryGetCurrentTransition(out transition);
+		if (
+			snapshot.ScriptTransitionId <= 0
+			|| snapshot.TransitionOrigin
+				!= ScriptEditorTransitionOrigin.SystemExplorerNavigation
+		)
+		{
+			return true;
+		}
+
+		string normalizedExpectedPath = ScriptPathUtility.Normalize(
+			snapshot.ExpectedScriptPath
+		);
+
+		bool exactExpectedTarget =
+			!string.IsNullOrWhiteSpace(normalizedExpectedPath)
+			&& !string.IsNullOrWhiteSpace(normalizedObservedPath)
+			&& string.Equals(
+				normalizedExpectedPath,
+				normalizedObservedPath,
+				StringComparison.OrdinalIgnoreCase
+			);
+		if (!exactExpectedTarget)
+			return true;
+
+		if (snapshot.State == ScriptEditorLifecycleState.ScriptTransitionPending)
+		{
+			if (
+				coordinator.TryObserveExpectedSystemExplorerTransition(
+					snapshot.ScriptTransitionId,
+					normalizedObservedPath,
+					out ScriptEditorTransitionUpdate update
+				)
+			)
+			{
+				transition = update.Transition;
+			}
+
+			return true;
+		}
+
+		if (snapshot.State == ScriptEditorLifecycleState.BindingPending)
+		{
+			string authoritativePath = !string.IsNullOrWhiteSpace(snapshot.ObservedScriptPath)
+				? snapshot.ObservedScriptPath
+				: snapshot.ExpectedScriptPath;
+			if (
+				!string.Equals(
+					ScriptPathUtility.Normalize(authoritativePath),
+					normalizedExpectedPath,
+					StringComparison.OrdinalIgnoreCase
+				)
+			)
+			{
+				return true;
+			}
+		}
+
+		return true;
 	}
 
 	private void ObservePolledScriptEditorLifecyclePathIfChanged(

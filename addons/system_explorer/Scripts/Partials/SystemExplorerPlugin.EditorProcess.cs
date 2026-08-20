@@ -16,6 +16,15 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
+			ProcessPendingContextMenuOpen();
+		}
+		catch
+		{
+			InvalidateContextMenuOpenRequest("ProcessException");
+		}
+
+		try
+		{
 			ProcessAutocompleteReloadStabilization();
 		}
 		catch
@@ -24,10 +33,19 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
-			ProcessAutocompleteScriptTransitionStabilization();
+			ProcessAutocompleteScriptTransitionStabilization(delta);
 		}
 		catch
 		{
+		}
+
+		try
+		{
+			ProcessPendingAutocompleteIndexingQuiescence(delta);
+		}
+		catch
+		{
+			ClearPendingAutocompleteIndexingQuiescenceProcessWork();
 		}
 
 		try
@@ -65,8 +83,10 @@ public partial class SystemExplorerPlugin
 		TrySetEditorPluginProcessing(
 			busyCursorNeedsProcessing
 				|| HasPendingPersistentTreeStateProcessWork()
+				|| HasPendingContextMenuOpenProcessWork()
 				|| HasPendingAutocompleteReloadStabilizationProcessWork()
 				|| HasPendingAutocompleteScriptTransitionStabilizationProcessWork()
+				|| HasPendingAutocompleteIndexingQuiescenceProcessWork()
 				|| HasPendingAutocompleteProcessWork()
 		);
 	}

@@ -53,14 +53,16 @@ internal sealed class AutocompleteCompletionSession
 		if (currentRequest == null || currentRequest.Prefix == null)
 			return false;
 
-		return _kind == currentRequest.Kind
-			&& _caretLine == currentRequest.CaretLine
-			&& _prefixStartColumn == currentRequest.PrefixStartColumn
-			&& string.Equals(
-				_scriptPath,
-				ScriptPathUtility.Normalize(currentRequest.ScriptPath),
-				StringComparison.OrdinalIgnoreCase
-			);
+		return AutocompleteCompletionAnchorPolicy.BelongsToSameAnchor(
+			_scriptPath,
+			_kind,
+			_caretLine,
+			_prefixStartColumn,
+			currentRequest.ScriptPath,
+			currentRequest.Kind,
+			currentRequest.CaretLine,
+			currentRequest.PrefixStartColumn
+		);
 	}
 
 	internal bool HasAvailableMatch(AutocompleteRequestContext currentRequest)

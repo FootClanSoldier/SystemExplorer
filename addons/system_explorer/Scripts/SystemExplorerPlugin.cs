@@ -437,6 +437,8 @@ public sealed class {{CLASS_NAME}}
 	{
 		TryLogEditorOperation("Exit Tree");
 		ResetTreeMouseScriptClickIntent();
+		InvalidateContextMenuOpenRequest("ExitTree");
+		InvalidateFileManagerOpenRequest("ExitTree");
 		ShutdownEditorOperationLifecycle();
 		FlushAndShutdownTreeStatePersistence();
 

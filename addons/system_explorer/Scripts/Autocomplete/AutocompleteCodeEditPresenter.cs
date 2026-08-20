@@ -2,13 +2,14 @@
 using Godot;
 using System;
 using System.Collections.Generic;
-using SystemExplorer.Autocomplete.Confirmation;
 
 namespace SystemExplorer.Autocomplete;
 
 internal readonly record struct AutocompleteCompletionDiagnosticContext(
 	long RequestTransactionId,
+	long ParentRequestDispatchMutationTransactionId,
 	long MutationTransactionId,
+	long PublicationId,
 	long RequestObservationSequence,
 	long ScriptTransitionId,
 	long BindingEpoch,
@@ -19,12 +20,15 @@ internal readonly record struct AutocompleteCompletionDiagnosticContext(
 {
 	internal static AutocompleteCompletionDiagnosticContext FromRequestLease(
 		AutocompleteCompletionRequestLease requestLease,
-		long mutationTransactionId = 0
+		long mutationTransactionId = 0,
+		long publicationId = 0
 	)
 	{
 		return new AutocompleteCompletionDiagnosticContext(
 			requestLease.TransactionId,
+			requestLease.ParentRequestDispatchMutationTransactionId,
 			mutationTransactionId,
+			publicationId,
 			requestLease.RequestObservationSequence,
 			requestLease.BindingLease.ScriptTransitionId,
 			requestLease.BindingLease.BindingEpoch,
@@ -39,22 +43,25 @@ internal sealed class AutocompleteCodeEditPresenter
 {
 	private const string VisualRightPadding = "  ";
 
-	private readonly AutocompleteCompletionOptionMetadataCodec _metadataCodec;
+	private readonly AutocompleteCompletionPublicationEnvelopeCodec _publicationEnvelopeCodec;
 	private readonly Action<string, string> _debugLog;
 
 	internal AutocompleteCodeEditPresenter(
-		AutocompleteCompletionOptionMetadataCodec metadataCodec,
+		AutocompleteCompletionPublicationEnvelopeCodec publicationEnvelopeCodec,
 		Action<string, string> debugLog
 	)
 	{
-		_metadataCodec =
-			metadataCodec ?? throw new ArgumentNullException(nameof(metadataCodec));
+		_publicationEnvelopeCodec =
+			publicationEnvelopeCodec
+			?? throw new ArgumentNullException(nameof(publicationEnvelopeCodec));
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
 	}
 
 	internal void Publish(
 		CodeEdit codeEdit,
 		IReadOnlyList<AutocompleteCompletionItem> items,
+		long publicationId,
+		bool resetSelectedIndexToFirst,
 		AutocompleteCompletionDiagnosticContext diagnosticContext
 	)
 	{
@@ -62,11 +69,14 @@ internal sealed class AutocompleteCodeEditPresenter
 			throw new ArgumentException("A valid CodeEdit is required.", nameof(codeEdit));
 		if (items == null)
 			throw new ArgumentNullException(nameof(items));
+		if (publicationId <= 0)
+			throw new ArgumentOutOfRangeException(nameof(publicationId));
 
 		LogPublicationBoundary(
 			"C# autocomplete publish begin",
 			diagnosticContext,
-			items.Count
+			items.Count,
+			resetSelectedIndexToFirst
 		);
 
 		foreach (AutocompleteCompletionItem item in items)
@@ -75,21 +85,11 @@ internal sealed class AutocompleteCodeEditPresenter
 				continue;
 
 			string displayText = (item.DisplayText ?? "") + VisualRightPadding;
-
-			if (item.Metadata == null)
-			{
-				codeEdit.AddCodeCompletionOption(
-					item.Kind,
-					displayText,
-					item.InsertText ?? ""
-				);
-				continue;
-			}
-
-			Godot.Collections.Dictionary metadataValue = _metadataCodec.Encode(
+			Godot.Collections.Dictionary envelope = _publicationEnvelopeCodec.Encode(
+				publicationId,
 				item.Metadata
 			);
-			Variant encodedValue = metadataValue;
+			Variant encodedValue = envelope;
 
 			codeEdit.AddCodeCompletionOption(
 				item.Kind,
@@ -102,31 +102,39 @@ internal sealed class AutocompleteCodeEditPresenter
 		}
 
 		codeEdit.UpdateCodeCompletionOptions(true);
+		if (resetSelectedIndexToFirst)
+			codeEdit.SetCodeCompletionSelectedIndex(0);
+
 		LogPublicationBoundary(
 			"C# autocomplete publish returned",
 			diagnosticContext,
-			items.Count
+			items.Count,
+			resetSelectedIndexToFirst
 		);
 	}
 
 	private void LogPublicationBoundary(
 		string operation,
 		AutocompleteCompletionDiagnosticContext diagnosticContext,
-		int itemCount
+		int itemCount,
+		bool resetSelectedIndexToFirst
 	)
 	{
 		try
 		{
 			string details =
 				$"RequestTransactionId='{diagnosticContext.RequestTransactionId}', "
+				+ $"ParentRequestDispatchMutationTransactionId='{diagnosticContext.ParentRequestDispatchMutationTransactionId}', "
 				+ $"MutationTransactionId='{diagnosticContext.MutationTransactionId}', "
+				+ $"PublicationId='{diagnosticContext.PublicationId}', "
 				+ $"RequestObservationSequence='{diagnosticContext.RequestObservationSequence}', "
 				+ $"ScriptTransitionId='{diagnosticContext.ScriptTransitionId}', "
 				+ $"BindingEpoch='{diagnosticContext.BindingEpoch}', "
 				+ $"ReloadReadyEpoch='{diagnosticContext.ReloadReadyEpoch}', "
 				+ $"CodeEditInstanceId='{diagnosticContext.CodeEditInstanceId}', "
 				+ $"ScriptPath='{diagnosticContext.ScriptPath ?? ""}', "
-				+ $"ItemCount='{itemCount}'";
+				+ $"ItemCount='{itemCount}', "
+				+ $"ResetSelectedIndexToFirst='{resetSelectedIndexToFirst}'";
 
 			_debugLog(operation ?? "", details);
 		}

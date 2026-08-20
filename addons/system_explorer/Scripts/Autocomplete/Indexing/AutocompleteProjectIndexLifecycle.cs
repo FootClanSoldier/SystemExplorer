@@ -16,6 +16,7 @@ internal sealed class AutocompleteProjectIndexLifecycle
 	private readonly Action<GodotObject, StringName, string, string> _disconnectPluginSignal;
 	private readonly string _filesystemChangedMethodName;
 	private readonly CSharpProjectIndexCoordinator _coordinator;
+	private readonly Action<string> _requestRefreshAdmission;
 	private readonly Action<string, string> _debugLog;
 
 	private EditorFileSystem _editorFileSystem;
@@ -29,6 +30,7 @@ internal sealed class AutocompleteProjectIndexLifecycle
 		Action<GodotObject, StringName, string, string> disconnectPluginSignal,
 		string filesystemChangedMethodName,
 		CSharpProjectIndexCoordinator coordinator,
+		Action<string> requestRefreshAdmission,
 		Action<string, string> debugLog
 	)
 	{
@@ -47,6 +49,9 @@ internal sealed class AutocompleteProjectIndexLifecycle
 			filesystemChangedMethodName
 			?? throw new ArgumentNullException(nameof(filesystemChangedMethodName));
 		_coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
+		_requestRefreshAdmission =
+			requestRefreshAdmission
+			?? throw new ArgumentNullException(nameof(requestRefreshAdmission));
 		_debugLog = debugLog ?? throw new ArgumentNullException(nameof(debugLog));
 	}
 
@@ -60,7 +65,7 @@ internal sealed class AutocompleteProjectIndexLifecycle
 		if (!_initialRefreshRequested)
 		{
 			_initialRefreshRequested = true;
-			RequestRefresh("Initial project index");
+			RequestRefreshAdmission("Initial project index");
 		}
 
 		return signalConnected;
@@ -72,7 +77,7 @@ internal sealed class AutocompleteProjectIndexLifecycle
 			return;
 
 		EnsureLifecycleCurrent();
-		RequestRefresh("EditorFileSystem.FilesystemChanged");
+		RequestRefreshAdmission("EditorFileSystem.FilesystemChanged");
 	}
 
 	internal void ResetTransientState()
@@ -140,8 +145,16 @@ internal sealed class AutocompleteProjectIndexLifecycle
 		);
 	}
 
-	private void RequestRefresh(string reason)
+	private void RequestRefreshAdmission(string reason)
 	{
+		_requestRefreshAdmission(reason ?? "");
+	}
+
+	internal void ExecuteRefresh(string reason)
+	{
+		if (_shutdown)
+			return;
+
 		string globalProjectRoot = "";
 		string cachePath = "";
 

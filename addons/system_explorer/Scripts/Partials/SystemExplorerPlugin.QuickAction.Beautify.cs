@@ -43,13 +43,56 @@ public partial class SystemExplorerPlugin
 	private BeautifyEditorStateService BeautifyEditorState =>
 		_beautifyEditorStateService ??= new BeautifyEditorStateService(
 			DebugPrintBeautify,
-			ScheduleBeautifyDeferred
+			ScheduleBeautifyEditorViewStateRestorePass
 		);
 
-	private void ScheduleBeautifyDeferred(Action callback)
+	private void ScheduleBeautifyEditorViewStateRestorePass()
 	{
-		if (_editorOperationShutdownStarted || callback == null || !GodotObject.IsInstanceValid(this) || !IsInsideTree()) return;
-		Callable.From(callback).CallDeferred();
+		if (
+			_editorOperationShutdownStarted
+			|| !GodotObject.IsInstanceValid(this)
+			|| !IsInsideTree()
+		)
+		{
+			return;
+		}
+
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(ApplyBeautifyEditorViewStateRestorePassDeferred),
+			scheduledManagedAssemblyGeneration
+		);
+	}
+
+	private void ApplyBeautifyEditorViewStateRestorePassDeferred(
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (
+			_editorOperationShutdownStarted
+			|| !GodotObject.IsInstanceValid(this)
+			|| !IsInsideTree()
+		)
+		{
+			return;
+		}
+
+		BeautifyEditorStateService editorStateService = _beautifyEditorStateService;
+		if (editorStateService == null)
+			return;
+
+		editorStateService.ApplyPendingEditorViewStateRestorePass();
 	}
 
 	private void SetBeautifyingScript(

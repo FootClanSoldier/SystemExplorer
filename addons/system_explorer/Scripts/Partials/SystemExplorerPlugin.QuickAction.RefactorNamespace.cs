@@ -3,6 +3,7 @@ using Godot;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using SystemExplorer.Autocomplete;
 using SystemExplorer.EditorIntegration.Operations;
 using SystemExplorer.QuickActions.RefactorNamespace;
 
@@ -232,14 +233,24 @@ public partial class SystemExplorerPlugin
 		if (!IsEditorOperationAccessValid(operation))
 			return;
 
-		long quiescenceToken = BeginNamespaceRefactorAutocompleteQuiescence(
-			operation.OperationName
-		);
+		if (
+			!TryBeginAutocompleteExternalMutation(
+				AutocompleteExternalMutationOrigin.NamespaceRefactor,
+				operation.OperationName,
+				out long externalMutationOperationToken
+			)
+		)
+		{
+			throw new InvalidOperationException(
+				$"{operation.OperationName} could not acquire autocomplete ExternalMutationLease authority."
+			);
+		}
+
 		try
 		{
 			LogNamespaceRefactorForegroundBoundary(
 				"BeforeProcessFrameAwait",
-				quiescenceToken
+				externalMutationOperationToken
 			);
 
 			SceneTree tree = GetTree();
@@ -251,7 +262,7 @@ public partial class SystemExplorerPlugin
 
 			LogNamespaceRefactorForegroundBoundary(
 				"AfterProcessFrameAwait",
-				quiescenceToken
+				externalMutationOperationToken
 			);
 
 			operation.CancellationToken.ThrowIfCancellationRequested();
@@ -263,19 +274,232 @@ public partial class SystemExplorerPlugin
 		}
 		finally
 		{
-			ScheduleNamespaceRefactorAutocompleteQuiescenceRelease(quiescenceToken);
+			ScheduleAutocompleteExternalMutationRelease(externalMutationOperationToken);
 		}
 	}
 
 	private void LogNamespaceRefactorForegroundBoundary(
 		string phase,
-		long quiescenceToken
+		long externalMutationOperationToken
 	)
 	{
 		DebugLogger.LogPersistentFileOnlyOperation(
 			"Namespace Refactor foreground boundary",
-			$"Phase='{phase}', QuiescenceActive='{_namespaceRefactorAutocompleteQuiescenceActive}', QuiescenceToken='{quiescenceToken}'"
+			$"Phase='{phase}', ExternalMutationActive='{IsAutocompleteExternalMutationActive}', OperationToken='{externalMutationOperationToken}', MutationTransactionId='{_autocompleteExternalMutationLease?.MutationTransactionId ?? 0}', Origin='{_autocompleteExternalMutationOrigin}'"
 		);
+	}
+
+	private void ScheduleNamespaceRefactorIncompleteWriteReportPresentationDeferred()
+	{
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(ApplyNamespaceRefactorIncompleteWriteReportPresentationDeferred),
+			scheduledManagedAssemblyGeneration
+		);
+	}
+
+	private void ApplyNamespaceRefactorIncompleteWriteReportPresentationDeferred(
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (!IsNamespaceRefactorDeferredPluginBoundaryAvailable())
+			return;
+
+		NamespaceRefactorPluginHost host = _namespaceRefactorHost;
+		if (host == null)
+			return;
+
+		host.PresentIncompleteWriteReportDeferred();
+	}
+
+	private void ScheduleNamespaceRefactorConfiguredDialogSizeCorrectionDeferred()
+	{
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(ApplyNamespaceRefactorConfiguredDialogSizeCorrectionDeferred),
+			scheduledManagedAssemblyGeneration
+		);
+	}
+
+	private void ApplyNamespaceRefactorConfiguredDialogSizeCorrectionDeferred(
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (!IsNamespaceRefactorDeferredPluginBoundaryAvailable())
+			return;
+
+		NamespaceRefactorPluginHost host = _namespaceRefactorHost;
+		if (host == null)
+			return;
+
+		host.ApplyConfiguredDialogSizeCorrectionDeferred();
+	}
+
+	private void ScheduleNamespaceRefactorDeferredBufferRefreshDispatch(long requestToken)
+	{
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(ApplyNamespaceRefactorDeferredBufferRefreshDispatch),
+			scheduledManagedAssemblyGeneration,
+			requestToken
+		);
+	}
+
+	private void ApplyNamespaceRefactorDeferredBufferRefreshDispatch(
+		string scheduledManagedAssemblyGeneration,
+		long requestToken
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (!IsNamespaceRefactorDeferredPluginBoundaryAvailable())
+			return;
+
+		NamespaceRefactorPluginHost host = _namespaceRefactorHost;
+		if (host == null)
+			return;
+
+		host.ApplyDeferredBufferRefresh(requestToken);
+	}
+
+	private void ScheduleNamespaceRefactorTargetScriptRestorationDeferred(string scriptPath)
+	{
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(ApplyNamespaceRefactorTargetScriptRestorationDeferred),
+			scheduledManagedAssemblyGeneration,
+			scriptPath ?? ""
+		);
+	}
+
+	private void ApplyNamespaceRefactorTargetScriptRestorationDeferred(
+		string scheduledManagedAssemblyGeneration,
+		string scriptPath
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (!IsNamespaceRefactorDeferredPluginBoundaryAvailable())
+			return;
+
+		NamespaceRefactorPluginHost host = _namespaceRefactorHost;
+		if (host == null)
+			return;
+
+		host.RestoreTargetScriptEditorDeferred(scriptPath);
+	}
+
+	private void ScheduleNamespaceRefactorSelectionSyncDeferred()
+	{
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(ApplyNamespaceRefactorSelectionSyncDeferred),
+			scheduledManagedAssemblyGeneration
+		);
+	}
+
+	private void ApplyNamespaceRefactorSelectionSyncDeferred(
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (!IsNamespaceRefactorDeferredPluginBoundaryAvailable())
+			return;
+
+		if (_namespaceRefactorHost == null)
+			return;
+
+		SyncSelectionToActiveScriptAfterOperation();
+	}
+
+	private void ScheduleNamespaceRefactorTreeFocusReleaseDeferred()
+	{
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(ApplyNamespaceRefactorTreeFocusReleaseDeferred),
+			scheduledManagedAssemblyGeneration
+		);
+	}
+
+	private void ApplyNamespaceRefactorTreeFocusReleaseDeferred(
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (!IsNamespaceRefactorDeferredPluginBoundaryAvailable())
+			return;
+
+		if (_namespaceRefactorHost == null)
+			return;
+
+		ReleaseTreeFocusAfterNavigation();
+	}
+
+	private bool IsNamespaceRefactorDeferredPluginBoundaryAvailable()
+	{
+		return !_editorOperationShutdownStarted
+			&& GodotObject.IsInstanceValid(this)
+			&& IsInsideTree();
 	}
 
 	private NamespaceRefactorPluginHost CreateNamespaceRefactorHost()
@@ -313,7 +537,12 @@ public partial class SystemExplorerPlugin
 			BeginBatchScriptEditorContextPreservation,
 			EndBatchScriptEditorContextPreservation,
 			SyncSelectionToActiveScriptAfterOperation,
-			ReleaseTreeFocusAfterNavigation
+			ScheduleNamespaceRefactorIncompleteWriteReportPresentationDeferred,
+			ScheduleNamespaceRefactorConfiguredDialogSizeCorrectionDeferred,
+			ScheduleNamespaceRefactorDeferredBufferRefreshDispatch,
+			ScheduleNamespaceRefactorTargetScriptRestorationDeferred,
+			ScheduleNamespaceRefactorSelectionSyncDeferred,
+			ScheduleNamespaceRefactorTreeFocusReleaseDeferred
 		);
 	}
 

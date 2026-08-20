@@ -9,6 +9,7 @@ public partial class SystemExplorerPlugin
 		None,
 		ItemSelected,
 		MouseRelease,
+		RightPress,
 	}
 
 	private bool _treeMouseScriptClickIntentActive;
@@ -16,6 +17,7 @@ public partial class SystemExplorerPlugin
 	private bool _treeMouseScriptClickReleaseObserved;
 	private long _treeMouseScriptClickToken;
 	private string _treeMouseScriptClickPressedMetadata = "";
+	private MouseButton _treeMouseScriptClickButton;
 	private TreeMouseScriptActivationOwner _treeMouseScriptClickOwner;
 	private bool _treeMouseScriptClickFiltering;
 
@@ -24,18 +26,28 @@ public partial class SystemExplorerPlugin
 		if (
 			inputEvent is not InputEventMouseButton mouseButton
 			|| !mouseButton.Pressed
-			|| mouseButton.ButtonIndex != MouseButton.Left
+			|| (
+				mouseButton.ButtonIndex != MouseButton.Left
+				&& mouseButton.ButtonIndex != MouseButton.Right
+			)
 		)
 		{
 			return;
 		}
 
-		// Every physical left press starts a new gesture boundary. Only an ordinary
-		// script press inside the live Tree is eligible for pre-GUI ownership state.
+		// Every physical left/right press starts a new gesture boundary. Only an
+		// ordinary script press inside the live Tree is eligible for pre-GUI
+		// ownership state. Left keeps its existing double-click/Shift exclusions;
+		// right press keeps the context-menu semantics independent of those rules.
 		ResetTreeMouseScriptClickIntent();
 
-		if (mouseButton.DoubleClick || IsShiftPressed(mouseButton))
+		if (
+			mouseButton.ButtonIndex == MouseButton.Left
+			&& (mouseButton.DoubleClick || IsShiftPressed(mouseButton))
+		)
+		{
 			return;
+		}
 
 		if (
 			_tree == null
@@ -72,6 +84,7 @@ public partial class SystemExplorerPlugin
 
 		StartTreeMouseScriptClickIntent(
 			pressedMetadata,
+			mouseButton.ButtonIndex,
 			_isFilteringScripts,
 			pressObservedByTreeInput: false,
 			owner: TreeMouseScriptActivationOwner.None
@@ -145,7 +158,11 @@ public partial class SystemExplorerPlugin
 
 				if (mouseButton.Pressed)
 				{
-					BeginOrAdoptTreeMouseScriptClickIntent(item, filtering: true);
+					BeginOrAdoptTreeMouseScriptClickIntent(
+						item,
+						MouseButton.Left,
+						filtering: true
+					);
 					return;
 				}
 
@@ -234,7 +251,11 @@ public partial class SystemExplorerPlugin
 				_leftMousePressPosition = mousePosition;
 				_leftMousePressedMetadata = _draggedMetadata;
 				_leftMousePressedOnSelectedScript = IsSelectedScriptOrSceneItem(item);
-				BeginOrAdoptTreeMouseScriptClickIntent(item, filtering: false);
+				BeginOrAdoptTreeMouseScriptClickIntent(
+					item,
+					MouseButton.Left,
+					filtering: false
+				);
 			}
 			else
 			{
@@ -286,27 +307,79 @@ public partial class SystemExplorerPlugin
 		if (!mouseButton.Pressed || mouseButton.ButtonIndex != MouseButton.Right)
 			return;
 
-		ResetTreeMouseScriptClickIntent();
-
 		if (item == null)
+		{
+			ResetTreeMouseScriptClickIntent();
 			return;
+		}
 
 		if (_isFilteringScripts)
 		{
 			if (!IsScriptOrSceneItem(item))
+			{
+				ResetTreeMouseScriptClickIntent();
 				return;
+			}
+
+			if (IsScriptItem(item))
+			{
+				BeginOrAdoptTreeMouseScriptClickIntent(
+					item,
+					MouseButton.Right,
+					filtering: true
+				);
+			}
+			else
+			{
+				ResetTreeMouseScriptClickIntent();
+			}
 
 			item.Select(0);
 
 			string filteredScriptMetadata = item.GetMetadata(0).AsString();
 			_selectedScriptEntryFromFilter = GetEntryFromMetadata(filteredScriptMetadata);
+
+			if (
+				IsScriptItem(item)
+				&& TryClaimTreeMouseScriptActivationFromRightPress(item)
+			)
+			{
+				InvalidateDeferredTreeKeyboardNavigationScriptActivationForNonBurstTakeover();
+				OpenScriptFromTreeItem(item);
+			}
+
 			OpenContextMenuForTreeItem(item);
 			_tree.AcceptEvent();
 			return;
 		}
 
+		if (IsScriptItem(item))
+		{
+			BeginOrAdoptTreeMouseScriptClickIntent(
+				item,
+				MouseButton.Right,
+				filtering: false
+			);
+		}
+		else
+		{
+			ResetTreeMouseScriptClickIntent();
+		}
+
 		item.Select(0);
+
+		if (
+			IsScriptItem(item)
+			&& TryClaimTreeMouseScriptActivationFromRightPress(item)
+		)
+		{
+			InvalidateDeferredTreeKeyboardNavigationScriptActivationForNonBurstTakeover();
+			OpenScriptFromTreeItem(item);
+		}
+
 		OpenContextMenuForTreeItem(item);
+		_tree.AcceptEvent();
+		return;
 	}
 
 	private bool TrySuppressFilteredTreeScriptReleaseRetarget(TreeItem releaseItem)
@@ -348,6 +421,7 @@ public partial class SystemExplorerPlugin
 
 	private void BeginOrAdoptTreeMouseScriptClickIntent(
 		TreeItem item,
+		MouseButton button,
 		bool filtering
 	)
 	{
@@ -366,6 +440,7 @@ public partial class SystemExplorerPlugin
 			_treeMouseScriptClickIntentActive
 			&& !_treeMouseScriptClickPressObservedByTreeInput
 			&& !_treeMouseScriptClickReleaseObserved
+			&& _treeMouseScriptClickButton == button
 			&& string.Equals(
 				_treeMouseScriptClickPressedMetadata,
 				pressedMetadata,
@@ -379,6 +454,7 @@ public partial class SystemExplorerPlugin
 
 		StartTreeMouseScriptClickIntent(
 			pressedMetadata,
+			button,
 			filtering,
 			pressObservedByTreeInput: true,
 			owner: TreeMouseScriptActivationOwner.None
@@ -455,6 +531,7 @@ public partial class SystemExplorerPlugin
 
 		if (
 			!_treeMouseScriptClickIntentActive
+			|| _treeMouseScriptClickButton != MouseButton.Left
 			|| !string.Equals(
 				_treeMouseScriptClickPressedMetadata,
 				releaseMetadata,
@@ -484,8 +561,52 @@ public partial class SystemExplorerPlugin
 		return false;
 	}
 
+	private bool TryClaimTreeMouseScriptActivationFromRightPress(TreeItem item)
+	{
+		string pressedMetadata =
+			item != null && GodotObject.IsInstanceValid(item)
+				? item.GetMetadata(0).AsString()
+				: "";
+
+		if (!pressedMetadata.StartsWith("script::", System.StringComparison.Ordinal))
+		{
+			ResetTreeMouseScriptClickIntent();
+			return false;
+		}
+
+		if (
+			!_treeMouseScriptClickIntentActive
+			|| _treeMouseScriptClickButton != MouseButton.Right
+			|| !string.Equals(
+				_treeMouseScriptClickPressedMetadata,
+				pressedMetadata,
+				System.StringComparison.Ordinal
+			)
+		)
+		{
+			ResetTreeMouseScriptClickIntent();
+			return false;
+		}
+
+		if (_treeMouseScriptClickOwner == TreeMouseScriptActivationOwner.None)
+		{
+			_treeMouseScriptClickOwner = TreeMouseScriptActivationOwner.RightPress;
+			LogTreeMouseScriptActivationClaimed(
+				TreeMouseScriptActivationOwner.RightPress
+			);
+			return true;
+		}
+
+		LogTreeMouseDuplicateScriptActivationSuppressed(
+			_treeMouseScriptClickOwner,
+			TreeMouseScriptActivationOwner.RightPress
+		);
+		return false;
+	}
+
 	private void StartTreeMouseScriptClickIntent(
 		string pressedMetadata,
+		MouseButton button,
 		bool filtering,
 		bool pressObservedByTreeInput,
 		TreeMouseScriptActivationOwner owner
@@ -496,6 +617,7 @@ public partial class SystemExplorerPlugin
 		_treeMouseScriptClickPressObservedByTreeInput = pressObservedByTreeInput;
 		_treeMouseScriptClickReleaseObserved = false;
 		_treeMouseScriptClickPressedMetadata = pressedMetadata ?? "";
+		_treeMouseScriptClickButton = button;
 		_treeMouseScriptClickOwner = owner;
 		_treeMouseScriptClickFiltering = filtering;
 	}
@@ -519,6 +641,7 @@ public partial class SystemExplorerPlugin
 		_treeMouseScriptClickPressObservedByTreeInput = false;
 		_treeMouseScriptClickReleaseObserved = false;
 		_treeMouseScriptClickPressedMetadata = "";
+		_treeMouseScriptClickButton = MouseButton.None;
 		_treeMouseScriptClickOwner = TreeMouseScriptActivationOwner.None;
 		_treeMouseScriptClickFiltering = false;
 	}
@@ -530,7 +653,7 @@ public partial class SystemExplorerPlugin
 	{
 		DebugLogger.LogOperation(
 			operation,
-			$"ClickToken='{_treeMouseScriptClickToken}', Source='{source}', Metadata='{_treeMouseScriptClickPressedMetadata}', Filtering='{_treeMouseScriptClickFiltering}'"
+			$"ClickToken='{_treeMouseScriptClickToken}', Source='{source}', Button='{_treeMouseScriptClickButton}', Metadata='{_treeMouseScriptClickPressedMetadata}', Filtering='{_treeMouseScriptClickFiltering}'"
 		);
 	}
 
@@ -540,7 +663,7 @@ public partial class SystemExplorerPlugin
 	{
 		DebugLogger.LogOperation(
 			"Tree mouse script activation claimed",
-			$"ClickToken='{_treeMouseScriptClickToken}', Owner='{owner}', Metadata='{_treeMouseScriptClickPressedMetadata}', Filtering='{_treeMouseScriptClickFiltering}'"
+			$"ClickToken='{_treeMouseScriptClickToken}', Owner='{owner}', Button='{_treeMouseScriptClickButton}', Metadata='{_treeMouseScriptClickPressedMetadata}', Filtering='{_treeMouseScriptClickFiltering}'"
 		);
 	}
 
@@ -551,7 +674,7 @@ public partial class SystemExplorerPlugin
 	{
 		DebugLogger.LogOperation(
 			"Tree mouse duplicate script activation suppressed",
-			$"ClickToken='{_treeMouseScriptClickToken}', ExistingOwner='{existingOwner}', SuppressedOwner='{suppressedOwner}', Metadata='{_treeMouseScriptClickPressedMetadata}', Filtering='{_treeMouseScriptClickFiltering}'"
+			$"ClickToken='{_treeMouseScriptClickToken}', ExistingOwner='{existingOwner}', SuppressedOwner='{suppressedOwner}', Button='{_treeMouseScriptClickButton}', Metadata='{_treeMouseScriptClickPressedMetadata}', Filtering='{_treeMouseScriptClickFiltering}'"
 		);
 	}
 

@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using SystemExplorer.Autocomplete;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
 {
@@ -592,12 +594,27 @@ public partial class SystemExplorerPlugin
 			});
 	}
 
-	private AddTreeMutationResult AddScriptToSelectedTreeLocation(string path)
+	private AddTreeMutationResult AddScriptToTreeLocation(
+		string path,
+		string systemName,
+		string folderPath
+	)
 	{
-		return AddScriptsToSelectedTreeLocation(new[] { path });
+		return AddScriptsToTreeLocation(new[] { path }, systemName, folderPath);
 	}
 
 	private AddTreeMutationResult AddScriptsToSelectedTreeLocation(IEnumerable<string> paths)
+	{
+		string systemName = GetSelectedSystemName();
+		string folderPath = GetSelectedFolderPath();
+		return AddScriptsToTreeLocation(paths, systemName, folderPath);
+	}
+
+	private AddTreeMutationResult AddScriptsToTreeLocation(
+		IEnumerable<string> paths,
+		string systemName,
+		string folderPath
+	)
 	{
 		List<string> scriptPaths = paths
 			.Where(path => !string.IsNullOrWhiteSpace(path))
@@ -623,9 +640,6 @@ public partial class SystemExplorerPlugin
 			);
 			return AddTreeMutationResult.Failed;
 		}
-
-		string systemName = GetSelectedSystemName();
-		string folderPath = GetSelectedFolderPath();
 
 		DebugLogger.LogOperation(
 			"Add Script Target",
@@ -968,16 +982,182 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (string.IsNullOrWhiteSpace(GetSelectedSystemName()))
+		string targetSystemName = GetSelectedSystemName();
+		if (string.IsNullOrWhiteSpace(targetSystemName))
 		{
 			GD.PushWarning("Select a system or folder before creating a script.");
 			DebugLogger.LogOperation("Create Script cancelled: no selected destination", path);
 			return;
 		}
 
-		string targetSystemName = GetSelectedSystemName();
 		string targetFolderPath = GetSelectedFolderPath();
+		const string operationName = "Create Script";
+		if (
+			!TryBeginAutocompleteExternalMutation(
+				AutocompleteExternalMutationOrigin.CreateScript,
+				operationName,
+				out long operationToken
+			)
+		)
+		{
+			QueueStandaloneTreeOperationDialog(
+				"Create Script Failed",
+				"System Explorer could not safely begin the Create Script operation because another editor mutation was still active.\n\nNo script file was created. Try again after the current editor operation finishes.",
+				$"Path='{path}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
 
+		RestartAutocompleteScriptTransitionStabilizationForExternalMutationBarrier();
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		try
+		{
+			CallDeferred(
+				nameof(ApplyCreateScriptExternalMutationDeferred),
+				path,
+				targetSystemName,
+				targetFolderPath,
+				operationToken,
+				scheduledManagedAssemblyGeneration
+			);
+		}
+		catch (Exception exception)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Create Script external mutation scheduling failed",
+				$"OperationToken='{operationToken}', Path='{path}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Exception='{exception}'"
+			);
+			try
+			{
+				QueueStandaloneTreeOperationDialog(
+					"Create Script Failed",
+					"System Explorer could not safely schedule the Create Script operation.\n\nNo script file was created. Try again.",
+					$"Path='{path}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', ExceptionType='{exception.GetType().FullName}'"
+				);
+			}
+			finally
+			{
+				ScheduleAutocompleteExternalMutationRelease(operationToken);
+			}
+		}
+	}
+
+	private void ApplyCreateScriptExternalMutationDeferred(
+		string path,
+		string targetSystemName,
+		string targetFolderPath,
+		long operationToken,
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Create Script external mutation deferred rejected",
+				$"Reason='ManagedAssemblyGenerationChanged', OperationToken='{operationToken}', Path='{path}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
+
+		bool openHandoffScheduled = false;
+		bool boundaryBegan = false;
+		try
+		{
+			if (
+				!IsAutocompleteExternalMutationOperationCurrent(
+					operationToken,
+					AutocompleteExternalMutationOrigin.CreateScript,
+					"Create Script",
+					scheduledManagedAssemblyGeneration
+				)
+			)
+			{
+				DebugLogger.LogPersistentFileOnlyOperation(
+					"Create Script external mutation deferred rejected",
+					$"Reason='ExternalMutationAuthorityNotCurrent', OperationToken='{operationToken}', Path='{path}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
+				);
+				return;
+			}
+
+			boundaryBegan = true;
+			LogCreateScriptExternalMutationDeferredBoundary(
+				"Begin",
+				operationToken,
+				path,
+				targetSystemName,
+				targetFolderPath,
+				scheduledManagedAssemblyGeneration
+			);
+
+			if (!ExecuteCreateScriptMutation(path, targetSystemName, targetFolderPath))
+				return;
+
+			try
+			{
+				CallDeferred(
+					nameof(OpenCreatedScriptUnderExternalMutationDeferred),
+					path,
+					operationToken,
+					scheduledManagedAssemblyGeneration
+				);
+				openHandoffScheduled = true;
+			}
+			catch (Exception exception)
+			{
+				DebugLogger.LogPersistentFileOnlyOperation(
+					"Create Script open handoff scheduling failed",
+					$"OperationToken='{operationToken}', Path='{path}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Exception='{exception}'"
+				);
+				QueueStandaloneTreeOperationDialog(
+					"Create Script Incomplete",
+					"The script file was created and added to System Explorer, but System Explorer could not safely schedule opening it in the Script Editor.",
+					$"Path='{path}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', ExceptionType='{exception.GetType().FullName}'"
+				);
+			}
+		}
+		catch (Exception exception)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Create Script external mutation deferred failed",
+				$"OperationToken='{operationToken}', Path='{path}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Exception='{exception}'"
+			);
+			QueueStandaloneTreeOperationDialog(
+				"Create Script Failed",
+				"System Explorer could not complete the Create Script operation safely. Check the FileSystem before trying again.",
+				$"Path='{path}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', ExceptionType='{exception.GetType().FullName}'"
+			);
+		}
+		finally
+		{
+			if (boundaryBegan)
+			{
+				LogCreateScriptExternalMutationDeferredBoundary(
+					"Returned",
+					operationToken,
+					path,
+					targetSystemName,
+					targetFolderPath,
+					scheduledManagedAssemblyGeneration
+				);
+			}
+
+			if (!openHandoffScheduled)
+				ScheduleAutocompleteExternalMutationRelease(operationToken);
+		}
+	}
+
+	private bool ExecuteCreateScriptMutation(
+		string path,
+		string targetSystemName,
+		string targetFolderPath
+	)
+	{
 		using TreeOperationDialogScope operationScope =
 			BeginTreeOperationDialogScope(
 				"Create Script Failed",
@@ -985,10 +1165,10 @@ public partial class SystemExplorerPlugin
 			);
 
 		if (!EnsureSystemsLoadedForTreeOperation("Create Script"))
-			return;
+			return false;
 
 		if (!EnsureSystemAvailable(targetSystemName, "Create Script"))
-			return;
+			return false;
 
 		if (
 			!WouldAddScriptsToSelectedTreeLocation(
@@ -999,13 +1179,13 @@ public partial class SystemExplorerPlugin
 		)
 		{
 			DebugLogger.LogOperation("Create Script cancelled: metadata addition was a no-op", path);
-			return;
+			return false;
 		}
 
 		string className = path.GetFile().GetBaseName();
 
 		if (!TryBuildScriptContent(className, out string content))
-			return;
+			return false;
 
 		if (
 			!TryPreflightMetadataPersistenceForPhysicalMutation(
@@ -1016,11 +1196,11 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
-			return;
+			return false;
 		}
 
 		if (!TryWriteCreatedScript(path, content))
-			return;
+			return false;
 
 		DebugLogger.LogOperation("Create Script File Written", path);
 
@@ -1033,7 +1213,11 @@ public partial class SystemExplorerPlugin
 				? CaptureSystemsAndFolderBindingsSnapshot()
 				: null;
 
-		AddTreeMutationResult addResult = AddScriptToSelectedTreeLocation(path);
+		AddTreeMutationResult addResult = AddScriptToTreeLocation(
+			path,
+			targetSystemName,
+			targetFolderPath
+		);
 
 		if (addResult == AddTreeMutationResult.Failed)
 		{
@@ -1043,7 +1227,7 @@ public partial class SystemExplorerPlugin
 				TreeOperationOutcomeSeverity.Incomplete
 			);
 			EditorInterface.Singleton.GetResourceFilesystem().Scan();
-			return;
+			return false;
 		}
 
 		if (
@@ -1068,7 +1252,7 @@ public partial class SystemExplorerPlugin
 				replaceExistingReport: true
 			);
 			EditorInterface.Singleton.GetResourceFilesystem().Scan();
-			return;
+			return false;
 		}
 
 		if (addResult == AddTreeMutationResult.Success)
@@ -1078,7 +1262,238 @@ public partial class SystemExplorerPlugin
 		}
 
 		EditorInterface.Singleton.GetResourceFilesystem().Scan();
-		CallDeferred(nameof(OpenCreatedScript), path);
+		return true;
+	}
+
+	private void OpenCreatedScriptUnderExternalMutationDeferred(
+		string path,
+		long operationToken,
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"OpenCreatedScript under ExternalMutation rejected",
+				$"Reason='ManagedAssemblyGenerationChanged', OperationToken='{operationToken}', Path='{path}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
+
+		bool lifecycleHandoffScheduled = false;
+		try
+		{
+			if (
+				!IsAutocompleteExternalMutationOperationCurrent(
+					operationToken,
+					AutocompleteExternalMutationOrigin.CreateScript,
+					"Create Script",
+					scheduledManagedAssemblyGeneration
+				)
+			)
+			{
+				DebugLogger.LogPersistentFileOnlyOperation(
+					"OpenCreatedScript under ExternalMutation rejected",
+					$"Reason='ExternalMutationAuthorityNotCurrent', OperationToken='{operationToken}', Path='{path}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
+				);
+				return;
+			}
+
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"OpenCreatedScript under ExternalMutation",
+				$"OperationToken='{operationToken}', Path='{path}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
+			);
+			if (!OpenCreatedScript(path))
+				return;
+
+			string normalizedPath = ScriptPathUtility.Normalize(path);
+			ScriptEditorLifecycleSnapshot lifecycle = ScriptEditorLifecycleCoordinator.Snapshot;
+			if (
+				string.IsNullOrWhiteSpace(normalizedPath)
+				|| !IsExactSystemExplorerSameScriptTransitionObservationTarget(
+					lifecycle,
+					scheduledManagedAssemblyGeneration,
+					lifecycle.ScriptTransitionId,
+					normalizedPath
+				)
+			)
+			{
+				return;
+			}
+
+			try
+			{
+				CallDeferred(
+					nameof(FinalizeCreatedScriptLifecycleUnderExternalMutationDeferred),
+					normalizedPath,
+					lifecycle.ScriptTransitionId,
+					operationToken,
+					scheduledManagedAssemblyGeneration
+				);
+				lifecycleHandoffScheduled = true;
+			}
+			catch (Exception exception)
+			{
+				DebugLogger.LogPersistentFileOnlyOperation(
+					"Create Script lifecycle handoff scheduling failed",
+					$"OperationToken='{operationToken}', ScriptTransitionId='{lifecycle.ScriptTransitionId}', ScriptPath='{normalizedPath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Exception='{exception}'"
+				);
+			}
+		}
+		finally
+		{
+			if (!lifecycleHandoffScheduled)
+				ScheduleAutocompleteExternalMutationRelease(operationToken);
+		}
+	}
+
+	private void FinalizeCreatedScriptLifecycleUnderExternalMutationDeferred(
+		string createdScriptPath,
+		long capturedScriptTransitionId,
+		long operationToken,
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		try
+		{
+			string normalizedCreatedScriptPath = ScriptPathUtility.Normalize(createdScriptPath);
+			if (
+				!string.Equals(
+					scheduledManagedAssemblyGeneration,
+					ManagedAssemblyGeneration,
+					StringComparison.Ordinal
+				)
+				|| operationToken <= 0
+				|| capturedScriptTransitionId <= 0
+				|| string.IsNullOrWhiteSpace(normalizedCreatedScriptPath)
+				|| !IsAutocompleteExternalMutationOperationCurrent(
+					operationToken,
+					AutocompleteExternalMutationOrigin.CreateScript,
+					"Create Script",
+					scheduledManagedAssemblyGeneration
+				)
+			)
+			{
+				return;
+			}
+
+			ScriptEditorLifecycleCoordinator coordinator = ScriptEditorLifecycleCoordinator;
+			ScriptEditorLifecycleSnapshot lifecycle = coordinator.Snapshot;
+			if (
+				!IsExactSystemExplorerSameScriptTransitionObservationTarget(
+					lifecycle,
+					scheduledManagedAssemblyGeneration,
+					capturedScriptTransitionId,
+					normalizedCreatedScriptPath
+				)
+			)
+			{
+				return;
+			}
+
+			if (lifecycle.State == ScriptEditorLifecycleState.ScriptTransitionPending)
+			{
+				if (!TryGetActiveScriptPath(out string activeScriptPath))
+					return;
+
+				string normalizedActiveScriptPath = ScriptPathUtility.Normalize(activeScriptPath);
+				if (
+					!string.Equals(
+						normalizedActiveScriptPath,
+						normalizedCreatedScriptPath,
+						StringComparison.OrdinalIgnoreCase
+					)
+				)
+				{
+					return;
+				}
+
+				if (
+					!IsAutocompleteExternalMutationOperationCurrent(
+						operationToken,
+						AutocompleteExternalMutationOrigin.CreateScript,
+						"Create Script",
+						scheduledManagedAssemblyGeneration
+					)
+				)
+				{
+					return;
+				}
+
+				ScriptEditorLifecycleSnapshot revalidatedLifecycle = coordinator.Snapshot;
+				if (
+					!IsExactSystemExplorerSameScriptTransitionObservationTarget(
+						revalidatedLifecycle,
+						scheduledManagedAssemblyGeneration,
+						capturedScriptTransitionId,
+						normalizedCreatedScriptPath
+					)
+					|| revalidatedLifecycle.State
+						!= ScriptEditorLifecycleState.ScriptTransitionPending
+					|| !coordinator.TryObserveExpectedSystemExplorerTransition(
+						capturedScriptTransitionId,
+						normalizedActiveScriptPath,
+						out _
+					)
+				)
+				{
+					return;
+				}
+			}
+
+			ScriptEditorLifecycleSnapshot finalLifecycle = coordinator.Snapshot;
+			if (
+				!IsExactSystemExplorerSameScriptTransitionObservationTarget(
+					finalLifecycle,
+					scheduledManagedAssemblyGeneration,
+					capturedScriptTransitionId,
+					normalizedCreatedScriptPath
+				)
+				|| finalLifecycle.State != ScriptEditorLifecycleState.BindingPending
+				|| !IsAutocompleteExternalMutationOperationCurrent(
+					operationToken,
+					AutocompleteExternalMutationOrigin.CreateScript,
+					"Create Script",
+					scheduledManagedAssemblyGeneration
+				)
+			)
+			{
+				return;
+			}
+
+			QueueDeferredAutocompleteScriptChangeRebind(
+				"CreateScriptExternalMutationLifecycleHandoff"
+			);
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Create Script lifecycle handoff preserved",
+				$"OperationToken='{operationToken}', ManagedAssemblyGeneration='{finalLifecycle.ManagedAssemblyGeneration}', ScriptTransitionId='{finalLifecycle.ScriptTransitionId}', TransitionOrigin='{finalLifecycle.TransitionOrigin?.ToString() ?? "<none>"}', LifecycleState='{finalLifecycle.State}', ScriptPath='{normalizedCreatedScriptPath}'"
+			);
+		}
+		finally
+		{
+			ScheduleAutocompleteExternalMutationRelease(operationToken);
+		}
+	}
+
+	private void LogCreateScriptExternalMutationDeferredBoundary(
+		string phase,
+		long operationToken,
+		string path,
+		string targetSystemName,
+		string targetFolderPath,
+		string managedAssemblyGeneration
+	)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"Create Script external mutation deferred boundary",
+			$"Phase='{phase}', OperationToken='{operationToken}', Path='{path}', TargetSystem='{targetSystemName}', TargetFolder='{targetFolderPath}', ManagedAssemblyGeneration='{managedAssemblyGeneration}'"
+		);
 	}
 
 	private bool TryBuildScriptContent(string className, out string content)
@@ -1245,7 +1660,7 @@ public partial class SystemExplorerPlugin
 		return true;
 	}
 
-	private void OpenCreatedScript(string path)
+	private bool OpenCreatedScript(string path)
 	{
 		if (!FileAccess.FileExists(path))
 		{
@@ -1254,7 +1669,7 @@ public partial class SystemExplorerPlugin
 				"The script file was created, but it could not be found when Godot tried to open it.",
 				$"Path='{path}'"
 			);
-			return;
+			return false;
 		}
 
 		Script script = ResourceLoader.Load<Script>(path);
@@ -1266,10 +1681,11 @@ public partial class SystemExplorerPlugin
 				"The script file was created, but Godot could not load it in the Script Editor.",
 				$"Path='{path}'"
 			);
-			return;
+			return false;
 		}
 
 		OpenScriptFromSystemExplorer(script, path, false);
+		return true;
 	}
 
 	#endregion

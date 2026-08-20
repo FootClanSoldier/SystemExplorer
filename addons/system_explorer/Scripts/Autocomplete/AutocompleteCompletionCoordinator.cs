@@ -17,7 +17,6 @@ internal sealed class AutocompleteCompletionCoordinator
 	private long _validationGeneration;
 	private bool _isIssuingDormantRecoveryRequest;
 
-	internal bool IsIssuingDormantRecoveryRequest => _isIssuingDormantRecoveryRequest;
 
 	internal AutocompleteCompletionCoordinator(
 		AutocompletePrefixExtractor prefixExtractor,
@@ -75,7 +74,8 @@ internal sealed class AutocompleteCompletionCoordinator
 		CodeEdit codeEdit,
 		string scriptPath,
 		EditorBindingLease requestBindingLease,
-		long requestObservationSequence
+		long requestObservationSequence,
+		AutocompleteRequestDispatchChildLease? requestDispatchChildLease
 	)
 	{
 		if (
@@ -109,6 +109,7 @@ internal sealed class AutocompleteCompletionCoordinator
 				scriptPath,
 				requestBindingLease,
 				requestObservationSequence,
+				requestDispatchChildLease,
 				request,
 				lineText,
 				out AutocompleteCompletionRequestLease requestLease
@@ -301,7 +302,14 @@ internal sealed class AutocompleteCompletionCoordinator
 			}
 
 			if (!session.IsDormant)
+			{
+				_codeEditMutationCoordinator.ObserveOwnedPublicationLiveness(
+					codeEdit,
+					scriptPath,
+					bindingLease
+				);
 				return;
+			}
 
 			if (
 				!_isIssuingDormantRecoveryRequest
@@ -314,7 +322,14 @@ internal sealed class AutocompleteCompletionCoordinator
 		}
 
 		if (session.CanRemainOpen(request))
+		{
+			_codeEditMutationCoordinator.ObserveOwnedPublicationLiveness(
+				codeEdit,
+				scriptPath,
+				bindingLease
+			);
 			return;
+		}
 
 		InvalidateManagedValidationState();
 		_codeEditMutationCoordinator.TryCancelOwnedPublication(
@@ -366,6 +381,7 @@ internal sealed class AutocompleteCompletionCoordinator
 				scriptPath,
 				bindingLease,
 				force: false,
+				origin: AutocompleteRequestDispatchOrigin.DormantRecovery,
 				retirementReason: "DormantRecoveryRequest"
 			);
 		}
@@ -390,6 +406,7 @@ internal sealed class AutocompleteCompletionCoordinator
 		{
 			string details =
 				$"RequestTransactionId='{diagnosticContext.RequestTransactionId}', "
+				+ $"ParentRequestDispatchMutationTransactionId='{diagnosticContext.ParentRequestDispatchMutationTransactionId}', "
 				+ $"RequestObservationSequence='{diagnosticContext.RequestObservationSequence}', "
 				+ $"ScriptTransitionId='{diagnosticContext.ScriptTransitionId}', "
 				+ $"BindingEpoch='{diagnosticContext.BindingEpoch}', "
@@ -426,6 +443,7 @@ internal sealed class AutocompleteCompletionCoordinator
 				"C# autocomplete completion source failed",
 				$"SourceId='{sourceId ?? ""}', "
 					+ $"RequestTransactionId='{diagnosticContext.RequestTransactionId}', "
+					+ $"ParentRequestDispatchMutationTransactionId='{diagnosticContext.ParentRequestDispatchMutationTransactionId}', "
 					+ $"RequestObservationSequence='{diagnosticContext.RequestObservationSequence}', "
 					+ $"ScriptTransitionId='{diagnosticContext.ScriptTransitionId}', "
 					+ $"BindingEpoch='{diagnosticContext.BindingEpoch}', "

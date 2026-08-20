@@ -35,18 +35,19 @@ public partial class SystemExplorerPlugin
 	private int _suppressedAutocompleteDeferredUsingValidationCount;
 	private int _suppressedAutocompleteDeferredUsingCompletionRequestedCount;
 	private int _suppressedAutocompleteDeferredUsingGuiInputCount;
-	private bool _namespaceRefactorAutocompleteQuiescenceActive;
-	private long _namespaceRefactorAutocompleteQuiescenceToken;
-	private string _namespaceRefactorAutocompleteQuiescenceOperationName = "";
-	private bool _pendingNamespaceRefactorAutocompleteScriptChange;
-	private bool _pendingNamespaceRefactorAutocompleteTextChange;
-	private bool _pendingNamespaceRefactorAutocompleteFilesystemChange;
-	private bool _pendingNamespaceRefactorAutocompleteProcessFollowUp;
-	private int _suppressedNamespaceRefactorAutocompleteScriptChangedCount;
-	private int _suppressedNamespaceRefactorAutocompleteTextChangedCount;
-	private int _suppressedNamespaceRefactorAutocompleteFilesystemChangedCount;
-	private int _suppressedNamespaceRefactorAutocompleteCompletionRequestedCount;
-	private int _suppressedNamespaceRefactorAutocompleteGuiInputCount;
+	private AutocompleteExternalMutationLease? _autocompleteExternalMutationLease;
+	private long _autocompleteExternalMutationOperationToken;
+	private string _autocompleteExternalMutationOperationName = "";
+	private AutocompleteExternalMutationOrigin _autocompleteExternalMutationOrigin;
+	private bool _pendingExternalMutationAutocompleteScriptChange;
+	private bool _pendingExternalMutationAutocompleteTextChange;
+	private bool _pendingExternalMutationAutocompleteFilesystemChange;
+	private bool _pendingExternalMutationAutocompleteProcessFollowUp;
+	private int _suppressedExternalMutationAutocompleteScriptChangedCount;
+	private int _suppressedExternalMutationAutocompleteTextChangedCount;
+	private int _suppressedExternalMutationAutocompleteFilesystemChangedCount;
+	private int _suppressedExternalMutationAutocompleteCompletionRequestedCount;
+	private int _suppressedExternalMutationAutocompleteGuiInputCount;
 
 	private AutocompletePluginHost CreateAutocompleteHost(
 		string hostManagedAssemblyGeneration
@@ -104,6 +105,9 @@ public partial class SystemExplorerPlugin
 	private bool IsAutocompleteDeferredUsingInsertionBarrierActive =>
 		_autocompleteDeferredUsingInsertionPending
 		|| _autocompleteDeferredUsingInsertionExecutionActive;
+
+	private bool IsAutocompleteExternalMutationActive =>
+		_autocompleteExternalMutationLease.HasValue;
 
 	private void EnterAutocompleteCodeEditGuiInputCallbackScope()
 	{
@@ -199,17 +203,28 @@ public partial class SystemExplorerPlugin
 		_autocompleteDeferredScriptChangeLatestOrigin = "";
 	}
 
-	private void QueueDeferredAutocompleteScriptChangeRebind(string origin)
+	private void QueueDeferredAutocompleteScriptChangeRebind(
+		string origin,
+		bool bypassSystemExplorerNavigationQuiescenceAdmission = false
+	)
 	{
-		if (_namespaceRefactorAutocompleteQuiescenceActive)
+		if (IsAutocompleteExternalMutationActive)
 		{
-			_pendingNamespaceRefactorAutocompleteScriptChange = true;
+			_pendingExternalMutationAutocompleteScriptChange = true;
 			return;
 		}
 
 		if (IsTreeKeyboardNavigationBurstActive)
 		{
 			_autocompleteScriptChangePendingAfterTreeKeyboardNavigation = true;
+			return;
+		}
+
+		if (
+			!bypassSystemExplorerNavigationQuiescenceAdmission
+			&& TryInterceptSystemExplorerNavigationBindingQuiescenceAdmission()
+		)
+		{
 			return;
 		}
 
@@ -523,10 +538,10 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			if (_namespaceRefactorAutocompleteQuiescenceActive)
+			if (IsAutocompleteExternalMutationActive)
 			{
 				RejectDeferredAutocompleteUsingInsertion(
-					"NamespaceRefactorQuiescence",
+					"ExternalMutationLease",
 					token,
 					request,
 					scheduledHostInstanceToken,
@@ -700,120 +715,204 @@ public partial class SystemExplorerPlugin
 		);
 	}
 
-	private long AdvanceNamespaceRefactorAutocompleteQuiescenceToken()
+	private long AdvanceAutocompleteExternalMutationOperationToken()
 	{
 		unchecked
 		{
-			_namespaceRefactorAutocompleteQuiescenceToken++;
-			if (_namespaceRefactorAutocompleteQuiescenceToken <= 0)
-				_namespaceRefactorAutocompleteQuiescenceToken = 1;
+			_autocompleteExternalMutationOperationToken++;
+			if (_autocompleteExternalMutationOperationToken <= 0)
+				_autocompleteExternalMutationOperationToken = 1;
 		}
 
-		return _namespaceRefactorAutocompleteQuiescenceToken;
+		return _autocompleteExternalMutationOperationToken;
 	}
 
-	private long BeginNamespaceRefactorAutocompleteQuiescence(string operationName)
+	private bool TryBeginAutocompleteExternalMutation(
+		AutocompleteExternalMutationOrigin origin,
+		string operationName,
+		out long operationToken
+	)
 	{
-		long token = AdvanceNamespaceRefactorAutocompleteQuiescenceToken();
-		_namespaceRefactorAutocompleteQuiescenceActive = true;
-		_namespaceRefactorAutocompleteQuiescenceOperationName =
-			string.IsNullOrWhiteSpace(operationName)
-				? "Refactor Namespace"
-				: operationName;
-		_pendingNamespaceRefactorAutocompleteScriptChange = false;
-		_pendingNamespaceRefactorAutocompleteTextChange = false;
-		_pendingNamespaceRefactorAutocompleteFilesystemChange = false;
-		_pendingNamespaceRefactorAutocompleteProcessFollowUp = false;
-		_suppressedNamespaceRefactorAutocompleteScriptChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteTextChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteFilesystemChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteCompletionRequestedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteGuiInputCount = 0;
+		operationToken = 0;
+		if (IsAutocompleteExternalMutationActive)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"C# autocomplete external mutation begin rejected",
+				$"Reason='ExternalMutationAlreadyActive', Origin='{origin}', Operation='{operationName ?? ""}', ActiveMutationTransactionId='{_autocompleteExternalMutationLease?.MutationTransactionId ?? 0}', ActiveOrigin='{_autocompleteExternalMutationOrigin}', ActiveOperation='{_autocompleteExternalMutationOperationName}', HostInstanceToken='{_autocompleteHostInstanceToken}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return false;
+		}
 
+		if (!IsAutocompletePluginBoundaryAvailable())
+			return false;
+
+		if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete External Mutation Begin"))
+			return false;
+
+		if (!IsAutocompletePluginBoundaryAvailable())
+			return false;
+
+		if (!TryEnsureAutocompleteHost(out AutocompletePluginHost host))
+			return false;
+
+		long hostInstanceToken = _autocompleteHostInstanceToken;
+		bool pendingProcessFollowUp = false;
 		try
 		{
-			if (
-				_autocompleteHost != null
-				&& IsAutocompleteHostManagedAssemblyGenerationCurrent()
-				&& _autocompleteHost.HasPendingCompletionProcessWork()
-			)
-			{
-				_pendingNamespaceRefactorAutocompleteProcessFollowUp = true;
-			}
+			pendingProcessFollowUp = host.HasPendingCompletionProcessWork();
 		}
 		catch
 		{
-			// Quiescence admission must never depend on optional managed follow-up state.
+			// Optional managed follow-up state must not control lease admission.
 		}
 
+		if (
+			!host.TryBeginExternalMutation(
+				hostInstanceToken,
+				origin,
+				operationName,
+				out AutocompleteExternalMutationLease lease
+			)
+		)
+		{
+			return false;
+		}
+
+		operationToken = AdvanceAutocompleteExternalMutationOperationToken();
+		_autocompleteExternalMutationLease = lease;
+		_autocompleteExternalMutationOrigin = origin;
+		_autocompleteExternalMutationOperationName = operationName;
+		_pendingExternalMutationAutocompleteScriptChange = false;
+		_pendingExternalMutationAutocompleteTextChange = false;
+		_pendingExternalMutationAutocompleteFilesystemChange = false;
+		_pendingExternalMutationAutocompleteProcessFollowUp = pendingProcessFollowUp;
+		_suppressedExternalMutationAutocompleteScriptChangedCount = 0;
+		_suppressedExternalMutationAutocompleteTextChangedCount = 0;
+		_suppressedExternalMutationAutocompleteFilesystemChangedCount = 0;
+		_suppressedExternalMutationAutocompleteCompletionRequestedCount = 0;
+		_suppressedExternalMutationAutocompleteGuiInputCount = 0;
+
 		DebugLogger.LogPersistentFileOnlyOperation(
-			"C# autocomplete Namespace Refactor quiescence begin",
-			$"Token='{token}', Operation='{_namespaceRefactorAutocompleteQuiescenceOperationName}', HostInstanceToken='{_autocompleteHostInstanceToken}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			"C# autocomplete external mutation envelope begin",
+			$"OperationToken='{operationToken}', MutationTransactionId='{lease.MutationTransactionId}', Origin='{lease.Origin}', Operation='{lease.OperationName}', HostInstanceToken='{lease.HostInstanceToken}', ManagedAssemblyGeneration='{lease.ManagedAssemblyGeneration}', PendingProcessFollowUp='{pendingProcessFollowUp}'"
 		);
-
-		return token;
+		RefreshEditorPluginProcessingState();
+		return true;
 	}
 
-	private void ResetNamespaceRefactorAutocompleteQuiescenceState(bool invalidateToken)
-	{
-		_namespaceRefactorAutocompleteQuiescenceActive = false;
-		_namespaceRefactorAutocompleteQuiescenceOperationName = "";
-		_pendingNamespaceRefactorAutocompleteScriptChange = false;
-		_pendingNamespaceRefactorAutocompleteTextChange = false;
-		_pendingNamespaceRefactorAutocompleteFilesystemChange = false;
-		_pendingNamespaceRefactorAutocompleteProcessFollowUp = false;
-		_suppressedNamespaceRefactorAutocompleteScriptChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteTextChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteFilesystemChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteCompletionRequestedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteGuiInputCount = 0;
-
-		if (invalidateToken)
-			AdvanceNamespaceRefactorAutocompleteQuiescenceToken();
-	}
-
-	private void ScheduleNamespaceRefactorAutocompleteQuiescenceRelease(long token)
+	private bool IsAutocompleteExternalMutationOperationCurrent(
+		long operationToken,
+		AutocompleteExternalMutationOrigin expectedOrigin,
+		string expectedOperationName,
+		string scheduledManagedAssemblyGeneration
+	)
 	{
 		if (
-			!_namespaceRefactorAutocompleteQuiescenceActive
-			|| token != _namespaceRefactorAutocompleteQuiescenceToken
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+			|| operationToken <= 0
+			|| operationToken != _autocompleteExternalMutationOperationToken
+			|| !_autocompleteExternalMutationLease.HasValue
+			|| _autocompleteExternalMutationOrigin != expectedOrigin
+			|| !string.Equals(
+				_autocompleteExternalMutationOperationName,
+				expectedOperationName,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return false;
+		}
+
+		AutocompleteExternalMutationLease lease = _autocompleteExternalMutationLease.Value;
+		if (
+			lease.Origin != expectedOrigin
+			|| !string.Equals(
+				lease.OperationName,
+				expectedOperationName,
+				StringComparison.Ordinal
+			)
+			|| !string.Equals(
+				lease.ManagedAssemblyGeneration,
+				scheduledManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+			|| !IsAutocompletePluginBoundaryAvailable()
+			|| _autocompleteHost == null
+			|| !IsAutocompleteHostManagedAssemblyGenerationCurrent()
+		)
+		{
+			return false;
+		}
+
+		return _autocompleteHost.IsExternalMutationAuthorityCurrent(lease);
+	}
+
+	private void ResetAutocompleteExternalMutationState(bool invalidateToken)
+	{
+		_autocompleteExternalMutationLease = null;
+		_autocompleteExternalMutationOperationName = "";
+		_autocompleteExternalMutationOrigin = AutocompleteExternalMutationOrigin.None;
+		_pendingExternalMutationAutocompleteScriptChange = false;
+		_pendingExternalMutationAutocompleteTextChange = false;
+		_pendingExternalMutationAutocompleteFilesystemChange = false;
+		_pendingExternalMutationAutocompleteProcessFollowUp = false;
+		_suppressedExternalMutationAutocompleteScriptChangedCount = 0;
+		_suppressedExternalMutationAutocompleteTextChangedCount = 0;
+		_suppressedExternalMutationAutocompleteFilesystemChangedCount = 0;
+		_suppressedExternalMutationAutocompleteCompletionRequestedCount = 0;
+		_suppressedExternalMutationAutocompleteGuiInputCount = 0;
+
+		if (invalidateToken)
+			AdvanceAutocompleteExternalMutationOperationToken();
+	}
+
+	private void ScheduleAutocompleteExternalMutationRelease(long operationToken)
+	{
+		if (
+			!_autocompleteExternalMutationLease.HasValue
+			|| operationToken != _autocompleteExternalMutationOperationToken
 		)
 		{
 			return;
 		}
 
+		AutocompleteExternalMutationLease lease = _autocompleteExternalMutationLease.Value;
 		if (!IsAutocompletePluginBoundaryAvailable())
 		{
-			ResetNamespaceRefactorAutocompleteQuiescenceState(invalidateToken: true);
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"C# autocomplete external mutation release scheduling rejected",
+				$"Reason='PluginBoundaryUnavailable', OperationToken='{operationToken}', MutationTransactionId='{lease.MutationTransactionId}', Origin='{lease.Origin}', Operation='{lease.OperationName}', HostInstanceToken='{lease.HostInstanceToken}', ManagedAssemblyGeneration='{lease.ManagedAssemblyGeneration}'"
+			);
 			return;
 		}
-
-		long scheduledHostInstanceToken = _autocompleteHostInstanceToken;
-		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
 
 		try
 		{
 			CallDeferred(
-				nameof(CompleteNamespaceRefactorAutocompleteQuiescenceDeferred),
-				token,
-				scheduledHostInstanceToken,
-				scheduledManagedAssemblyGeneration
+				nameof(CompleteAutocompleteExternalMutationDeferred),
+				operationToken,
+				lease.MutationTransactionId,
+				lease.HostInstanceToken,
+				lease.ManagedAssemblyGeneration
 			);
 		}
-		catch
+		catch (Exception exception)
 		{
-			if (
-				_namespaceRefactorAutocompleteQuiescenceActive
-				&& token == _namespaceRefactorAutocompleteQuiescenceToken
-			)
-			{
-				ResetNamespaceRefactorAutocompleteQuiescenceState(invalidateToken: true);
-			}
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"C# autocomplete external mutation release scheduling failed",
+				$"OperationToken='{operationToken}', MutationTransactionId='{lease.MutationTransactionId}', Origin='{lease.Origin}', Operation='{lease.OperationName}', HostInstanceToken='{lease.HostInstanceToken}', ManagedAssemblyGeneration='{lease.ManagedAssemblyGeneration}', Exception='{exception}'"
+			);
+			throw;
 		}
 	}
 
-	private void CompleteNamespaceRefactorAutocompleteQuiescenceDeferred(
-		long token,
+	private void CompleteAutocompleteExternalMutationDeferred(
+		long operationToken,
+		long scheduledMutationTransactionId,
 		long scheduledHostInstanceToken,
 		string scheduledManagedAssemblyGeneration
 	)
@@ -827,118 +926,151 @@ public partial class SystemExplorerPlugin
 		)
 		{
 			LogStaleDeferredAutocompleteOperation(
-				"NamespaceRefactorQuiescenceRelease",
+				"ExternalMutationRelease",
 				scheduledManagedAssemblyGeneration,
-				token,
-				_namespaceRefactorAutocompleteQuiescenceToken,
+				operationToken,
+				_autocompleteExternalMutationOperationToken,
 				scheduledHostInstanceToken,
 				_autocompleteHostInstanceToken
 			);
+			if (
+				_autocompleteExternalMutationLease.HasValue
+				&& operationToken == _autocompleteExternalMutationOperationToken
+				&& _autocompleteExternalMutationLease.Value.MutationTransactionId
+					== scheduledMutationTransactionId
+				&& _autocompleteExternalMutationLease.Value.HostInstanceToken
+					== scheduledHostInstanceToken
+				&& string.Equals(
+					_autocompleteExternalMutationLease.Value.ManagedAssemblyGeneration,
+					scheduledManagedAssemblyGeneration,
+					StringComparison.Ordinal
+				)
+			)
+			{
+				ResetAutocompleteExternalMutationState(invalidateToken: true);
+			}
 			return;
 		}
 
-		if (
-			!_namespaceRefactorAutocompleteQuiescenceActive
-			|| token != _namespaceRefactorAutocompleteQuiescenceToken
-		)
+		if (operationToken != _autocompleteExternalMutationOperationToken)
 		{
-			if (DebugLogger.IsEnabled)
-			{
-				DebugLogger.LogPersistentFileOnlyOperation(
-					"C# autocomplete Namespace Refactor quiescence stale release ignored",
-					$"ScheduledToken='{token}', CurrentToken='{_namespaceRefactorAutocompleteQuiescenceToken}', QuiescenceActive='{_namespaceRefactorAutocompleteQuiescenceActive}'"
-				);
-			}
+			LogAutocompleteExternalMutationStaleRelease(
+				"OperationTokenChanged",
+				operationToken,
+				scheduledMutationTransactionId,
+				scheduledHostInstanceToken,
+				scheduledManagedAssemblyGeneration
+			);
 			return;
 		}
 
 		if (scheduledHostInstanceToken != _autocompleteHostInstanceToken)
 		{
-			if (DebugLogger.IsEnabled)
-			{
-				DebugLogger.LogPersistentFileOnlyOperation(
-					"C# autocomplete Namespace Refactor quiescence stale release ignored",
-					$"Reason='HostChanged', ScheduledToken='{token}', CurrentToken='{_namespaceRefactorAutocompleteQuiescenceToken}', ScheduledHostInstanceToken='{scheduledHostInstanceToken}', CurrentHostInstanceToken='{_autocompleteHostInstanceToken}'"
-				);
-			}
+			LogAutocompleteExternalMutationStaleRelease(
+				"HostInstanceTokenChanged",
+				operationToken,
+				scheduledMutationTransactionId,
+				scheduledHostInstanceToken,
+				scheduledManagedAssemblyGeneration
+			);
 			return;
 		}
 
-		string operationName = _namespaceRefactorAutocompleteQuiescenceOperationName;
-		bool pendingScriptChange = _pendingNamespaceRefactorAutocompleteScriptChange;
-		bool pendingTextChange = _pendingNamespaceRefactorAutocompleteTextChange;
-		bool pendingFilesystemChange = _pendingNamespaceRefactorAutocompleteFilesystemChange;
-		bool pendingProcessFollowUp = _pendingNamespaceRefactorAutocompleteProcessFollowUp;
-		int suppressedScriptChangedCount = _suppressedNamespaceRefactorAutocompleteScriptChangedCount;
-		int suppressedTextChangedCount = _suppressedNamespaceRefactorAutocompleteTextChangedCount;
-		int suppressedFilesystemChangedCount = _suppressedNamespaceRefactorAutocompleteFilesystemChangedCount;
-		int suppressedCompletionRequestedCount = _suppressedNamespaceRefactorAutocompleteCompletionRequestedCount;
-		int suppressedGuiInputCount = _suppressedNamespaceRefactorAutocompleteGuiInputCount;
+		if (!_autocompleteExternalMutationLease.HasValue)
+		{
+			LogAutocompleteExternalMutationStaleRelease(
+				"LocalLeaseMissing",
+				operationToken,
+				scheduledMutationTransactionId,
+				scheduledHostInstanceToken,
+				scheduledManagedAssemblyGeneration
+			);
+			return;
+		}
 
-		_namespaceRefactorAutocompleteQuiescenceActive = false;
-		_namespaceRefactorAutocompleteQuiescenceOperationName = "";
-		_pendingNamespaceRefactorAutocompleteScriptChange = false;
-		_pendingNamespaceRefactorAutocompleteTextChange = false;
-		_pendingNamespaceRefactorAutocompleteFilesystemChange = false;
-		_pendingNamespaceRefactorAutocompleteProcessFollowUp = false;
-		_suppressedNamespaceRefactorAutocompleteScriptChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteTextChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteFilesystemChangedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteCompletionRequestedCount = 0;
-		_suppressedNamespaceRefactorAutocompleteGuiInputCount = 0;
+		AutocompleteExternalMutationLease lease = _autocompleteExternalMutationLease.Value;
+		if (
+			lease.MutationTransactionId != scheduledMutationTransactionId
+			|| lease.HostInstanceToken != scheduledHostInstanceToken
+			|| !string.Equals(
+				lease.ManagedAssemblyGeneration,
+				scheduledManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			LogAutocompleteExternalMutationStaleRelease(
+				"StoredLeaseIdentityChanged",
+				operationToken,
+				scheduledMutationTransactionId,
+				scheduledHostInstanceToken,
+				scheduledManagedAssemblyGeneration
+			);
+			return;
+		}
+
+		if (!IsAutocompletePluginBoundaryAvailable())
+		{
+			ResetAutocompleteExternalMutationState(invalidateToken: true);
+			return;
+		}
+
+		AutocompletePluginHost host = _autocompleteHost;
+		if (
+			host == null
+			|| !IsAutocompleteHostManagedAssemblyGenerationCurrent()
+			|| !host.IsExternalMutationAuthorityCurrent(lease)
+		)
+		{
+			LogAutocompleteExternalMutationStaleRelease(
+				"CoordinatorAuthorityNotCurrent",
+				operationToken,
+				scheduledMutationTransactionId,
+				scheduledHostInstanceToken,
+				scheduledManagedAssemblyGeneration
+			);
+			ResetAutocompleteExternalMutationState(invalidateToken: true);
+			return;
+		}
+
+		string operationName = _autocompleteExternalMutationOperationName;
+		AutocompleteExternalMutationOrigin origin = _autocompleteExternalMutationOrigin;
+		bool pendingScriptChange = _pendingExternalMutationAutocompleteScriptChange;
+		bool pendingTextChange = _pendingExternalMutationAutocompleteTextChange;
+		bool pendingFilesystemChange = _pendingExternalMutationAutocompleteFilesystemChange;
+		bool pendingProcessFollowUp = _pendingExternalMutationAutocompleteProcessFollowUp;
+		int suppressedScriptChangedCount = _suppressedExternalMutationAutocompleteScriptChangedCount;
+		int suppressedTextChangedCount = _suppressedExternalMutationAutocompleteTextChangedCount;
+		int suppressedFilesystemChangedCount = _suppressedExternalMutationAutocompleteFilesystemChangedCount;
+		int suppressedCompletionRequestedCount = _suppressedExternalMutationAutocompleteCompletionRequestedCount;
+		int suppressedGuiInputCount = _suppressedExternalMutationAutocompleteGuiInputCount;
 
 		bool rebindCatchUp = false;
 		bool projectRefreshCatchUp = false;
+		bool releaseSucceeded = false;
 		try
 		{
+			releaseSucceeded = host.EndExternalMutation(lease);
+			if (!releaseSucceeded)
+				return;
+
+			ResetAutocompleteExternalMutationState(invalidateToken: true);
+
 			bool observedAutocompleteWork =
 				pendingScriptChange
-				|| pendingTextChange
-				|| pendingFilesystemChange
-				|| pendingProcessFollowUp
-				|| suppressedCompletionRequestedCount > 0
-				|| suppressedGuiInputCount > 0;
+					|| pendingTextChange
+					|| pendingFilesystemChange
+					|| pendingProcessFollowUp;
 			if (!observedAutocompleteWork)
-				return;
-
-			if (!IsAutocompletePluginBoundaryAvailable())
-				return;
-
-			if (
-				!EnsureManagedAssemblyStateCurrent(
-					"C# Autocomplete Namespace Refactor Quiescence Release"
-				)
-			)
-			{
-				return;
-			}
-
-			if (token != _namespaceRefactorAutocompleteQuiescenceToken)
-				return;
-
-			if (!IsAutocompletePluginBoundaryAvailable())
-				return;
-
-			if (!TryEnsureAutocompleteHost(out AutocompletePluginHost host))
-				return;
-
-			if (token != _namespaceRefactorAutocompleteQuiescenceToken)
 				return;
 
 			host.ClearPendingCompletionProcessWork();
 
-			bool needsRebind = pendingScriptChange || pendingTextChange;
-			if (needsRebind)
+			if (pendingScriptChange || pendingTextChange)
 			{
 				host.InvalidatePendingValidations();
-				RequestScriptEditorLifecycleRebind(
-					"NamespaceRefactorQuiescenceRelease"
-				);
+				RequestScriptEditorLifecycleRebind("ExternalMutationRelease");
 				rebindCatchUp = true;
-			}
-			else
-			{
-				host.InvalidatePendingValidations();
 			}
 
 			if (pendingFilesystemChange)
@@ -952,10 +1084,24 @@ public partial class SystemExplorerPlugin
 		finally
 		{
 			DebugLogger.LogPersistentFileOnlyOperation(
-				"C# autocomplete Namespace Refactor quiescence release",
-				$"Token='{token}', Operation='{operationName}', SuppressedScriptChanged='{suppressedScriptChangedCount}', SuppressedTextChanged='{suppressedTextChangedCount}', SuppressedFilesystemChanged='{suppressedFilesystemChangedCount}', SuppressedCompletionRequested='{suppressedCompletionRequestedCount}', SuppressedGuiInput='{suppressedGuiInputCount}', PendingProcessFollowUp='{pendingProcessFollowUp}', RebindCatchUp='{rebindCatchUp}', ProjectRefreshCatchUp='{projectRefreshCatchUp}'"
+				"C# autocomplete external mutation consolidated release",
+				$"OperationToken='{operationToken}', MutationTransactionId='{lease.MutationTransactionId}', Origin='{origin}', Operation='{operationName}', ManagedAssemblyGeneration='{lease.ManagedAssemblyGeneration}', HostInstanceToken='{lease.HostInstanceToken}', ReleaseSucceeded='{releaseSucceeded}', SuppressedScriptChanged='{suppressedScriptChangedCount}', SuppressedTextChanged='{suppressedTextChangedCount}', SuppressedFilesystemChanged='{suppressedFilesystemChangedCount}', SuppressedCompletionRequested='{suppressedCompletionRequestedCount}', SuppressedGuiInput='{suppressedGuiInputCount}', PendingProcessFollowUp='{pendingProcessFollowUp}', RebindCatchUp='{rebindCatchUp}', ProjectRefreshCatchUp='{projectRefreshCatchUp}'"
 			);
 		}
+	}
+
+	private void LogAutocompleteExternalMutationStaleRelease(
+		string reason,
+		long operationToken,
+		long scheduledMutationTransactionId,
+		long scheduledHostInstanceToken,
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"C# autocomplete external mutation stale release rejected",
+			$"Reason='{reason}', ScheduledOperationToken='{operationToken}', CurrentOperationToken='{_autocompleteExternalMutationOperationToken}', ScheduledMutationTransactionId='{scheduledMutationTransactionId}', CurrentMutationTransactionId='{_autocompleteExternalMutationLease?.MutationTransactionId ?? 0}', ScheduledHostInstanceToken='{scheduledHostInstanceToken}', CurrentHostInstanceToken='{_autocompleteHostInstanceToken}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', ExternalMutationActive='{IsAutocompleteExternalMutationActive}'"
+		);
 	}
 
 	private long AdvanceAutocompleteHostInstanceToken()
@@ -1153,7 +1299,7 @@ public partial class SystemExplorerPlugin
 		_autocompleteScriptChangePendingAfterTreeKeyboardNavigation = false;
 		CancelDeferredAutocompleteUsingInsertion("ManagedGenerationChanged");
 		ResetDeferredAutocompleteScriptChangeRebindState(invalidateToken: true);
-		ResetNamespaceRefactorAutocompleteQuiescenceState(invalidateToken: true);
+		ResetAutocompleteExternalMutationState(invalidateToken: true);
 
 		AutocompletePluginHost host = _autocompleteHost;
 		if (host != null && IsAutocompleteHostManagedAssemblyGenerationCurrent())
@@ -1205,7 +1351,7 @@ public partial class SystemExplorerPlugin
 		_autocompleteScriptChangePendingAfterTreeKeyboardNavigation = false;
 		CancelDeferredAutocompleteUsingInsertion("PluginUnavailable");
 		ResetDeferredAutocompleteScriptChangeRebindState(invalidateToken: true);
-		ResetNamespaceRefactorAutocompleteQuiescenceState(invalidateToken: true);
+		ResetAutocompleteExternalMutationState(invalidateToken: true);
 
 		AutocompletePluginHost host = _autocompleteHost;
 		if (host == null)
@@ -1274,16 +1420,16 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Script Changed"))
-				return;
-
-			if (_namespaceRefactorAutocompleteQuiescenceActive)
+			if (IsAutocompleteExternalMutationActive)
 			{
-				_pendingNamespaceRefactorAutocompleteScriptChange = true;
-				_suppressedNamespaceRefactorAutocompleteScriptChangedCount++;
+				_pendingExternalMutationAutocompleteScriptChange = true;
+				_suppressedExternalMutationAutocompleteScriptChangedCount++;
 				RefreshEditorPluginProcessingState();
 				return;
 			}
+
+			if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Script Changed"))
+				return;
 
 			bool traceScriptChanged =
 				_autocompleteHost == null
@@ -1381,9 +1527,9 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			if (_namespaceRefactorAutocompleteQuiescenceActive)
+			if (IsAutocompleteExternalMutationActive)
 			{
-				_pendingNamespaceRefactorAutocompleteScriptChange = true;
+				_pendingExternalMutationAutocompleteScriptChange = true;
 				ConsumeDeferredAutocompleteScriptChangeRebind(token);
 				RefreshEditorPluginProcessingState();
 				return;
@@ -1436,9 +1582,9 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
-			if (_namespaceRefactorAutocompleteQuiescenceActive)
+			if (IsAutocompleteExternalMutationActive)
 			{
-				_pendingNamespaceRefactorAutocompleteScriptChange = true;
+				_pendingExternalMutationAutocompleteScriptChange = true;
 				ConsumeDeferredAutocompleteScriptChangeRebind(token);
 				RefreshEditorPluginProcessingState();
 				return;
@@ -1545,6 +1691,10 @@ public partial class SystemExplorerPlugin
 						!TryGetAutocompleteScriptTransitionRebindAdmission(
 							scheduledHostInstanceToken,
 							targetTransitionId,
+							ShouldRequireSystemExplorerNavigationBindingQuiescence(
+								reloadReadyEpoch,
+								lifecycle
+							),
 							out AutocompleteEditorBindingCandidate ordinaryCandidate
 						)
 					)
@@ -1650,19 +1800,19 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (IsAutocompleteExternalMutationActive)
+		{
+			_pendingExternalMutationAutocompleteScriptChange = true;
+			RefreshEditorPluginProcessingState();
+			return;
+		}
+
 		if (
 			!EnsureManagedAssemblyStateCurrent(
 				"C# Autocomplete Tree Keyboard Navigation Finalize"
 			)
 		)
 		{
-			RefreshEditorPluginProcessingState();
-			return;
-		}
-
-		if (_namespaceRefactorAutocompleteQuiescenceActive)
-		{
-			_pendingNamespaceRefactorAutocompleteScriptChange = true;
 			RefreshEditorPluginProcessingState();
 			return;
 		}
@@ -1686,6 +1836,13 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
+			if (IsAutocompleteExternalMutationActive)
+			{
+				_suppressedExternalMutationAutocompleteCompletionRequestedCount++;
+				RefreshEditorPluginProcessingState();
+				return;
+			}
+
 			if (IsAutocompleteDeferredUsingInsertionBarrierActive)
 			{
 				IncrementAutocompleteDeferredUsingSuppression(
@@ -1699,13 +1856,6 @@ public partial class SystemExplorerPlugin
 
 			if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Completion Requested"))
 				return;
-
-			if (_namespaceRefactorAutocompleteQuiescenceActive)
-			{
-				_suppressedNamespaceRefactorAutocompleteCompletionRequestedCount++;
-				RefreshEditorPluginProcessingState();
-				return;
-			}
 
 			if (TryEnsureAutocompleteHost(out host))
 			{
@@ -1781,6 +1931,12 @@ public partial class SystemExplorerPlugin
 			if (!IsAutocompletePluginBoundaryAvailable())
 				return;
 
+			if (IsAutocompleteExternalMutationActive)
+			{
+				_suppressedExternalMutationAutocompleteGuiInputCount++;
+				return;
+			}
+
 			if (IsAutocompleteDeferredUsingInsertionBarrierActive)
 			{
 				IncrementAutocompleteDeferredUsingSuppression(
@@ -1794,12 +1950,6 @@ public partial class SystemExplorerPlugin
 
 			if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete CodeEdit Input"))
 				return;
-
-			if (_namespaceRefactorAutocompleteQuiescenceActive)
-			{
-				_suppressedNamespaceRefactorAutocompleteGuiInputCount++;
-				return;
-			}
 
 			if (!TryEnsureAutocompleteHost(out AutocompletePluginHost host))
 				return;
@@ -1828,15 +1978,15 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Filesystem Changed"))
-			return;
-
-		if (_namespaceRefactorAutocompleteQuiescenceActive)
+		if (IsAutocompleteExternalMutationActive)
 		{
-			_pendingNamespaceRefactorAutocompleteFilesystemChange = true;
-			_suppressedNamespaceRefactorAutocompleteFilesystemChangedCount++;
+			_pendingExternalMutationAutocompleteFilesystemChange = true;
+			_suppressedExternalMutationAutocompleteFilesystemChangedCount++;
 			return;
 		}
+
+		if (!EnsureManagedAssemblyStateCurrent("C# Autocomplete Filesystem Changed"))
+			return;
 
 		AutocompleteFilesystemDiagnosticBoundaryContext diagnosticBoundary =
 			BeginAutocompleteFilesystemChangedDiagnosticBoundary();
@@ -1852,6 +2002,7 @@ public partial class SystemExplorerPlugin
 		finally
 		{
 			CompleteAutocompleteFilesystemChangedDiagnosticBoundary(diagnosticBoundary);
+			RefreshEditorPluginProcessingState();
 		}
 	}
 
@@ -1859,6 +2010,13 @@ public partial class SystemExplorerPlugin
 	{
 		if (!IsAutocompletePluginBoundaryAvailable())
 			return;
+
+		if (IsAutocompleteExternalMutationActive)
+		{
+			_pendingExternalMutationAutocompleteTextChange = true;
+			_suppressedExternalMutationAutocompleteTextChangedCount++;
+			return;
+		}
 
 		if (IsAutocompleteDeferredUsingInsertionBarrierActive)
 		{
@@ -1877,13 +2035,6 @@ public partial class SystemExplorerPlugin
 		)
 		{
 			QueueAutocompleteTextChangedRecovery();
-			return;
-		}
-
-		if (_namespaceRefactorAutocompleteQuiescenceActive)
-		{
-			_pendingNamespaceRefactorAutocompleteTextChange = true;
-			_suppressedNamespaceRefactorAutocompleteTextChangedCount++;
 			return;
 		}
 
@@ -2023,6 +2174,12 @@ public partial class SystemExplorerPlugin
 		if (!IsAutocompletePluginBoundaryAvailable())
 			return;
 
+		if (IsAutocompleteExternalMutationActive)
+		{
+			_pendingExternalMutationAutocompleteTextChange = true;
+			return;
+		}
+
 		if (IsAutocompleteDeferredUsingInsertionBarrierActive)
 		{
 			IncrementAutocompleteDeferredUsingSuppression(
@@ -2044,12 +2201,6 @@ public partial class SystemExplorerPlugin
 
 			if (!IsAutocompletePluginBoundaryAvailable())
 				return;
-		}
-
-		if (_namespaceRefactorAutocompleteQuiescenceActive)
-		{
-			_pendingNamespaceRefactorAutocompleteTextChange = true;
-			return;
 		}
 
 		AutocompletePluginHost scheduledHost = _autocompleteHost;
@@ -2154,11 +2305,105 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private bool HasPendingAutocompleteProcessWork()
+	private bool HasPendingAutocompleteIndexingQuiescenceProcessWork()
 	{
 		if (
-			_namespaceRefactorAutocompleteQuiescenceActive
-			|| IsAutocompleteScriptChangeRebindBarrierActive
+			!IsAutocompletePluginBoundaryAvailable()
+			|| _autocompleteHost == null
+			|| !IsAutocompleteHostManagedAssemblyGenerationCurrent()
+		)
+		{
+			return false;
+		}
+
+		try
+		{
+			return _autocompleteHost.HasPendingIndexingQuiescenceWork;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	private bool IsAutocompleteIndexingQuiescenceAdmissionAllowed()
+	{
+		return IsAutocompletePluginBoundaryAvailable()
+			&& HasVerifiedPersistentTreeStateForCurrentAssembly
+			&& !_isRecoveringManagedAssemblyState
+			&& !IsAutocompleteExternalMutationActive
+			&& !IsAutocompleteScriptChangeRebindBarrierActive
+			&& !IsAutocompleteDeferredUsingInsertionBarrierActive
+			&& IsAutocompleteReloadStabilizationReady()
+			&& _autocompleteHost != null
+			&& IsAutocompleteHostManagedAssemblyGenerationCurrent();
+	}
+
+	private void ProcessPendingAutocompleteIndexingQuiescence(double delta)
+	{
+		AutocompletePluginHost host = _autocompleteHost;
+		if (
+			host == null
+			|| !IsAutocompleteHostManagedAssemblyGenerationCurrent()
+			|| !host.HasPendingIndexingQuiescenceWork
+		)
+		{
+			return;
+		}
+
+		bool admissionAllowed = IsAutocompleteIndexingQuiescenceAdmissionAllowed();
+		host.ProcessPendingIndexingQuiescence(delta, admissionAllowed);
+	}
+
+	private void ClearPendingAutocompleteIndexingQuiescenceProcessWork()
+	{
+		try
+		{
+			if (
+				_autocompleteHost != null
+				&& IsAutocompleteHostManagedAssemblyGenerationCurrent()
+			)
+			{
+				_autocompleteHost.ClearPendingIndexingQuiescenceWork();
+			}
+		}
+		catch
+		{
+		}
+	}
+
+	private void CapturePendingAutocompleteProcessFollowUpDuringExternalMutation()
+	{
+		if (!IsAutocompleteExternalMutationActive)
+			return;
+
+		try
+		{
+			if (
+				_autocompleteHost != null
+				&& IsAutocompleteHostManagedAssemblyGenerationCurrent()
+				&& _autocompleteHost.HasPendingCompletionProcessWork()
+			)
+			{
+				_pendingExternalMutationAutocompleteProcessFollowUp = true;
+			}
+		}
+		catch
+		{
+			// Pure-managed follow-up bookkeeping is best effort while the external lease owns the editor.
+		}
+	}
+
+	private bool HasPendingAutocompleteProcessWork()
+	{
+		if (IsAutocompleteExternalMutationActive)
+		{
+			CapturePendingAutocompleteProcessFollowUpDuringExternalMutation();
+			return false;
+		}
+
+		if (
+			IsAutocompleteScriptChangeRebindBarrierActive
 			|| IsAutocompleteDeferredUsingInsertionBarrierActive
 		)
 		{
@@ -2186,9 +2431,14 @@ public partial class SystemExplorerPlugin
 
 	private void ProcessPendingAutocompleteProcessWork()
 	{
+		if (IsAutocompleteExternalMutationActive)
+		{
+			CapturePendingAutocompleteProcessFollowUpDuringExternalMutation();
+			return;
+		}
+
 		if (
-			_namespaceRefactorAutocompleteQuiescenceActive
-			|| IsAutocompleteScriptChangeRebindBarrierActive
+			IsAutocompleteScriptChangeRebindBarrierActive
 			|| IsAutocompleteDeferredUsingInsertionBarrierActive
 		)
 		{
@@ -2207,9 +2457,14 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (IsAutocompleteExternalMutationActive)
+		{
+			CapturePendingAutocompleteProcessFollowUpDuringExternalMutation();
+			return;
+		}
+
 		if (
-			_namespaceRefactorAutocompleteQuiescenceActive
-			|| IsAutocompleteScriptChangeRebindBarrierActive
+			IsAutocompleteScriptChangeRebindBarrierActive
 			|| IsAutocompleteDeferredUsingInsertionBarrierActive
 		)
 		{

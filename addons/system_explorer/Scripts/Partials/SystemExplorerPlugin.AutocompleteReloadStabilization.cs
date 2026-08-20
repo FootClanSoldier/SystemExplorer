@@ -82,7 +82,7 @@ public partial class SystemExplorerPlugin
 		if (
 			!IsAutocompletePluginBoundaryAvailable()
 			|| _isRecoveringManagedAssemblyState
-			|| _namespaceRefactorAutocompleteQuiescenceActive
+			|| IsAutocompleteExternalMutationActive
 		)
 		{
 			return;
@@ -171,7 +171,8 @@ public partial class SystemExplorerPlugin
 					after
 				);
 				QueueDeferredAutocompleteScriptChangeRebind(
-					"AutocompleteReloadStabilization"
+					"AutocompleteReloadStabilization",
+					bypassSystemExplorerNavigationQuiescenceAdmission: true
 				);
 				break;
 		}

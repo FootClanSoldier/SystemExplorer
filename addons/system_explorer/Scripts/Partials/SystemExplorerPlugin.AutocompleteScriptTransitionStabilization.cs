@@ -46,6 +46,29 @@ public partial class SystemExplorerPlugin
 		_autocompleteScriptTransitionStabilizationCoordinator?.Invalidate();
 	}
 
+	private void RestartAutocompleteScriptTransitionStabilizationForExternalMutationBarrier()
+	{
+		AutocompleteScriptTransitionStabilizationCoordinator coordinator =
+			_autocompleteScriptTransitionStabilizationCoordinator;
+		if (
+			coordinator == null
+			|| !string.Equals(
+				coordinator.ManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		bool hadPendingProcessWork = coordinator.HasPendingProcessWork;
+		coordinator.RestartQuietWindowAfterBarrier();
+
+		if (!hadPendingProcessWork && coordinator.HasPendingProcessWork)
+			RefreshEditorPluginProcessingState();
+	}
+
 	private bool HasPendingAutocompleteScriptTransitionStabilizationProcessWork()
 	{
 		return _autocompleteScriptTransitionStabilizationCoordinator?.HasPendingProcessWork
@@ -71,7 +94,22 @@ public partial class SystemExplorerPlugin
 			&& path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
 	}
 
-	private bool ShouldRequireAutocompleteScriptTransitionStabilization(
+	private bool ShouldRequireSystemExplorerNavigationBindingQuiescence(
+		long reloadReadyEpoch,
+		ScriptEditorLifecycleSnapshot lifecycle
+	)
+	{
+		return reloadReadyEpoch > 0
+			&& AutocompleteReloadStabilizationCoordinator.Snapshot.State
+				== AutocompleteReloadStabilizationState.Ready
+			&& lifecycle.State == ScriptEditorLifecycleState.BindingPending
+			&& lifecycle.ScriptTransitionId > 0
+			&& lifecycle.TransitionOrigin
+				== ScriptEditorTransitionOrigin.SystemExplorerNavigation
+			&& IsKnownCSharpAutocompleteScriptTransitionTarget(lifecycle);
+	}
+
+	private bool ShouldRequirePostReloadAutocompleteScriptTransitionStabilization(
 		long reloadReadyEpoch,
 		ScriptEditorLifecycleSnapshot lifecycle
 	)
@@ -84,15 +122,110 @@ public partial class SystemExplorerPlugin
 			&& IsKnownCSharpAutocompleteScriptTransitionTarget(lifecycle);
 	}
 
+	private bool ShouldRequireAutocompleteScriptTransitionStabilization(
+		long reloadReadyEpoch,
+		ScriptEditorLifecycleSnapshot lifecycle
+	)
+	{
+		return ShouldRequireSystemExplorerNavigationBindingQuiescence(
+				reloadReadyEpoch,
+				lifecycle
+			)
+			|| ShouldRequirePostReloadAutocompleteScriptTransitionStabilization(
+				reloadReadyEpoch,
+				lifecycle
+			);
+	}
+
+	private bool TryInterceptSystemExplorerNavigationBindingQuiescenceAdmission()
+	{
+		AutocompleteReloadStabilizationSnapshot reload =
+			AutocompleteReloadStabilizationCoordinator.Snapshot;
+		ScriptEditorLifecycleSnapshot lifecycle = ScriptEditorLifecycleCoordinator.Snapshot;
+
+		if (
+			!ShouldRequireSystemExplorerNavigationBindingQuiescence(
+				reload.ReloadReadyEpoch,
+				lifecycle
+			)
+		)
+		{
+			return false;
+		}
+
+		if (
+			_autocompleteHostInstanceToken <= 0
+			|| !string.Equals(
+				_autocompleteHostManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return false;
+		}
+
+		AutocompleteScriptTransitionStabilizationCoordinator coordinator =
+			AutocompleteScriptTransitionStabilizationCoordinator;
+		AutocompleteScriptTransitionStabilizationSnapshot before = coordinator.Snapshot;
+
+		bool exactActivationPendingWithoutFinalResolver =
+			before.State == AutocompleteScriptTransitionStabilizationState.ActivationPending
+			&& before.NavigationQuietPeriodRequired
+			&& before.HostInstanceToken == _autocompleteHostInstanceToken
+			&& before.ScriptTransitionId == lifecycle.ScriptTransitionId
+			&& !_autocompleteDeferredScriptChangeRebindPending;
+		if (exactActivationPendingWithoutFinalResolver)
+		{
+			coordinator.RestartQuietWindowAfterBarrier();
+			before = coordinator.Snapshot;
+		}
+
+		if (
+			!coordinator.ArmForTransition(
+				_autocompleteHostInstanceToken,
+				lifecycle.ScriptTransitionId,
+				requireNavigationQuietPeriod: true
+			)
+		)
+		{
+			return false;
+		}
+
+		bool beganNewExactTransition =
+			before.State == AutocompleteScriptTransitionStabilizationState.Idle
+			|| before.HostInstanceToken != _autocompleteHostInstanceToken
+			|| before.ScriptTransitionId != lifecycle.ScriptTransitionId;
+
+		if (beganNewExactTransition && _autocompleteDeferredScriptChangeRebindPending)
+			ResetDeferredAutocompleteScriptChangeRebindState(invalidateToken: true);
+
+		RefreshEditorPluginProcessingState();
+		return true;
+	}
+
 	private bool TryGetAutocompleteScriptTransitionRebindAdmission(
 		long hostInstanceToken,
 		long scriptTransitionId,
+		bool requireNavigationQuietPeriod,
 		out AutocompleteEditorBindingCandidate requiredActivationCandidate
 	)
 	{
 		requiredActivationCandidate = default;
 		AutocompleteScriptTransitionStabilizationCoordinator coordinator =
 			AutocompleteScriptTransitionStabilizationCoordinator;
+		AutocompleteScriptTransitionStabilizationSnapshot current = coordinator.Snapshot;
+
+		if (
+			current.State != AutocompleteScriptTransitionStabilizationState.Idle
+			&& current.HostInstanceToken == hostInstanceToken
+			&& current.ScriptTransitionId == scriptTransitionId
+			&& current.NavigationQuietPeriodRequired != requireNavigationQuietPeriod
+		)
+		{
+			coordinator.Invalidate();
+			return false;
+		}
 
 		if (
 			coordinator.TryGetActivationAuthority(
@@ -121,11 +254,15 @@ public partial class SystemExplorerPlugin
 			return false;
 		}
 
-		coordinator.ArmForTransition(hostInstanceToken, scriptTransitionId);
+		coordinator.ArmForTransition(
+			hostInstanceToken,
+			scriptTransitionId,
+			requireNavigationQuietPeriod
+		);
 		return false;
 	}
 
-	private void ProcessAutocompleteScriptTransitionStabilization()
+	private void ProcessAutocompleteScriptTransitionStabilization(double delta)
 	{
 		AutocompleteScriptTransitionStabilizationCoordinator coordinator =
 			_autocompleteScriptTransitionStabilizationCoordinator;
@@ -138,29 +275,6 @@ public partial class SystemExplorerPlugin
 				ManagedAssemblyGeneration,
 				StringComparison.Ordinal
 			)
-			|| !IsAutocompletePluginBoundaryAvailable()
-			|| _isRecoveringManagedAssemblyState
-			|| _namespaceRefactorAutocompleteQuiescenceActive
-		)
-		{
-			if (
-				!string.Equals(
-					coordinator.ManagedAssemblyGeneration,
-					ManagedAssemblyGeneration,
-					StringComparison.Ordinal
-				)
-			)
-			{
-				coordinator.Invalidate();
-			}
-			return;
-		}
-
-		AutocompleteReloadStabilizationSnapshot reload =
-			AutocompleteReloadStabilizationCoordinator.Snapshot;
-		if (
-			reload.State != AutocompleteReloadStabilizationState.Ready
-			|| reload.ReloadReadyEpoch <= 1
 		)
 		{
 			coordinator.Invalidate();
@@ -168,9 +282,12 @@ public partial class SystemExplorerPlugin
 		}
 
 		ScriptEditorLifecycleSnapshot lifecycle = ScriptEditorLifecycleCoordinator.Snapshot;
+		AutocompleteScriptTransitionStabilizationSnapshot stabilization = coordinator.Snapshot;
 		if (
 			lifecycle.State != ScriptEditorLifecycleState.BindingPending
 			|| lifecycle.ScriptTransitionId <= 0
+			|| stabilization.HostInstanceToken <= 0
+			|| stabilization.ScriptTransitionId != lifecycle.ScriptTransitionId
 			|| !IsKnownCSharpAutocompleteScriptTransitionTarget(lifecycle)
 		)
 		{
@@ -178,30 +295,93 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		AutocompletePluginHost host = _autocompleteHost;
+		AutocompleteReloadStabilizationSnapshot reload =
+			AutocompleteReloadStabilizationCoordinator.Snapshot;
+		bool requiresNavigationQuiet = stabilization.NavigationQuietPeriodRequired;
+		bool stillRequiresNavigationQuiet =
+			ShouldRequireSystemExplorerNavigationBindingQuiescence(
+				reload.ReloadReadyEpoch,
+				lifecycle
+			);
+		bool stillRequiresOrdinaryPostReloadStabilization =
+			ShouldRequirePostReloadAutocompleteScriptTransitionStabilization(
+				reload.ReloadReadyEpoch,
+				lifecycle
+			);
+
 		if (
-			host == null
-			|| _autocompleteHostInstanceToken <= 0
-			|| !string.Equals(
+			requiresNavigationQuiet
+				? !stillRequiresNavigationQuiet
+				: !stillRequiresOrdinaryPostReloadStabilization
+		)
+		{
+			if (
+				requiresNavigationQuiet
+				&& reload.State != AutocompleteReloadStabilizationState.Ready
+			)
+			{
+				coordinator.RestartQuietWindowAfterBarrier();
+				return;
+			}
+
+			coordinator.Invalidate();
+			return;
+		}
+
+		bool pluginAndMutationAdmissionAllowed =
+			IsAutocompletePluginBoundaryAvailable()
+			&& !_isRecoveringManagedAssemblyState
+			&& !IsAutocompleteExternalMutationActive;
+
+		AutocompletePluginHost host = _autocompleteHost;
+		bool hostAuthorityAvailable =
+			host != null
+			&& _autocompleteHostInstanceToken > 0
+			&& stabilization.HostInstanceToken == _autocompleteHostInstanceToken
+			&& string.Equals(
 				_autocompleteHostManagedAssemblyGeneration,
 				ManagedAssemblyGeneration,
 				StringComparison.Ordinal
+			);
+
+		if (requiresNavigationQuiet)
+		{
+			bool quietAdmissionAllowed =
+				pluginAndMutationAdmissionAllowed
+				&& reload.State == AutocompleteReloadStabilizationState.Ready
+				&& reload.ReloadReadyEpoch > 0
+				&& hostAuthorityAvailable;
+
+			AutocompleteScriptTransitionStabilizationState stateBeforeAdvance =
+				stabilization.State;
+			if (!coordinator.TryAdvanceNavigationQuietPeriod(delta, quietAdmissionAllowed))
+				return;
+
+			AutocompleteScriptTransitionStabilizationSnapshot afterAdvance =
+				coordinator.Snapshot;
+			if (
+				stateBeforeAdvance == AutocompleteScriptTransitionStabilizationState.Quiescing
+				&& afterAdvance.State
+					== AutocompleteScriptTransitionStabilizationState.Observing
 			)
-		)
+			{
+				LogAutocompleteNavigationBindingQuiescenceAdmission(
+					afterAdvance,
+					reload.ReloadReadyEpoch,
+					GetAuthoritativeAutocompleteScriptTransitionTargetPath(lifecycle)
+				);
+			}
+		}
+		else if (!pluginAndMutationAdmissionAllowed || !hostAuthorityAvailable)
 		{
 			return;
 		}
 
-		AutocompleteScriptTransitionStabilizationSnapshot stabilization =
-			coordinator.Snapshot;
-		if (
-			stabilization.HostInstanceToken != _autocompleteHostInstanceToken
-			|| stabilization.ScriptTransitionId != lifecycle.ScriptTransitionId
-		)
-		{
-			coordinator.Invalidate();
+		stabilization = coordinator.Snapshot;
+		if (stabilization.State == AutocompleteScriptTransitionStabilizationState.Quiescing)
 			return;
-		}
+		if (host == null)
+			return;
 
 		AutocompleteEditorBindingCandidateObservationKind observationKind =
 			host.TryObserveCodeEditBindingCandidate(
@@ -214,6 +394,8 @@ public partial class SystemExplorerPlugin
 			observationKind != AutocompleteEditorBindingCandidateObservationKind.Candidate
 		)
 		{
+			if (requiresNavigationQuiet)
+				coordinator.RestartQuietWindowAfterBarrier();
 			return;
 		}
 
@@ -227,6 +409,8 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
+			if (requiresNavigationQuiet)
+				coordinator.RestartQuietWindowAfterBarrier();
 			return;
 		}
 
@@ -234,14 +418,43 @@ public partial class SystemExplorerPlugin
 			candidate
 		);
 		if (
+			requiresNavigationQuiet
+			&& update == AutocompleteScriptTransitionCandidateUpdateKind.None
+		)
+		{
+			coordinator.RestartQuietWindowAfterBarrier();
+			return;
+		}
+
+		if (
 			update
 			== AutocompleteScriptTransitionCandidateUpdateKind.ActivationAuthorized
 		)
 		{
 			QueueDeferredAutocompleteScriptChangeRebind(
-				"AutocompleteScriptTransitionStabilization"
+				"AutocompleteScriptTransitionStabilization",
+				bypassSystemExplorerNavigationQuiescenceAdmission: true
 			);
 		}
+	}
+
+	private void LogAutocompleteNavigationBindingQuiescenceAdmission(
+		AutocompleteScriptTransitionStabilizationSnapshot snapshot,
+		long reloadReadyEpoch,
+		string scriptPath
+	)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"C# autocomplete navigation BindingActivation quiescence admitted",
+			$"QuietPeriodMs='{SystemExplorer.Autocomplete.AutocompleteScriptTransitionStabilizationCoordinator.NavigationQuietPeriodMilliseconds}', "
+				+ $"QuietDurationMs='{snapshot.QuietElapsedSeconds * 1000.0:F1}', "
+				+ $"CoalescedNavigationTransitionCount='{snapshot.CoalescedNavigationTransitionCount}', "
+				+ $"ManagedAssemblyGeneration='{snapshot.ManagedAssemblyGeneration}', "
+				+ $"HostInstanceToken='{snapshot.HostInstanceToken}', "
+				+ $"ScriptTransitionId='{snapshot.ScriptTransitionId}', "
+				+ $"ReloadReadyEpoch='{reloadReadyEpoch}', "
+				+ $"ScriptPath='{scriptPath ?? ""}'"
+		);
 	}
 
 	private bool TryCompleteAutocompleteScriptTransitionActivation(

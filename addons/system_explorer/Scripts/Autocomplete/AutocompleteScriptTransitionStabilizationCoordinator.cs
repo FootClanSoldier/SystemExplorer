@@ -6,6 +6,7 @@ namespace SystemExplorer.Autocomplete;
 internal enum AutocompleteScriptTransitionStabilizationState
 {
 	Idle,
+	Quiescing,
 	Observing,
 	CandidateObserved,
 	ActivationPending,
@@ -25,17 +26,27 @@ internal readonly record struct AutocompleteScriptTransitionStabilizationSnapsho
 	long StabilizationToken,
 	long HostInstanceToken,
 	long ScriptTransitionId,
+	bool NavigationQuietPeriodRequired,
+	double QuietElapsedSeconds,
+	int CoalescedNavigationTransitionCount,
 	AutocompleteEditorBindingCandidate? Candidate
 );
 
 internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 {
+	internal const double NavigationQuietPeriodSeconds = 0.200;
+	internal const int NavigationQuietPeriodMilliseconds = 200;
+
 	private readonly string _managedAssemblyGeneration;
 	private long _stabilizationToken;
 	private AutocompleteScriptTransitionStabilizationState _state =
 		AutocompleteScriptTransitionStabilizationState.Idle;
 	private long _hostInstanceToken;
 	private long _scriptTransitionId;
+	private bool _navigationQuietPeriodRequired;
+	private double _quietElapsedSeconds;
+	private bool _discardNextEligibleDelta;
+	private int _coalescedNavigationTransitionCount;
 	private AutocompleteEditorBindingCandidate? _candidate;
 
 	internal AutocompleteScriptTransitionStabilizationCoordinator(
@@ -59,14 +70,22 @@ internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 			_stabilizationToken,
 			_hostInstanceToken,
 			_scriptTransitionId,
+			_navigationQuietPeriodRequired,
+			_quietElapsedSeconds,
+			_coalescedNavigationTransitionCount,
 			_candidate
 		);
 
 	internal bool HasPendingProcessWork =>
-		_state is AutocompleteScriptTransitionStabilizationState.Observing
+		_state is AutocompleteScriptTransitionStabilizationState.Quiescing
+			or AutocompleteScriptTransitionStabilizationState.Observing
 			or AutocompleteScriptTransitionStabilizationState.CandidateObserved;
 
-	internal bool ArmForTransition(long hostInstanceToken, long scriptTransitionId)
+	internal bool ArmForTransition(
+		long hostInstanceToken,
+		long scriptTransitionId,
+		bool requireNavigationQuietPeriod
+	)
 	{
 		if (hostInstanceToken <= 0 || scriptTransitionId <= 0)
 			return false;
@@ -75,21 +94,100 @@ internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 			_hostInstanceToken == hostInstanceToken
 			&& _scriptTransitionId == scriptTransitionId
 			&& (
-				_state is AutocompleteScriptTransitionStabilizationState.Observing
+				_state is AutocompleteScriptTransitionStabilizationState.Quiescing
+					or AutocompleteScriptTransitionStabilizationState.Observing
 					or AutocompleteScriptTransitionStabilizationState.CandidateObserved
 					or AutocompleteScriptTransitionStabilizationState.ActivationPending
 			)
 		)
 		{
-			return true;
+			return _navigationQuietPeriodRequired == requireNavigationQuietPeriod;
+		}
+
+		bool coalescesNavigationTransition =
+			requireNavigationQuietPeriod
+			&& _navigationQuietPeriodRequired
+			&& _state != AutocompleteScriptTransitionStabilizationState.Idle
+			&& _hostInstanceToken == hostInstanceToken;
+
+		if (coalescesNavigationTransition)
+		{
+			if (_coalescedNavigationTransitionCount < int.MaxValue)
+				_coalescedNavigationTransitionCount++;
+		}
+		else
+		{
+			_coalescedNavigationTransitionCount = 0;
 		}
 
 		AdvanceStabilizationToken();
 		_hostInstanceToken = hostInstanceToken;
 		_scriptTransitionId = scriptTransitionId;
+		_navigationQuietPeriodRequired = requireNavigationQuietPeriod;
+		_quietElapsedSeconds = 0;
+		_discardNextEligibleDelta = requireNavigationQuietPeriod;
 		_candidate = null;
+		_state = requireNavigationQuietPeriod
+			? AutocompleteScriptTransitionStabilizationState.Quiescing
+			: AutocompleteScriptTransitionStabilizationState.Observing;
+		return true;
+	}
+
+	internal bool TryAdvanceNavigationQuietPeriod(
+		double delta,
+		bool admissionAllowed
+	)
+	{
+		if (!_navigationQuietPeriodRequired)
+			return _state != AutocompleteScriptTransitionStabilizationState.Idle;
+
+		if (!admissionAllowed)
+		{
+			RestartQuietWindowAfterBarrier();
+			return false;
+		}
+
+		if (_state != AutocompleteScriptTransitionStabilizationState.Quiescing)
+			return true;
+
+		if (_discardNextEligibleDelta)
+		{
+			_discardNextEligibleDelta = false;
+			_quietElapsedSeconds = 0;
+			return false;
+		}
+
+		if (double.IsNaN(delta) || double.IsInfinity(delta) || delta < 0)
+			delta = 0;
+
+		_quietElapsedSeconds += delta;
+		if (_quietElapsedSeconds < NavigationQuietPeriodSeconds)
+			return false;
+
 		_state = AutocompleteScriptTransitionStabilizationState.Observing;
 		return true;
+	}
+
+	internal void RestartQuietWindowAfterBarrier()
+	{
+		_candidate = null;
+		_quietElapsedSeconds = 0;
+
+		if (
+			_navigationQuietPeriodRequired
+			&& _hostInstanceToken > 0
+			&& _scriptTransitionId > 0
+		)
+		{
+			_state = AutocompleteScriptTransitionStabilizationState.Quiescing;
+			_discardNextEligibleDelta = true;
+			return;
+		}
+
+		_discardNextEligibleDelta = false;
+		_state = _hostInstanceToken > 0 && _scriptTransitionId > 0
+			? AutocompleteScriptTransitionStabilizationState.Observing
+			: AutocompleteScriptTransitionStabilizationState.Idle;
 	}
 
 	internal AutocompleteScriptTransitionCandidateUpdateKind ObserveCandidate(
@@ -98,6 +196,9 @@ internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 	{
 		candidate = candidate.Normalized();
 		if (!IsCandidateForCurrentContext(candidate))
+			return AutocompleteScriptTransitionCandidateUpdateKind.None;
+
+		if (_state == AutocompleteScriptTransitionStabilizationState.Quiescing)
 			return AutocompleteScriptTransitionCandidateUpdateKind.None;
 
 		if (_state == AutocompleteScriptTransitionStabilizationState.Observing)
@@ -112,7 +213,15 @@ internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 
 		if (!_candidate.HasValue || !_candidate.Value.AuthorityEquals(candidate))
 		{
-			_candidate = candidate;
+			if (_navigationQuietPeriodRequired)
+			{
+				RestartNavigationQuietWindowForCandidateInstability();
+			}
+			else
+			{
+				_candidate = candidate;
+			}
+
 			return AutocompleteScriptTransitionCandidateUpdateKind.Changed;
 		}
 
@@ -184,6 +293,10 @@ internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 		}
 
 		_candidate = null;
+		_navigationQuietPeriodRequired = false;
+		_quietElapsedSeconds = 0;
+		_discardNextEligibleDelta = false;
+		_coalescedNavigationTransitionCount = 0;
 		_state = AutocompleteScriptTransitionStabilizationState.Idle;
 		return true;
 	}
@@ -192,6 +305,20 @@ internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 	{
 		AdvanceStabilizationToken();
 		_candidate = null;
+		_quietElapsedSeconds = 0;
+
+		if (
+			_navigationQuietPeriodRequired
+			&& _hostInstanceToken > 0
+			&& _scriptTransitionId > 0
+		)
+		{
+			_discardNextEligibleDelta = true;
+			_state = AutocompleteScriptTransitionStabilizationState.Quiescing;
+			return;
+		}
+
+		_discardNextEligibleDelta = false;
 		_state = _hostInstanceToken > 0 && _scriptTransitionId > 0
 			? AutocompleteScriptTransitionStabilizationState.Observing
 			: AutocompleteScriptTransitionStabilizationState.Idle;
@@ -203,7 +330,19 @@ internal sealed class AutocompleteScriptTransitionStabilizationCoordinator
 		_state = AutocompleteScriptTransitionStabilizationState.Idle;
 		_hostInstanceToken = 0;
 		_scriptTransitionId = 0;
+		_navigationQuietPeriodRequired = false;
+		_quietElapsedSeconds = 0;
+		_discardNextEligibleDelta = false;
+		_coalescedNavigationTransitionCount = 0;
 		_candidate = null;
+	}
+
+	private void RestartNavigationQuietWindowForCandidateInstability()
+	{
+		_candidate = null;
+		_quietElapsedSeconds = 0;
+		_discardNextEligibleDelta = true;
+		_state = AutocompleteScriptTransitionStabilizationState.Quiescing;
 	}
 
 	private bool IsCandidateForCurrentContext(

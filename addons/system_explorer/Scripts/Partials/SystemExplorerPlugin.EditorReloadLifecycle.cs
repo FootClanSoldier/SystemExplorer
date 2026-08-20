@@ -607,11 +607,14 @@ public partial class SystemExplorerPlugin
 	private void ResetUnsafePendingTreeOperationsAfterManagedAssemblyReload()
 	{
 		ResetTreeMouseScriptClickIntent();
+		InvalidateContextMenuOpenRequest("ManagedAssemblyReload");
+		_pendingQuickActionsNoScriptsFound = false;
 		_pendingRemoveMetadata = "";
 		_pendingRenameMetadata = "";
 		_pendingAddFolderMetadata = "";
 		_pendingFolderBindingMetadata = "";
 		_pendingShowInFileManagerMetadata = "";
+		InvalidateFileManagerOpenRequest("ManagedAssemblyReload");
 		_pendingBeautifyScriptMetadata = "";
 		_pendingBeautifyAfterCSharpierInstallMetadata = "";
 		_pendingBeautifyAfterCSharpierInstallScriptPaths = Array.Empty<string>();
@@ -637,6 +640,10 @@ public partial class SystemExplorerPlugin
 		_isCreateScriptInputWarningPopupPending = false;
 		_namespaceRefactorHost = null;
 
+		HideWindowForManagedAssemblyReload(_contextQuickActionsSubmenu);
+		HideWindowForManagedAssemblyReload(_contextAddSubmenu);
+		HideWindowForManagedAssemblyReload(_contextNewSubmenu);
+		HideWindowForManagedAssemblyReload(_contextMenu);
 		HideWindowForManagedAssemblyReload(_removeDialog);
 		HideWindowForManagedAssemblyReload(_treeShortcutConflictDialog);
 		HideWindowForManagedAssemblyReload(_renameInputWarningDialog);

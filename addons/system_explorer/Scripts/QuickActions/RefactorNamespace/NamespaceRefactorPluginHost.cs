@@ -8,6 +8,24 @@ namespace SystemExplorer.QuickActions.RefactorNamespace;
 
 internal sealed class NamespaceRefactorPluginHost
 {
+	private sealed class DeferredBufferRefreshRequest
+	{
+		internal DeferredBufferRefreshRequest(
+			long requestToken,
+			string scriptPathPayload,
+			NamespaceRefactorDiagnosticContext diagnosticContext
+		)
+		{
+			RequestToken = requestToken;
+			ScriptPathPayload = scriptPathPayload;
+			DiagnosticContext = diagnosticContext;
+		}
+
+		internal long RequestToken { get; }
+		internal string ScriptPathPayload { get; }
+		internal NamespaceRefactorDiagnosticContext DiagnosticContext { get; }
+	}
+
 	private readonly AcceptDialog _dialog;
 	private readonly AcceptDialog _incompleteWriteReportDialog;
 	private readonly Label _descriptionLabel;
@@ -21,6 +39,15 @@ internal sealed class NamespaceRefactorPluginHost
 	private readonly CheckBox _withoutNamespaceOption;
 	private readonly NamespaceRefactorDialogView _namespaceRefactorDialogView;
 	private readonly NamespaceRefactorFeature _namespaceRefactorFeature;
+	private readonly Action _scheduleDeferredIncompleteWriteReportPresentation;
+	private readonly Action _scheduleDeferredConfiguredDialogSizeCorrection;
+	private readonly Action<long> _scheduleDeferredBufferRefreshDispatch;
+	private readonly Action<string> _scheduleDeferredTargetScriptRestoration;
+	private readonly Action _scheduleDeferredSelectionSync;
+	private readonly Action _scheduleDeferredTreeFocusRelease;
+	private readonly Dictionary<long, DeferredBufferRefreshRequest>
+		_pendingDeferredBufferRefreshRequests = new();
+	private long _nextDeferredBufferRefreshRequestToken;
 
 	internal NamespaceRefactorPluginHost(
 		AcceptDialog dialog,
@@ -55,7 +82,12 @@ internal sealed class NamespaceRefactorPluginHost
 		Action beginBatchScriptEditorContextPreservation,
 		Action endBatchScriptEditorContextPreservation,
 		Action syncSelectionAfterOperation,
-		Action releaseTreeFocusAfterNavigation
+		Action scheduleDeferredIncompleteWriteReportPresentation,
+		Action scheduleDeferredConfiguredDialogSizeCorrection,
+		Action<long> scheduleDeferredBufferRefreshDispatch,
+		Action<string> scheduleDeferredTargetScriptRestoration,
+		Action scheduleDeferredSelectionSync,
+		Action scheduleDeferredTreeFocusRelease
 	)
 	{
 		_dialog = dialog ?? throw new ArgumentNullException(nameof(dialog));
@@ -92,7 +124,24 @@ internal sealed class NamespaceRefactorPluginHost
 		if (beginBatchScriptEditorContextPreservation == null) throw new ArgumentNullException(nameof(beginBatchScriptEditorContextPreservation));
 		if (endBatchScriptEditorContextPreservation == null) throw new ArgumentNullException(nameof(endBatchScriptEditorContextPreservation));
 		if (syncSelectionAfterOperation == null) throw new ArgumentNullException(nameof(syncSelectionAfterOperation));
-		if (releaseTreeFocusAfterNavigation == null) throw new ArgumentNullException(nameof(releaseTreeFocusAfterNavigation));
+		_scheduleDeferredIncompleteWriteReportPresentation =
+			scheduleDeferredIncompleteWriteReportPresentation
+			?? throw new ArgumentNullException(nameof(scheduleDeferredIncompleteWriteReportPresentation));
+		_scheduleDeferredConfiguredDialogSizeCorrection =
+			scheduleDeferredConfiguredDialogSizeCorrection
+			?? throw new ArgumentNullException(nameof(scheduleDeferredConfiguredDialogSizeCorrection));
+		_scheduleDeferredBufferRefreshDispatch =
+			scheduleDeferredBufferRefreshDispatch
+			?? throw new ArgumentNullException(nameof(scheduleDeferredBufferRefreshDispatch));
+		_scheduleDeferredTargetScriptRestoration =
+			scheduleDeferredTargetScriptRestoration
+			?? throw new ArgumentNullException(nameof(scheduleDeferredTargetScriptRestoration));
+		_scheduleDeferredSelectionSync =
+			scheduleDeferredSelectionSync
+			?? throw new ArgumentNullException(nameof(scheduleDeferredSelectionSync));
+		_scheduleDeferredTreeFocusRelease =
+			scheduleDeferredTreeFocusRelease
+			?? throw new ArgumentNullException(nameof(scheduleDeferredTreeFocusRelease));
 
 		_namespaceRefactorDialogView = new NamespaceRefactorDialogView(
 			_dialog,
@@ -135,8 +184,8 @@ internal sealed class NamespaceRefactorPluginHost
 			ScheduleDeferredBufferRefresh,
 			syncSelectionAfterOperation,
 			ScheduleDeferredTargetScriptRestoration,
-			() => Callable.From(syncSelectionAfterOperation).CallDeferred(),
-			() => Callable.From(releaseTreeFocusAfterNavigation).CallDeferred()
+			_scheduleDeferredSelectionSync,
+			_scheduleDeferredTreeFocusRelease
 		);
 	}
 
@@ -174,6 +223,37 @@ internal sealed class NamespaceRefactorPluginHost
 	internal void SelectExistingNamespace(long index) =>
 		_namespaceRefactorFeature.SelectExistingNamespace(index);
 
+	internal void PresentIncompleteWriteReportDeferred() =>
+		_incompleteWriteReportDialog.PopupCentered();
+
+	internal void ApplyConfiguredDialogSizeCorrectionDeferred() =>
+		_namespaceRefactorDialogView.ApplySize();
+
+	internal void ApplyDeferredBufferRefresh(long requestToken)
+	{
+		if (!_pendingDeferredBufferRefreshRequests.TryGetValue(requestToken, out DeferredBufferRefreshRequest request))
+			return;
+
+		_pendingDeferredBufferRefreshRequests.Remove(requestToken);
+		NamespaceRefactorDiagnosticContext diagnosticContext = request.DiagnosticContext;
+		diagnosticContext?.Log("DeferredSync", "Deferred buffer refresh callback started.");
+
+		try
+		{
+			_namespaceRefactorFeature.RefreshOpenBuffersAfterDeferredResourceRefresh(
+				request.ScriptPathPayload,
+				diagnosticContext
+			);
+		}
+		finally
+		{
+			diagnosticContext?.Log("DeferredSync", "Deferred buffer refresh callback completed.");
+		}
+	}
+
+	internal void RestoreTargetScriptEditorDeferred(string scriptPath) =>
+		_namespaceRefactorFeature.RestoreTargetScriptEditor(scriptPath);
+
 	private void ShowIncompleteWriteReport(IReadOnlyList<string> failedWritePaths)
 	{
 		if (failedWritePaths == null || failedWritePaths.Count == 0)
@@ -185,15 +265,14 @@ internal sealed class NamespaceRefactorPluginHost
 
 		_incompleteWriteReportDialog.DialogText =
 			$"{heading}\n\n{string.Join("\n", failedWritePaths)}";
-		Callable.From(() => _incompleteWriteReportDialog.PopupCentered()).CallDeferred();
+		_scheduleDeferredIncompleteWriteReportPresentation();
 	}
-
 
 	private void ShowConfiguredDialog(bool selectAllNewNamespace)
 	{
 		_namespaceRefactorDialogView.ApplySize();
 		_namespaceRefactorDialogView.PopupCentered();
-		Callable.From(_namespaceRefactorDialogView.ApplySize).CallDeferred();
+		_scheduleDeferredConfiguredDialogSizeCorrection();
 		_namespaceRefactorDialogView.FocusNewNamespace(selectAllNewNamespace);
 	}
 
@@ -206,30 +285,40 @@ internal sealed class NamespaceRefactorPluginHost
 			"DeferredSync",
 			() => $"Deferred buffer refresh callback scheduled; Payload='{scriptPathPayload ?? ""}'."
 		);
-		Callable.From(
-			() =>
-			{
-				diagnosticContext?.Log("DeferredSync", "Deferred buffer refresh callback started.");
-				try
-				{
-					_namespaceRefactorFeature.RefreshOpenBuffersAfterDeferredResourceRefresh(
-						scriptPathPayload,
-						diagnosticContext
-					);
-				}
-				finally
-				{
-					diagnosticContext?.Log("DeferredSync", "Deferred buffer refresh callback completed.");
-				}
-			}
-		).CallDeferred();
+
+		long requestToken = AllocateDeferredBufferRefreshRequestToken();
+		var request = new DeferredBufferRefreshRequest(
+			requestToken,
+			scriptPathPayload,
+			diagnosticContext
+		);
+		_pendingDeferredBufferRefreshRequests.Add(request.RequestToken, request);
+
+		try
+		{
+			_scheduleDeferredBufferRefreshDispatch(request.RequestToken);
+		}
+		catch
+		{
+			_pendingDeferredBufferRefreshRequests.Remove(request.RequestToken);
+			throw;
+		}
 	}
 
-	private void ScheduleDeferredTargetScriptRestoration(string scriptPath)
+	private long AllocateDeferredBufferRefreshRequestToken()
 	{
-		Callable.From(
-			() => _namespaceRefactorFeature.RestoreTargetScriptEditor(scriptPath)
-		).CallDeferred();
+		if (_nextDeferredBufferRefreshRequestToken == long.MaxValue)
+		{
+			throw new InvalidOperationException(
+				"Namespace Refactor deferred buffer refresh request token exhausted."
+			);
+		}
+
+		_nextDeferredBufferRefreshRequestToken++;
+		return _nextDeferredBufferRefreshRequestToken;
 	}
+
+	private void ScheduleDeferredTargetScriptRestoration(string scriptPath) =>
+		_scheduleDeferredTargetScriptRestoration(scriptPath);
 }
 #endif

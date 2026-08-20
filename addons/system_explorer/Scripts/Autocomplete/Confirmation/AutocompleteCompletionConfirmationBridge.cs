@@ -11,20 +11,21 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 	private const string ReplaceAction = "ui_text_completion_replace";
 	private const string DefaultValueKey = "default_value";
 
-	private readonly AutocompleteCompletionOptionMetadataCodec _metadataCodec;
+	private readonly AutocompleteCompletionPublicationEnvelopeCodec _publicationEnvelopeCodec;
 	private readonly AutocompleteCodeEditMutationCoordinator _codeEditMutationCoordinator;
 	private readonly AutocompleteProjectTypeConfirmationService _projectTypeConfirmationService;
 	private readonly Action<string, string> _debugLog;
 
 	internal AutocompleteCompletionConfirmationBridge(
-		AutocompleteCompletionOptionMetadataCodec metadataCodec,
+		AutocompleteCompletionPublicationEnvelopeCodec publicationEnvelopeCodec,
 		AutocompleteCodeEditMutationCoordinator codeEditMutationCoordinator,
 		AutocompleteProjectTypeConfirmationService projectTypeConfirmationService,
 		Action<string, string> debugLog
 	)
 	{
-		_metadataCodec =
-			metadataCodec ?? throw new ArgumentNullException(nameof(metadataCodec));
+		_publicationEnvelopeCodec =
+			publicationEnvelopeCodec
+			?? throw new ArgumentNullException(nameof(publicationEnvelopeCodec));
 		_codeEditMutationCoordinator =
 			codeEditMutationCoordinator
 			?? throw new ArgumentNullException(nameof(codeEditMutationCoordinator));
@@ -78,10 +79,20 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 			if (
 				option == null
 				|| !option.TryGetValue(DefaultValueKey, out Variant defaultValue)
-				|| !_metadataCodec.TryDecode(
+				|| !_publicationEnvelopeCodec.TryDecodeWithItemMetadata(
 					defaultValue,
-					out AutocompleteCompletionOptionMetadata metadata
+					out AutocompleteCompletionPublicationEnvelope envelope
 				)
+			)
+			{
+				return false;
+			}
+
+			long selectedPublicationId = envelope.PublicationId;
+			AutocompleteCompletionOptionMetadata metadata = envelope.ItemMetadata;
+			if (
+				selectedPublicationId <= 0
+				|| metadata == null
 				|| !string.Equals(
 					metadata.Owner,
 					AutocompleteCompletionOptionMetadata.SystemExplorerOwner,
@@ -109,6 +120,8 @@ internal sealed class AutocompleteCompletionConfirmationBridge
 					codeEdit,
 					scriptPath,
 					bindingLease,
+					selectedPublicationId,
+					selectedIndex,
 					metadata,
 					replace,
 					preparation,

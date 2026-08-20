@@ -521,14 +521,31 @@ public partial class SystemExplorerPlugin
 
 		_treeOperationDialogDeferredShowScheduled = true;
 		int lifecycleGeneration = _treeOperationDialogLifecycleGeneration;
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
 
-		Callable
-			.From(() => TryShowPendingTreeOperationDialogDeferred(lifecycleGeneration))
-			.CallDeferred();
+		CallDeferred(
+			nameof(TryShowPendingTreeOperationDialogDeferred),
+			lifecycleGeneration,
+			scheduledManagedAssemblyGeneration
+		);
 	}
 
-	private void TryShowPendingTreeOperationDialogDeferred(int lifecycleGeneration)
+	private void TryShowPendingTreeOperationDialogDeferred(
+		int lifecycleGeneration,
+		string scheduledManagedAssemblyGeneration
+	)
 	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
 		_treeOperationDialogDeferredShowScheduled = false;
 
 		if (lifecycleGeneration != _treeOperationDialogLifecycleGeneration)

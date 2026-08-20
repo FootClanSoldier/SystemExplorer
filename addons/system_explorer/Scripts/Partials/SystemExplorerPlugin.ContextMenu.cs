@@ -23,9 +23,29 @@ public partial class SystemExplorerPlugin
 	private const string RefactorNamespaceBeautifyRunningTooltip =
 		"Beautify is running.";
 	private const string QuickActionsNoScriptsTooltip = "No scripts found";
+	private const string ContextMenuOpenOperationLabel = "System Explorer context menu open";
 
 	private Texture2D _contextHiddenSubmenuIcon;
 	private bool _pendingQuickActionsNoScriptsFound;
+	private long _contextMenuOpenOperationToken;
+	private bool _contextMenuOpenRequestPending;
+	private bool _contextMenuOpenWaitingForNextProcessFrame;
+	private string _contextMenuOpenScheduledManagedAssemblyGeneration = "";
+	private string _contextMenuOpenMetadata = "";
+	private bool _contextMenuOpenFilteringScripts;
+	private Vector2I _contextMenuOpenPopupScreenPosition;
+	private float _contextMenuOpenDockGlobalMouseX;
+	private long _contextMenuOpenSupersededCount;
+
+	private readonly record struct ContextMenuOpenRequestSnapshot(
+		long OperationToken,
+		string ScheduledManagedAssemblyGeneration,
+		string Metadata,
+		bool FilteringScripts,
+		Vector2I PopupScreenPosition,
+		float DockGlobalMouseX,
+		long SupersededCount
+	);
 	#endregion
 
 	#region Context Menu
@@ -33,6 +53,12 @@ public partial class SystemExplorerPlugin
 	{
 		if (item == null || !GodotObject.IsInstanceValid(item))
 			return;
+
+		if (IsAnyContextMenuHierarchyVisible())
+		{
+			LogContextMenuOpenCaptureRejected("ContextMenuHierarchyVisible");
+			return;
+		}
 
 		string metadata = item.GetMetadata(0).AsString();
 
@@ -74,10 +100,356 @@ public partial class SystemExplorerPlugin
 		_pendingBeautifyScriptMetadata = metadata;
 		_pendingFolderBindingMetadata = metadata.StartsWith("folder::") ? metadata : "";
 
-		BuildContextMenuForMetadata(metadata);
+		QueueContextMenuOpenRequest(
+			metadata,
+			_isFilteringScripts,
+			DisplayServer.MouseGetPosition(),
+			_dock != null && GodotObject.IsInstanceValid(_dock)
+				? _dock.GetGlobalMousePosition().X
+				: 0.0f
+		);
+	}
 
-		_contextMenu.Position = DisplayServer.MouseGetPosition();
-		_contextMenu.Popup();
+	private bool IsAnyContextMenuHierarchyVisible()
+	{
+		try
+		{
+			return IsContextPopupVisible(_contextMenu)
+				|| IsContextPopupVisible(_contextNewSubmenu)
+				|| IsContextPopupVisible(_contextAddSubmenu)
+				|| IsContextPopupVisible(_contextQuickActionsSubmenu);
+		}
+		catch
+		{
+			// If visibility cannot be proven safely, do not mutate a possibly published menu.
+			return true;
+		}
+	}
+
+	private static bool IsContextPopupVisible(PopupMenu menu)
+	{
+		return menu != null && GodotObject.IsInstanceValid(menu) && menu.Visible;
+	}
+
+	private void QueueContextMenuOpenRequest(
+		string metadata,
+		bool filteringScripts,
+		Vector2I popupScreenPosition,
+		float dockGlobalMouseX
+	)
+	{
+		bool supersedesCurrentRequest = _contextMenuOpenRequestPending;
+		long supersededOperationToken = _contextMenuOpenOperationToken;
+		string supersededMetadata = _contextMenuOpenMetadata;
+		long supersededCount = _contextMenuOpenSupersededCount;
+
+		long operationToken = AdvanceContextMenuOpenOperationToken();
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		long currentSupersededCount = supersedesCurrentRequest
+			? AdvanceContextMenuSupersededCount(supersededCount)
+			: 0;
+
+		_contextMenuOpenRequestPending = true;
+		_contextMenuOpenWaitingForNextProcessFrame = true;
+		_contextMenuOpenScheduledManagedAssemblyGeneration = scheduledManagedAssemblyGeneration;
+		_contextMenuOpenMetadata = metadata ?? "";
+		_contextMenuOpenFilteringScripts = filteringScripts;
+		_contextMenuOpenPopupScreenPosition = popupScreenPosition;
+		_contextMenuOpenDockGlobalMouseX = dockGlobalMouseX;
+		_contextMenuOpenSupersededCount = currentSupersededCount;
+
+		if (supersedesCurrentRequest)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"System Explorer context menu open request superseded",
+				$"SupersededOperationToken='{supersededOperationToken}', SupersededMetadata='{supersededMetadata}', CurrentOperationToken='{operationToken}', CurrentMetadata='{_contextMenuOpenMetadata}', FilterMode='{filteringScripts}', PopupPosition='{popupScreenPosition}', DockGlobalMouseX='{dockGlobalMouseX}', SupersededCount='{currentSupersededCount}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
+			);
+		}
+
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"System Explorer context menu open request admitted",
+			$"OperationToken='{operationToken}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Metadata='{_contextMenuOpenMetadata}', FilterMode='{filteringScripts}', PopupPosition='{popupScreenPosition}', DockGlobalMouseX='{dockGlobalMouseX}', SupersededCount='{currentSupersededCount}'"
+		);
+
+		RefreshEditorPluginProcessingState();
+	}
+
+	private static long AdvanceContextMenuSupersededCount(long currentCount)
+	{
+		unchecked
+		{
+			currentCount++;
+			if (currentCount <= 0)
+				currentCount = 1;
+		}
+
+		return currentCount;
+	}
+
+	private bool HasPendingContextMenuOpenProcessWork() =>
+		_contextMenuOpenRequestPending;
+
+	private void ProcessPendingContextMenuOpen()
+	{
+		if (!_contextMenuOpenRequestPending)
+			return;
+
+		if (_contextMenuOpenWaitingForNextProcessFrame)
+		{
+			_contextMenuOpenWaitingForNextProcessFrame = false;
+			ContextMenuOpenRequestSnapshot anchoredRequest =
+				CaptureCurrentContextMenuOpenRequestSnapshot();
+			LogContextMenuOpenBoundary("ProcessFrameAnchor", anchoredRequest);
+			return;
+		}
+
+		ContextMenuOpenRequestSnapshot request =
+			CaptureCurrentContextMenuOpenRequestSnapshot();
+		string rejectionReason = GetContextMenuOpenRequestRejectionReason(request);
+
+		if (!string.IsNullOrEmpty(rejectionReason))
+		{
+			RejectCurrentContextMenuOpenRequest(rejectionReason, request);
+			return;
+		}
+
+		try
+		{
+			LogContextMenuOpenBoundary("BuildBegin", request);
+			BuildContextMenuForMetadata(request.Metadata, request.DockGlobalMouseX);
+			LogContextMenuOpenBoundary("BuildReturned", request);
+		}
+		catch (Exception exception)
+		{
+			LogContextMenuOpenFailure("Build", request, exception);
+			ConsumeCurrentContextMenuOpenRequest(request.OperationToken);
+			throw;
+		}
+
+		try
+		{
+			_contextMenu.Position = request.PopupScreenPosition;
+			LogContextMenuOpenBoundary("PopupBegin", request);
+			_contextMenu.Popup();
+			LogContextMenuOpenBoundary("PopupReturned", request);
+		}
+		catch (Exception exception)
+		{
+			LogContextMenuOpenFailure("Popup", request, exception);
+			ConsumeCurrentContextMenuOpenRequest(request.OperationToken);
+			throw;
+		}
+
+		ConsumeCurrentContextMenuOpenRequest(request.OperationToken);
+	}
+
+	private ContextMenuOpenRequestSnapshot CaptureCurrentContextMenuOpenRequestSnapshot()
+	{
+		return new ContextMenuOpenRequestSnapshot(
+			_contextMenuOpenOperationToken,
+			_contextMenuOpenScheduledManagedAssemblyGeneration,
+			_contextMenuOpenMetadata,
+			_contextMenuOpenFilteringScripts,
+			_contextMenuOpenPopupScreenPosition,
+			_contextMenuOpenDockGlobalMouseX,
+			_contextMenuOpenSupersededCount
+		);
+	}
+
+	private string GetContextMenuOpenRequestRejectionReason(
+		ContextMenuOpenRequestSnapshot request
+	)
+	{
+		if (
+			!string.Equals(
+				request.ScheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return "ManagedAssemblyGenerationChanged";
+		}
+
+		if (request.OperationToken <= 0)
+			return "InvalidOperationToken";
+
+		if (request.OperationToken != _contextMenuOpenOperationToken)
+			return "StaleOperationToken";
+
+		if (!_contextMenuOpenRequestPending)
+			return "RequestNoLongerPending";
+
+		if (
+			!string.Equals(
+				request.Metadata,
+				_contextMenuOpenMetadata,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return "MetadataAuthorityMismatch";
+		}
+
+		if (request.FilteringScripts != _contextMenuOpenFilteringScripts)
+			return "FilterAuthorityMismatch";
+
+		if (request.FilteringScripts != _isFilteringScripts)
+			return "FilterModeChanged";
+
+		if (!IsValidGodotObject(this))
+			return "PluginInstanceInvalid";
+
+		if (!IsInsideTree())
+			return "PluginOutsideTree";
+
+		if (!IsValidContextMenuOpenControl(_dock))
+			return "DockUnavailable";
+
+		if (!IsValidContextMenuOpenControl(_tree))
+			return "TreeUnavailable";
+
+		if (!IsValidContextMenuOpenPopup(_contextMenu))
+			return "ContextMenuUnavailable";
+
+		if (!IsValidContextMenuOpenPopup(_contextNewSubmenu))
+			return "ContextNewSubmenuUnavailable";
+
+		if (!IsValidContextMenuOpenPopup(_contextAddSubmenu))
+			return "ContextAddSubmenuUnavailable";
+
+		if (!IsValidContextMenuOpenPopup(_contextQuickActionsSubmenu))
+			return "ContextQuickActionsSubmenuUnavailable";
+
+		TreeItem selectedItem = _tree.GetSelected();
+		if (selectedItem == null || !GodotObject.IsInstanceValid(selectedItem))
+			return "SelectionUnavailable";
+
+		string selectedMetadata = selectedItem.GetMetadata(0).AsString();
+		if (!string.Equals(selectedMetadata, request.Metadata, StringComparison.Ordinal))
+			return "SelectionMetadataChanged";
+
+		if (IsAnyContextMenuHierarchyVisible())
+			return "ContextMenuHierarchyVisibleBeforeBuild";
+
+		return "";
+	}
+
+	private static bool IsValidContextMenuOpenControl(Control control)
+	{
+		return control != null
+			&& GodotObject.IsInstanceValid(control)
+			&& control.IsInsideTree();
+	}
+
+	private static bool IsValidContextMenuOpenPopup(PopupMenu menu)
+	{
+		return menu != null
+			&& GodotObject.IsInstanceValid(menu)
+			&& menu.IsInsideTree();
+	}
+
+	private void RejectCurrentContextMenuOpenRequest(
+		string reason,
+		ContextMenuOpenRequestSnapshot request
+	)
+	{
+		LogContextMenuOpenRequestRejected(reason, request);
+		ConsumeCurrentContextMenuOpenRequest(request.OperationToken);
+	}
+
+	private void LogContextMenuOpenCaptureRejected(string reason)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"System Explorer context menu open request rejected",
+			$"Reason='{reason}', Stage='Capture', CurrentOperationToken='{_contextMenuOpenOperationToken}', CurrentRequestPending='{_contextMenuOpenRequestPending}', CurrentMetadata='{_contextMenuOpenMetadata}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+		);
+	}
+
+	private void LogContextMenuOpenRequestRejected(
+		string reason,
+		ContextMenuOpenRequestSnapshot request
+	)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"System Explorer context menu open request rejected",
+			$"Reason='{reason}', Stage='Process', OperationToken='{request.OperationToken}', CurrentOperationToken='{_contextMenuOpenOperationToken}', ScheduledManagedAssemblyGeneration='{request.ScheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', Metadata='{request.Metadata ?? ""}', CurrentMetadata='{_contextMenuOpenMetadata}', FilterMode='{request.FilteringScripts}', CurrentFilterMode='{_isFilteringScripts}', PopupPosition='{request.PopupScreenPosition}', DockGlobalMouseX='{request.DockGlobalMouseX}', SupersededCount='{request.SupersededCount}', CurrentRequestPending='{_contextMenuOpenRequestPending}'"
+		);
+	}
+
+	private void LogContextMenuOpenBoundary(
+		string phase,
+		ContextMenuOpenRequestSnapshot request
+	)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			ContextMenuOpenOperationLabel,
+			$"Phase='{phase}', OperationToken='{request.OperationToken}', ScheduledManagedAssemblyGeneration='{request.ScheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', Metadata='{request.Metadata}', FilterMode='{request.FilteringScripts}', PopupPosition='{request.PopupScreenPosition}', DockGlobalMouseX='{request.DockGlobalMouseX}', SupersededCount='{request.SupersededCount}'"
+		);
+	}
+
+	private void LogContextMenuOpenFailure(
+		string failurePhase,
+		ContextMenuOpenRequestSnapshot request,
+		Exception exception
+	)
+	{
+		DebugLogger.LogPersistentFileOnlyOperation(
+			ContextMenuOpenOperationLabel,
+			$"Phase='Failed', FailurePhase='{failurePhase}', OperationToken='{request.OperationToken}', ScheduledManagedAssemblyGeneration='{request.ScheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', Metadata='{request.Metadata}', FilterMode='{request.FilteringScripts}', PopupPosition='{request.PopupScreenPosition}', DockGlobalMouseX='{request.DockGlobalMouseX}', SupersededCount='{request.SupersededCount}', ExceptionType='{exception.GetType().FullName}', ExceptionMessage='{exception.Message}'"
+		);
+	}
+
+	private long AdvanceContextMenuOpenOperationToken()
+	{
+		unchecked
+		{
+			_contextMenuOpenOperationToken++;
+			if (_contextMenuOpenOperationToken <= 0)
+				_contextMenuOpenOperationToken = 1;
+		}
+
+		return _contextMenuOpenOperationToken;
+	}
+
+	private void ConsumeCurrentContextMenuOpenRequest(long operationToken)
+	{
+		if (operationToken != _contextMenuOpenOperationToken)
+			return;
+
+		_contextMenuOpenRequestPending = false;
+		_contextMenuOpenWaitingForNextProcessFrame = false;
+		_contextMenuOpenScheduledManagedAssemblyGeneration = "";
+		_contextMenuOpenMetadata = "";
+		_contextMenuOpenFilteringScripts = false;
+		_contextMenuOpenPopupScreenPosition = default;
+		_contextMenuOpenDockGlobalMouseX = 0.0f;
+		_contextMenuOpenSupersededCount = 0;
+	}
+
+	private void InvalidateContextMenuOpenRequest(string reason)
+	{
+		ContextMenuOpenRequestSnapshot invalidatedRequest =
+			CaptureCurrentContextMenuOpenRequestSnapshot();
+		bool hadCurrentRequest = _contextMenuOpenRequestPending;
+
+		_contextMenuOpenRequestPending = false;
+		_contextMenuOpenWaitingForNextProcessFrame = false;
+		_contextMenuOpenScheduledManagedAssemblyGeneration = "";
+		_contextMenuOpenMetadata = "";
+		_contextMenuOpenFilteringScripts = false;
+		_contextMenuOpenPopupScreenPosition = default;
+		_contextMenuOpenDockGlobalMouseX = 0.0f;
+		_contextMenuOpenSupersededCount = 0;
+		long currentOperationToken = AdvanceContextMenuOpenOperationToken();
+
+		if (!hadCurrentRequest)
+			return;
+
+		DebugLogger.LogPersistentFileOnlyOperation(
+			"System Explorer context menu open request invalidated",
+			$"Reason='{reason ?? ""}', InvalidatedOperationToken='{invalidatedRequest.OperationToken}', CurrentOperationToken='{currentOperationToken}', ScheduledManagedAssemblyGeneration='{invalidatedRequest.ScheduledManagedAssemblyGeneration}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', Metadata='{invalidatedRequest.Metadata}', FilterMode='{invalidatedRequest.FilteringScripts}', PopupPosition='{invalidatedRequest.PopupScreenPosition}', DockGlobalMouseX='{invalidatedRequest.DockGlobalMouseX}', SupersededCount='{invalidatedRequest.SupersededCount}'"
+		);
 	}
 
 	private bool CanShowQuickActionsForMetadata(string metadata)
@@ -121,11 +493,11 @@ public partial class SystemExplorerPlugin
 		return metadata.StartsWith("script::", StringComparison.Ordinal);
 	}
 
-	private void BuildContextMenuForMetadata(string metadata)
+	private void BuildContextMenuForMetadata(string metadata, float dockGlobalMouseX)
 	{
 		BuildContextMenuForMetadata(metadata, useReversedSubmenuIcons: false);
 
-		if (ShouldUseReversedContextSubmenuIcons())
+		if (ShouldUseReversedContextSubmenuIcons(dockGlobalMouseX))
 			BuildContextMenuForMetadata(metadata, useReversedSubmenuIcons: true);
 
 		if (CanShowQuickActionsForMetadata(metadata))
@@ -369,15 +741,15 @@ public partial class SystemExplorerPlugin
 		return useReversedIcons && _contextCategoryArrowLeftIcon != null;
 	}
 
-	private bool ShouldUseReversedContextSubmenuIcons()
+	private bool ShouldUseReversedContextSubmenuIcons(float dockGlobalMouseX)
 	{
 		if (!IsDockOnRightSide())
 			return false;
 
-		return !HasEnoughRoomForContextSubmenuToOpenRight();
+		return !HasEnoughRoomForContextSubmenuToOpenRight(dockGlobalMouseX);
 	}
 
-	private bool HasEnoughRoomForContextSubmenuToOpenRight()
+	private bool HasEnoughRoomForContextSubmenuToOpenRight(float dockGlobalMouseX)
 	{
 		Control baseControl = EditorInterface.Singleton?.GetBaseControl();
 
@@ -409,7 +781,7 @@ public partial class SystemExplorerPlugin
 
 		float editorLeftEdge = editorRect.Position.X;
 		float editorRightEdge = editorRect.End.X;
-		float mouseX = _dock.GetGlobalMousePosition().X;
+		float mouseX = dockGlobalMouseX;
 		float mainMenuLeft = Mathf.Clamp(
 			mouseX,
 			editorLeftEdge,

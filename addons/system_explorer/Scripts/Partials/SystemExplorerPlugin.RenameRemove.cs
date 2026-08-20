@@ -2502,9 +2502,44 @@ public partial class SystemExplorerPlugin
 			);
 		}
 
-		Callable
-			.From(() => _physicalRemoveIncompleteDialog.PopupCentered())
-			.CallDeferred();
+		SchedulePhysicalRemoveIncompleteDialogPresentationDeferred();
+	}
+
+	private void SchedulePhysicalRemoveIncompleteDialogPresentationDeferred()
+	{
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		CallDeferred(
+			nameof(PresentPhysicalRemoveIncompleteDialogDeferred),
+			scheduledManagedAssemblyGeneration
+		);
+	}
+
+	private void PresentPhysicalRemoveIncompleteDialogDeferred(
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (
+			_editorOperationShutdownStarted
+			|| !GodotObject.IsInstanceValid(this)
+			|| !IsInsideTree()
+			|| !IsValidGodotObject(_physicalRemoveIncompleteDialog)
+		)
+		{
+			return;
+		}
+
+		_physicalRemoveIncompleteDialog.PopupCentered();
 	}
 
 	private static List<string> GetPhysicalDeleteIssuePaths(

@@ -1,12 +1,17 @@
 #if TOOLS
 using Godot;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using SystemExplorer.Autocomplete;
+using SystemExplorer.EditorIntegration.ScriptEditing;
 
 public partial class SystemExplorerPlugin
 {
 	#region Scene Linking
+	private const string LinkedSceneOpenExternalMutationOperationName = "Open Linked Scene";
+
 	private ScriptTreeOccurrence? _pendingSceneLinkSourceOccurrence;
 	private ScriptTreeOccurrence? _pendingMissingSceneScriptOccurrence;
 
@@ -102,8 +107,157 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		EditorInterface.Singleton.OpenSceneFromPath(linkedScenePath);
-		CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+		TryQueueLinkedSceneOpenUnderExternalMutation(linkedScenePath);
+	}
+
+	private void TryQueueLinkedSceneOpenUnderExternalMutation(string scenePath)
+	{
+		string normalizedScenePath = ScriptPathUtility.Normalize(scenePath);
+		if (string.IsNullOrWhiteSpace(normalizedScenePath))
+		{
+			QueueStandaloneTreeOperationDialog(
+				"Open Linked Scene Failed",
+				"System Explorer could not safely open the linked scene because its path was empty. Try linking the scene again.",
+				$"ScenePath='{scenePath ?? ""}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
+
+		if (
+			!TryBeginAutocompleteExternalMutation(
+				AutocompleteExternalMutationOrigin.SceneOpen,
+				LinkedSceneOpenExternalMutationOperationName,
+				out long operationToken
+			)
+		)
+		{
+			QueueStandaloneTreeOperationDialog(
+				"Open Linked Scene Failed",
+				"System Explorer could not safely acquire editor-mutation authority for the linked scene open. Try again after the current editor activity settles.",
+				$"ScenePath='{normalizedScenePath}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
+
+		RestartAutocompleteScriptTransitionStabilizationForExternalMutationBarrier();
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+
+		try
+		{
+			CallDeferred(
+				nameof(ApplyDeferredLinkedSceneOpenUnderExternalMutation),
+				normalizedScenePath,
+				operationToken,
+				scheduledManagedAssemblyGeneration
+			);
+		}
+		catch (Exception exception)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Open Linked Scene external mutation scheduling failed",
+				$"OperationToken='{operationToken}', ScenePath='{normalizedScenePath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Exception='{exception}'"
+			);
+
+			try
+			{
+				QueueStandaloneTreeOperationDialog(
+					"Open Linked Scene Failed",
+					"System Explorer could not safely schedule opening the linked scene. Try again.",
+					$"ScenePath='{normalizedScenePath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', ExceptionType='{exception.GetType().FullName}'"
+				);
+			}
+			finally
+			{
+				ScheduleAutocompleteExternalMutationRelease(operationToken);
+			}
+		}
+	}
+
+	private void ApplyDeferredLinkedSceneOpenUnderExternalMutation(
+		string scenePath,
+		long operationToken,
+		string scheduledManagedAssemblyGeneration
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+			|| operationToken <= 0
+		)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Open Linked Scene external mutation deferred rejected",
+				$"Reason='{(operationToken <= 0 ? "InvalidOperationToken" : "ManagedAssemblyGenerationChanged")}', OperationToken='{operationToken}', ScenePath='{scenePath ?? ""}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
+			);
+			return;
+		}
+
+		try
+		{
+			if (
+				!IsAutocompleteExternalMutationOperationCurrent(
+					operationToken,
+					AutocompleteExternalMutationOrigin.SceneOpen,
+					LinkedSceneOpenExternalMutationOperationName,
+					scheduledManagedAssemblyGeneration
+				)
+			)
+			{
+				DebugLogger.LogPersistentFileOnlyOperation(
+					"Open Linked Scene external mutation deferred rejected",
+					$"Reason='ExternalMutationAuthorityNotCurrent', OperationToken='{operationToken}', ScenePath='{scenePath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
+				);
+				return;
+			}
+
+			string diagnosticScenePath = NormalizeScriptEditorDiagnosticText(scenePath);
+			LogCompactScriptEditorCrashTail(
+				"OpenLinkedScene",
+				"Begin",
+				operationToken: operationToken,
+				extraDetails: $"ScenePath='{diagnosticScenePath}', ExternalMutationOrigin='{AutocompleteExternalMutationOrigin.SceneOpen}'"
+			);
+
+			EditorInterface.Singleton.OpenSceneFromPath(scenePath);
+
+			LogCompactScriptEditorCrashTail(
+				"OpenLinkedScene",
+				"Returned",
+				operationToken: operationToken,
+				extraDetails: $"ScenePath='{diagnosticScenePath}', ExternalMutationOrigin='{AutocompleteExternalMutationOrigin.SceneOpen}'"
+			);
+
+			try
+			{
+				CallDeferred(nameof(ReleaseTreeFocusAfterNavigation));
+			}
+			catch (Exception exception)
+			{
+				DebugLogger.LogPersistentFileOnlyOperation(
+					"Open Linked Scene focus release scheduling failed",
+					$"OperationToken='{operationToken}', ScenePath='{diagnosticScenePath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Exception='{exception}'"
+				);
+			}
+		}
+		catch (Exception exception)
+		{
+			DebugLogger.LogPersistentFileOnlyOperation(
+				"Open Linked Scene external mutation deferred failed",
+				$"OperationToken='{operationToken}', ScenePath='{scenePath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', Exception='{exception}'"
+			);
+			QueueStandaloneTreeOperationDialog(
+				"Open Linked Scene Failed",
+				"System Explorer could not complete opening the linked scene safely. Try again.",
+				$"ScenePath='{scenePath}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', ExceptionType='{exception.GetType().FullName}'"
+			);
+		}
+		finally
+		{
+			ScheduleAutocompleteExternalMutationRelease(operationToken);
+		}
 	}
 
 	private bool IsScriptEntryValidOrOpenMissingDialog(string entry)
