@@ -48,6 +48,7 @@ internal sealed class AutocompletePluginHost
 	private readonly AutocompleteCodeEditMutationCoordinator _codeEditMutationCoordinator;
 	private readonly AutocompleteCompletionMatchPolicy _matchPolicy;
 	private readonly AutocompleteMemberCompletionFollowUp _memberCompletionFollowUp;
+	private readonly AutocompleteNativeCompletionOpportunityCoordinator _nativeCompletionOpportunityCoordinator;
 	private readonly ProjectTypeCompletionSource _projectTypeCompletionSource;
 	private readonly ProjectMemberCompletionSource _projectMemberCompletionSource;
 	private readonly AutocompleteCompletionOptionMetadataCodec _metadataCodec;
@@ -66,6 +67,7 @@ internal sealed class AutocompletePluginHost
 	private readonly Func<long> _hostInstanceTokenProvider;
 	private readonly Func<long> _currentReloadReadyEpochProvider;
 	private readonly Func<bool> _reloadStabilizationReadyProvider;
+	private readonly Func<AutocompleteNativeCompletionSettingsSnapshot> _nativeCompletionSettingsProvider;
 	private readonly ScriptEditorLifecycleCoordinator _scriptEditorLifecycleCoordinator;
 	private readonly Action<string> _requestScriptEditorLifecycleRebind;
 	private readonly HashSet<ulong> _trackedUnattributedCompletionProvenanceCodeEditIds = new();
@@ -100,6 +102,7 @@ internal sealed class AutocompletePluginHost
 		Func<long> hostInstanceTokenProvider,
 		Func<long> currentReloadReadyEpochProvider,
 		Func<bool> reloadStabilizationReadyProvider,
+		Func<AutocompleteNativeCompletionSettingsSnapshot> nativeCompletionSettingsProvider,
 		ScriptEditorLifecycleCoordinator scriptEditorLifecycleCoordinator,
 		Action<string> requestScriptEditorLifecycleRebind,
 		bool semanticMemberPipelineEnabled,
@@ -136,6 +139,9 @@ internal sealed class AutocompletePluginHost
 		_reloadStabilizationReadyProvider =
 			reloadStabilizationReadyProvider
 			?? throw new ArgumentNullException(nameof(reloadStabilizationReadyProvider));
+		_nativeCompletionSettingsProvider =
+			nativeCompletionSettingsProvider
+			?? throw new ArgumentNullException(nameof(nativeCompletionSettingsProvider));
 		_scriptEditorLifecycleCoordinator =
 			scriptEditorLifecycleCoordinator
 			?? throw new ArgumentNullException(nameof(scriptEditorLifecycleCoordinator));
@@ -185,6 +191,8 @@ internal sealed class AutocompletePluginHost
 		);
 		_matchPolicy = new AutocompleteCompletionMatchPolicy();
 		_memberCompletionFollowUp = new AutocompleteMemberCompletionFollowUp();
+		_nativeCompletionOpportunityCoordinator =
+			new AutocompleteNativeCompletionOpportunityCoordinator();
 
 		_indexLifetime = new AutocompleteIndexLifetime(persistentWorkerDiagnosticLog);
 		var typeScanner = new RoslynProjectTypeScanner(completionContextBuilder);
@@ -431,6 +439,7 @@ internal sealed class AutocompletePluginHost
 	{
 		DrainIndexBuildResults();
 		_memberCompletionFollowUp.Clear();
+		_nativeCompletionOpportunityCoordinator.Clear();
 		_completionCoordinator.InvalidatePendingValidations();
 		_semanticMemberCoordinator.ResetActiveDocument();
 		_activeDocumentIndexLifecycle.ResetForScriptChange();
@@ -534,6 +543,28 @@ internal sealed class AutocompletePluginHost
 					: null;
 			CompletionRequestProvenance requestProvenance =
 				CaptureCompletionRequestProvenance(requestDispatchChildLease);
+
+			if (
+				requestProvenance
+				== CompletionRequestProvenance.UnattributedNativeOrExternal
+			)
+			{
+				long textChangedObservationSequence =
+					GetTextChangedObservationSequenceForBinding(requestBindingLease);
+				if (
+					_nativeCompletionOpportunityCoordinator.ObserveParentlessCompletionRequest(
+						requestBindingLease,
+						textChangedObservationSequence
+					)
+				)
+				{
+					LogNativeCompletionOpportunitySatisfiedIfMatching(
+						requestBindingLease,
+						textChangedObservationSequence,
+						scriptPath
+					);
+				}
+			}
 
 			_codeEditMutationCoordinator.RetireOwnedPublication(
 				"CodeCompletionRequested"
@@ -751,8 +782,23 @@ internal sealed class AutocompletePluginHost
 		if (_completionPipelineFaulted)
 			return _completionCoordinator.BeginTextChangedValidation();
 
-		ObserveTextChangedForCurrentBinding();
 		_memberCompletionFollowUp.Clear();
+		_nativeCompletionOpportunityCoordinator.Clear();
+
+		if (
+			ObserveTextChangedForCurrentBinding(
+				out EditorBindingLease bindingLease,
+				out long textChangedObservationSequence
+			)
+		)
+		{
+			_nativeCompletionOpportunityCoordinator.Arm(
+				bindingLease,
+				textChangedObservationSequence,
+				GetNativeCompletionSettingsBestEffort()
+			);
+		}
+
 		_activeDocumentIndexLifecycle.MarkDirty();
 		return _completionCoordinator.BeginTextChangedValidation();
 	}
@@ -829,6 +875,7 @@ internal sealed class AutocompletePluginHost
 		try
 		{
 			_memberCompletionFollowUp.Clear();
+			_nativeCompletionOpportunityCoordinator.Clear();
 			_completionCoordinator.InvalidatePendingValidations("ExternalMutationLease");
 			_indexingQuiescenceCoordinator.InvalidateSpeculativeActiveDocumentForExternalMutation();
 			return true;
@@ -860,6 +907,7 @@ internal sealed class AutocompletePluginHost
 	internal void InvalidatePendingValidations()
 	{
 		_memberCompletionFollowUp.Clear();
+		_nativeCompletionOpportunityCoordinator.Clear();
 		_completionCoordinator.InvalidatePendingValidations();
 	}
 
@@ -867,6 +915,7 @@ internal sealed class AutocompletePluginHost
 	{
 		Trace("C# autocomplete host ResetTransientState begin");
 		_memberCompletionFollowUp.Clear();
+		_nativeCompletionOpportunityCoordinator.Clear();
 		_completionCoordinator.Reset();
 		_indexingQuiescenceCoordinator.ClearPendingWork();
 		_semanticMemberCoordinator.ResetTransientState();
@@ -880,6 +929,7 @@ internal sealed class AutocompletePluginHost
 	{
 		Trace("C# autocomplete host Shutdown begin");
 		_memberCompletionFollowUp.Clear();
+		_nativeCompletionOpportunityCoordinator.Clear();
 		_indexingQuiescenceCoordinator.ClearPendingWork();
 		_projectIndexLifecycle.Shutdown();
 		_indexCoordinator.Shutdown();
@@ -932,20 +982,38 @@ internal sealed class AutocompletePluginHost
 
 	internal bool HasPendingCompletionProcessWork()
 	{
-		return !_completionPipelineFaulted && _memberCompletionFollowUp.HasPendingWork;
+		return !_completionPipelineFaulted
+			&& (
+				_memberCompletionFollowUp.HasPendingWork
+				|| _nativeCompletionOpportunityCoordinator.HasPendingProcessWork
+			);
 	}
 
 	internal void ClearPendingCompletionProcessWork()
 	{
 		_memberCompletionFollowUp.Clear();
+		_nativeCompletionOpportunityCoordinator.Clear();
 	}
 
-	internal void ProcessPendingCompletionWork()
+	internal void ProcessPendingCompletionWork(double delta)
 	{
 		if (_completionPipelineFaulted)
 		{
 			_memberCompletionFollowUp.Clear();
+			_nativeCompletionOpportunityCoordinator.Clear();
 			return;
+		}
+
+		if (
+			_nativeCompletionOpportunityCoordinator.TryAdvance(
+				delta,
+				out double releasedElapsedSeconds
+			)
+		)
+		{
+			LogNativeCompletionOpportunityFallbackReleasedIfMatching(
+				releasedElapsedSeconds
+			);
 		}
 
 		if (_isIssuingForcedMemberCompletionRequest)
@@ -971,6 +1039,12 @@ internal sealed class AutocompletePluginHost
 		)
 		{
 			_requestScriptEditorLifecycleRebind("ProcessPendingCompletionWork");
+			_memberCompletionFollowUp.Clear();
+			return;
+		}
+
+		if (!pending.BindingLease.Equals(bindingLease))
+		{
 			_memberCompletionFollowUp.Clear();
 			return;
 		}
@@ -1068,6 +1142,16 @@ internal sealed class AutocompletePluginHost
 			return;
 		}
 
+		if (
+			!_nativeCompletionOpportunityCoordinator.IsForcedMemberFollowUpAllowed(
+				bindingLease,
+				pending.TextChangedObservationSequence
+			)
+		)
+		{
+			return;
+		}
+
 		_memberCompletionFollowUp.Clear();
 		_isIssuingForcedMemberCompletionRequest = true;
 
@@ -1098,6 +1182,7 @@ internal sealed class AutocompletePluginHost
 	private void TryArmBareMemberCompletionFollowUp(
 		CodeEdit codeEdit,
 		string scriptPath,
+		EditorBindingLease bindingLease,
 		CSharpActiveDocumentIndexRequest capturedRequest
 	)
 	{
@@ -1127,9 +1212,14 @@ internal sealed class AutocompletePluginHost
 			return;
 		}
 
+		long textChangedObservationSequence =
+			GetTextChangedObservationSequenceForBinding(bindingLease);
+
 		_memberCompletionFollowUp.Arm(
 			capturedRequest.Revision,
 			capturedRequest.ScriptPath,
+			bindingLease,
+			textChangedObservationSequence,
 			caretLine,
 			caretColumn,
 			prefixStartColumn
@@ -1221,21 +1311,123 @@ internal sealed class AutocompletePluginHost
 		return CompletionRequestProvenance.UnattributedNativeOrExternal;
 	}
 
-	private void ObserveTextChangedForCurrentBinding()
+	private bool ObserveTextChangedForCurrentBinding(
+		out EditorBindingLease bindingLease,
+		out long textChangedObservationSequence
+	)
 	{
-		ScriptEditorLifecycleSnapshot snapshot = _scriptEditorLifecycleCoordinator.Snapshot;
+		bindingLease = default;
+		textChangedObservationSequence = 0;
+
 		if (
-			snapshot.State != ScriptEditorLifecycleState.Stable
-			|| snapshot.BindingEpoch <= 0
-			|| snapshot.CodeEditInstanceId == 0
+			!_scriptEditorLifecycleCoordinator.TryGetCurrentBindingLease(
+				out EditorBindingLease currentBindingLease
+			)
+			|| currentBindingLease.BindingEpoch <= 0
+			|| currentBindingLease.CodeEditInstanceId == 0
+		)
+		{
+			return false;
+		}
+
+		_lastTextChangedBindingEpoch = currentBindingLease.BindingEpoch;
+		_lastTextChangedCodeEditInstanceId = currentBindingLease.CodeEditInstanceId;
+		textChangedObservationSequence = AdvancePositiveSequence(
+			ref _textChangedObservationSequence
+		);
+		bindingLease = currentBindingLease;
+		return true;
+	}
+
+	private AutocompleteNativeCompletionSettingsSnapshot GetNativeCompletionSettingsBestEffort()
+	{
+		try
+		{
+			return _nativeCompletionSettingsProvider();
+		}
+		catch
+		{
+			return new AutocompleteNativeCompletionSettingsSnapshot(
+				AutomaticCompletionEnabled: true,
+				DelaySeconds: AutocompleteNativeCompletionOpportunityCoordinator.DefaultDelaySeconds
+			);
+		}
+	}
+
+	private long GetTextChangedObservationSequenceForBinding(
+		EditorBindingLease bindingLease
+	)
+	{
+		return _textChangedObservationSequence > 0
+			&& _lastTextChangedBindingEpoch == bindingLease.BindingEpoch
+			&& _lastTextChangedCodeEditInstanceId == bindingLease.CodeEditInstanceId
+			? _textChangedObservationSequence
+			: 0;
+	}
+
+	private void LogNativeCompletionOpportunitySatisfiedIfMatching(
+		EditorBindingLease bindingLease,
+		long textChangedObservationSequence,
+		string scriptPath
+	)
+	{
+		if (
+			textChangedObservationSequence <= 0
+			|| !_memberCompletionFollowUp.TryGetPending(
+				out AutocompleteMemberCompletionFollowUp.PendingDemand pending
+			)
+			|| !pending.BindingLease.Equals(bindingLease)
+			|| pending.TextChangedObservationSequence != textChangedObservationSequence
 		)
 		{
 			return;
 		}
 
-		_lastTextChangedBindingEpoch = snapshot.BindingEpoch;
-		_lastTextChangedCodeEditInstanceId = snapshot.CodeEditInstanceId;
-		AdvancePositiveSequence(ref _textChangedObservationSequence);
+		Trace(
+			"C# autocomplete native completion opportunity satisfied",
+			$"Source='ParentlessCompletionRequested', "
+				+ $"TextChangedObservationSequence='{textChangedObservationSequence}', "
+				+ $"ScriptTransitionId='{bindingLease.ScriptTransitionId}', "
+				+ $"BindingEpoch='{bindingLease.BindingEpoch}', "
+				+ $"ReloadReadyEpoch='{bindingLease.ReloadReadyEpoch}', "
+				+ $"HostInstanceToken='{bindingLease.HostInstanceToken}', "
+				+ $"CodeEditInstanceId='{bindingLease.CodeEditInstanceId}', "
+				+ $"ScriptPath='{ScriptPathUtility.Normalize(scriptPath)}'"
+		);
+	}
+
+	private void LogNativeCompletionOpportunityFallbackReleasedIfMatching(
+		double releasedElapsedSeconds
+	)
+	{
+		EditorBindingLease bindingLease =
+			_nativeCompletionOpportunityCoordinator.CurrentBindingLease;
+		long textChangedObservationSequence =
+			_nativeCompletionOpportunityCoordinator.CurrentTextChangedObservationSequence;
+		if (
+			textChangedObservationSequence <= 0
+			|| !_memberCompletionFollowUp.TryGetPending(
+				out AutocompleteMemberCompletionFollowUp.PendingDemand pending
+			)
+			|| !pending.BindingLease.Equals(bindingLease)
+			|| pending.TextChangedObservationSequence != textChangedObservationSequence
+		)
+		{
+			return;
+		}
+
+		Trace(
+			"C# autocomplete native completion opportunity fallback released",
+			$"TextChangedObservationSequence='{textChangedObservationSequence}', "
+				+ $"ScriptTransitionId='{bindingLease.ScriptTransitionId}', "
+				+ $"BindingEpoch='{bindingLease.BindingEpoch}', "
+				+ $"ReloadReadyEpoch='{bindingLease.ReloadReadyEpoch}', "
+				+ $"HostInstanceToken='{bindingLease.HostInstanceToken}', "
+				+ $"CodeEditInstanceId='{bindingLease.CodeEditInstanceId}', "
+				+ $"ScriptPath='{ScriptPathUtility.Normalize(bindingLease.ScriptResourcePath)}', "
+				+ $"ConfiguredDelayMs='{_nativeCompletionOpportunityCoordinator.ConfiguredDelaySeconds * 1000.0:F1}', "
+				+ $"EligibleElapsedMs='{releasedElapsedSeconds * 1000.0:F1}'"
+		);
 	}
 
 	private void LogCompletionRequestedProvenanceIfNeeded(
@@ -1435,6 +1627,7 @@ internal sealed class AutocompletePluginHost
 		try
 		{
 			_memberCompletionFollowUp.Clear();
+			_nativeCompletionOpportunityCoordinator.Clear();
 		}
 		catch
 		{
@@ -1754,6 +1947,7 @@ internal sealed class AutocompletePluginHost
 							TryArmBareMemberCompletionFollowUp(
 								codeEdit,
 								scriptPath,
+								bindingLease,
 								capturedRequest
 							);
 						}

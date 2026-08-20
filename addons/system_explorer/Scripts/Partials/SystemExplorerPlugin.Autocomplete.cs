@@ -8,6 +8,11 @@ using SystemExplorer.EditorIntegration.ScriptEditing;
 public partial class SystemExplorerPlugin
 {
 	#region C# Autocomplete Integration
+	private const string AutocompleteCodeCompleteEnabledEditorSetting =
+		"text_editor/completion/code_complete_enabled";
+	private const string AutocompleteCodeCompleteDelayEditorSetting =
+		"text_editor/completion/code_complete_delay";
+
 	private AutocompletePluginHost _autocompleteHost;
 	private string _autocompleteHostManagedAssemblyGeneration = "";
 	private long _autocompleteHostInstanceToken;
@@ -74,6 +79,7 @@ public partial class SystemExplorerPlugin
 			() => _autocompleteHostInstanceToken,
 			() => CurrentAutocompleteReloadReadyEpoch,
 			() => IsAutocompleteReloadStabilizationReady(),
+			GetAutocompleteNativeCompletionSettingsSnapshot,
 			ScriptEditorLifecycleCoordinator,
 			RequestScriptEditorLifecycleRebind,
 			semanticMemberPipelineEnabled: true,
@@ -83,6 +89,65 @@ public partial class SystemExplorerPlugin
 			automaticUsingDeferInsertTextAfterGuiInputEnabled: true,
 			automaticUsingComplexOperationWrapperEnabled: false
 		);
+	}
+
+	private static AutocompleteNativeCompletionSettingsSnapshot
+		GetAutocompleteNativeCompletionSettingsSnapshot()
+	{
+		var fallback = new AutocompleteNativeCompletionSettingsSnapshot(
+			AutomaticCompletionEnabled: true,
+			DelaySeconds: AutocompleteNativeCompletionOpportunityCoordinator.DefaultDelaySeconds
+		);
+
+		try
+		{
+			EditorSettings editorSettings =
+				EditorInterface.Singleton?.GetEditorSettings();
+			if (
+				editorSettings == null
+				|| !editorSettings.HasSetting(AutocompleteCodeCompleteEnabledEditorSetting)
+			)
+			{
+				return fallback;
+			}
+
+			Variant enabledValue = editorSettings.GetSetting(
+				AutocompleteCodeCompleteEnabledEditorSetting
+			);
+			if (enabledValue.VariantType != Variant.Type.Bool)
+				return fallback;
+
+			bool automaticCompletionEnabled = enabledValue.AsBool();
+			double delaySeconds = fallback.DelaySeconds;
+
+			if (editorSettings.HasSetting(AutocompleteCodeCompleteDelayEditorSetting))
+			{
+				Variant delayValue = editorSettings.GetSetting(
+					AutocompleteCodeCompleteDelayEditorSetting
+				);
+				if (delayValue.VariantType == Variant.Type.Float)
+				{
+					double configuredDelaySeconds = delayValue.AsDouble();
+					if (
+						!double.IsNaN(configuredDelaySeconds)
+						&& !double.IsInfinity(configuredDelaySeconds)
+						&& configuredDelaySeconds >= 0
+					)
+					{
+						delaySeconds = configuredDelaySeconds;
+					}
+				}
+			}
+
+			return new AutocompleteNativeCompletionSettingsSnapshot(
+				automaticCompletionEnabled,
+				delaySeconds
+			);
+		}
+		catch
+		{
+			return fallback;
+		}
 	}
 
 	private bool IsAutocompletePluginBoundaryAvailable()
@@ -2429,7 +2494,7 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private void ProcessPendingAutocompleteProcessWork()
+	private void ProcessPendingAutocompleteProcessWork(double delta)
 	{
 		if (IsAutocompleteExternalMutationActive)
 		{
@@ -2477,7 +2542,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		host.ProcessPendingCompletionWork();
+		host.ProcessPendingCompletionWork(delta);
 	}
 
 	private void ClearPendingAutocompleteProcessWork()

@@ -13,15 +13,27 @@ internal sealed class AutocompleteMemberCompletionFollowUp
 	internal bool Arm(
 		long activeDocumentRevision,
 		string scriptPath,
+		EditorBindingLease bindingLease,
+		long textChangedObservationSequence,
 		int caretLine,
 		int caretColumn,
 		int prefixStartColumn
 	)
 	{
 		string normalizedScriptPath = ScriptPathUtility.Normalize(scriptPath);
+		string normalizedLeasePath = ScriptPathUtility.Normalize(
+			bindingLease.ScriptResourcePath
+		);
 		if (
 			activeDocumentRevision <= 0
 			|| string.IsNullOrWhiteSpace(normalizedScriptPath)
+			|| bindingLease.BindingEpoch <= 0
+			|| bindingLease.CodeEditInstanceId == 0
+			|| !string.Equals(
+				normalizedLeasePath,
+				normalizedScriptPath,
+				StringComparison.OrdinalIgnoreCase
+			)
 			|| caretLine < 0
 			|| caretColumn < 0
 			|| prefixStartColumn != caretColumn
@@ -33,6 +45,8 @@ internal sealed class AutocompleteMemberCompletionFollowUp
 		var demand = new PendingDemand(
 			activeDocumentRevision,
 			normalizedScriptPath,
+			bindingLease,
+			textChangedObservationSequence > 0 ? textChangedObservationSequence : 0,
 			caretLine,
 			caretColumn,
 			prefixStartColumn
@@ -88,6 +102,8 @@ internal sealed class AutocompleteMemberCompletionFollowUp
 	internal readonly record struct PendingDemand(
 		long ActiveDocumentRevision,
 		string ScriptPath,
+		EditorBindingLease BindingLease,
+		long TextChangedObservationSequence,
 		int CaretLine,
 		int CaretColumn,
 		int PrefixStartColumn

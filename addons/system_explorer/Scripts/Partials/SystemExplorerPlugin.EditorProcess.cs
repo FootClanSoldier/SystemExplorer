@@ -50,7 +50,7 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
-			ProcessPendingAutocompleteProcessWork();
+			ProcessPendingAutocompleteProcessWork(delta);
 		}
 		catch
 		{
