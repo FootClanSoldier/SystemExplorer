@@ -506,62 +506,37 @@ public partial class SystemExplorerPlugin
 
 		SetBeautifyingScript(true);
 		BeautifyScriptsBatchSummary summary = new();
-		long beautifyBatchDiagnosticToken = BeginBeautifyBatchDiagnosticContext();
+		BeginBatchScriptEditorContextPreservation();
+
 		try
 		{
-			LogBeautifyDiagnosticPhase(
-				"Beautify.Batch.Begin",
-				"",
-				extraDetails: $"TargetCount='{normalizedScriptPaths.Count}', BeautifyBatchToken='{beautifyBatchDiagnosticToken}'"
-			);
-			BeginBatchScriptEditorContextPreservation();
-
-			try
+			foreach (string scriptPath in normalizedScriptPaths)
 			{
-				foreach (string scriptPath in normalizedScriptPaths)
-				{
-					operation.CancellationToken.ThrowIfCancellationRequested();
-					SetBeautifyBatchDiagnosticTarget(scriptPath);
-					BeautifyScriptOperationResult result = await BeautifySingleScriptWithCSharpier(
+				operation.CancellationToken.ThrowIfCancellationRequested();
+				BeautifyScriptOperationResult result = await BeautifySingleScriptWithCSharpier(
 					operation,
-						scriptPath,
-						csharpierCommand,
-						"Beautify Scripts",
-						preserveEditorViewState: false
-					);
-					operation.CancellationToken.ThrowIfCancellationRequested();
-					if (!IsEditorOperationAccessValid(operation)) return;
+					scriptPath,
+					csharpierCommand,
+					"Beautify Scripts",
+					preserveEditorViewState: false
+				);
+				operation.CancellationToken.ThrowIfCancellationRequested();
+				if (!IsEditorOperationAccessValid(operation)) return;
 
-					summary = summary.Add(result);
-					LogBeautifyDiagnosticPhase(
-						"Beautify.Item.Completed",
-						result.Path,
-						extraDetails: $"Status='{result.Status}'"
-					);
+				summary = summary.Add(result);
 
-					DebugPrintBeautify(
-						$"Beautify Scripts item result: status={result.Status}, path='{result.Path}', message='{GetDebugTextPreview(result.Message)}'"
-					);
-				}
-
-				DebugPrintBeautify($"Beautify Scripts summary: {summary}");
-				DebugLogger.LogOperation("Beautify Scripts Completed", summary.ToString());
-			}
-			finally
-			{
-				CompleteBatchScriptEditorContextPreservation(operation);
-				SetBeautifyingScript(false);
+				DebugPrintBeautify(
+					$"Beautify Scripts item result: status={result.Status}, path='{result.Path}', message='{GetDebugTextPreview(result.Message)}'"
+				);
 			}
 
-			LogBeautifyDiagnosticPhase(
-				"Beautify.Batch.Completed",
-				"",
-				extraDetails: summary.ToString()
-			);
+			DebugPrintBeautify($"Beautify Scripts summary: {summary}");
+			DebugLogger.LogOperation("Beautify Scripts Completed", summary.ToString());
 		}
 		finally
 		{
-			CompleteBeautifyBatchDiagnosticContext(beautifyBatchDiagnosticToken);
+			CompleteBatchScriptEditorContextPreservation(operation);
+			SetBeautifyingScript(false);
 		}
 	}
 
@@ -570,11 +545,10 @@ public partial class SystemExplorerPlugin
 		Dictionary<string, string> originalTextsByPath,
 		Dictionary<string, string> updatedTextsByPath,
 		FocusedScriptEditorBeautifyTarget? capturedEditorTarget,
-		out BeautifyBufferLookupRoute lookupRoute,
-		out ScriptEditor scriptEditor
+		out BeautifyBufferLookupRoute lookupRoute
 	)
 	{
-		scriptEditor = EditorInterface.Singleton?.GetScriptEditor();
+		ScriptEditor scriptEditor = EditorInterface.Singleton?.GetScriptEditor();
 
 		if (capturedEditorTarget.HasValue)
 		{
@@ -670,7 +644,6 @@ public partial class SystemExplorerPlugin
 
 		ScriptEditorBufferLookupResult lookupResult = null;
 		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath = null;
-		ScriptEditor beautifyScriptEditor = null;
 		string unsafeOpenScriptList = "";
 		bool didAutosaveOpenEditor = false;
 		string originalText = diskTextBeforeSync;
@@ -679,35 +652,15 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
-			bool traceBatchNativeBoundaries = DebugLogger.IsEnabled
-				&& string.Equals(
-					operationName,
-					"Beautify Scripts",
-					StringComparison.Ordinal
-				);
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase("Beautify.BufferLookup.First", normalizedScriptPath);
-
 			lookupResult = LocateBeautifyEditorBuffers(
 				normalizedScriptPath,
 				originalTextsByPath,
 				pendingTextByPath,
 				capturedEditorTarget,
-				out firstLookupRoute,
-				out beautifyScriptEditor
+				out firstLookupRoute
 			);
 
 			openEditorsByPath = lookupResult.OpenEditorsByPath;
-			if (traceBatchNativeBoundaries)
-			{
-				LogBeautifyDiagnosticPhase(
-					"Beautify.BufferLookup.First.Completed",
-					normalizedScriptPath,
-					beautifyScriptEditor,
-					TryGetBeautifyDiagnosticTextEditor(normalizedScriptPath, openEditorsByPath),
-					$"LookupRoute='{firstLookupRoute}'"
-				);
-			}
 			unsafeOpenScriptList = string.Join("\n", lookupResult.UnsafeOpenScriptPaths);
 
 			DebugPrintBeautify(
@@ -719,9 +672,6 @@ public partial class SystemExplorerPlugin
 					normalizedScriptPath,
 					$"{operationName} skipped: System Explorer could not safely match this open script editor buffer. Save/reopen it before formatting:\n{unsafeOpenScriptList}"
 				);
-
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase("Beautify.Autosave", normalizedScriptPath);
 
 			if (
 				!BeautifyEditorState.TryAutosaveOpenEditorIfNeeded(
@@ -761,13 +711,6 @@ public partial class SystemExplorerPlugin
 
 		long csharpierProcessStarted = timing?.BeginPhase() ?? 0L;
 		CSharpierFormatResult formatResult;
-		if (
-			DebugLogger.IsEnabled
-			&& string.Equals(operationName, "Beautify Scripts", StringComparison.Ordinal)
-		)
-		{
-			LogBeautifyDiagnosticPhase("Beautify.CSharpier", normalizedScriptPath);
-		}
 		try
 		{
 			formatResult = await FormatScriptWithCSharpierUsingCachedCommandFallback(
@@ -829,15 +772,6 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
-			bool traceBatchNativeBoundaries = DebugLogger.IsEnabled
-				&& string.Equals(
-					operationName,
-					"Beautify Scripts",
-					StringComparison.Ordinal
-				);
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase("Beautify.VerificationRead", normalizedScriptPath);
-
 			ScriptTextFileReadResult currentReadResult = ScriptTextFileService.TryReadText(
 				normalizedScriptPath
 			);
@@ -861,28 +795,14 @@ public partial class SystemExplorerPlugin
 					$"{operationName} failed: '{normalizedScriptPath}' changed while CSharpier was running. Try again."
 				);
 
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase("Beautify.BufferLookup.Second", normalizedScriptPath);
-
 			lookupResult = LocateBeautifyEditorBuffers(
 				normalizedScriptPath,
 				originalTextsByPath,
 				updatedTextsByPath,
 				capturedEditorTarget,
-				out secondLookupRoute,
-				out beautifyScriptEditor
+				out secondLookupRoute
 			);
 			openEditorsByPath = lookupResult.OpenEditorsByPath;
-			if (traceBatchNativeBoundaries)
-			{
-				LogBeautifyDiagnosticPhase(
-					"Beautify.BufferLookup.Second.Completed",
-					normalizedScriptPath,
-					beautifyScriptEditor,
-					TryGetBeautifyDiagnosticTextEditor(normalizedScriptPath, openEditorsByPath),
-					$"LookupRoute='{secondLookupRoute}'"
-				);
-			}
 			unsafeOpenScriptList = string.Join("\n", lookupResult.UnsafeOpenScriptPaths);
 
 			DebugPrintBeautify(
@@ -947,33 +867,7 @@ public partial class SystemExplorerPlugin
 						? BeautifyEditorState.CaptureEditorViewState(normalizedScriptPath, openEditorsByPath)
 						: default;
 
-					bool traceUnchangedRefreshBoundary = DebugLogger.IsEnabled
-						&& string.Equals(
-							operationName,
-							"Beautify Scripts",
-							StringComparison.Ordinal
-						);
-					TextEdit unchangedTextEditor = traceUnchangedRefreshBoundary
-						? TryGetBeautifyDiagnosticTextEditor(
-							normalizedScriptPath,
-							openEditorsByPath
-						)
-						: null;
-					long unchangedRefreshToken = traceUnchangedRefreshBoundary
-						? BeginBeautifyBatchRefreshDiagnostic(
-							normalizedScriptPath,
-							beautifyScriptEditor,
-							unchangedTextEditor
-						)
-						: 0;
 					ScriptResourceRefreshService.RefreshChangedScripts(new[] { normalizedScriptPath });
-					if (traceUnchangedRefreshBoundary)
-						CompleteBeautifyBatchRefreshDiagnostic(
-							unchangedRefreshToken,
-							normalizedScriptPath,
-							beautifyScriptEditor,
-							unchangedTextEditor
-						);
 					BeautifyEditorState.RestoreEditorViewStateNowAndDeferred(unchangedEditorViewState);
 				}
 
@@ -991,43 +885,15 @@ public partial class SystemExplorerPlugin
 				? BeautifyEditorState.CaptureEditorViewState(normalizedScriptPath, openEditorsByPath)
 				: default;
 
-			bool traceBatchNativeBoundaries = DebugLogger.IsEnabled
-				&& string.Equals(
-					operationName,
-					"Beautify Scripts",
-					StringComparison.Ordinal
-				);
-			TextEdit applyTextEditor = traceBatchNativeBoundaries
-				? TryGetBeautifyDiagnosticTextEditor(
+			if (
+				!BeautifyEditorState.TryApplyTextToEditorBeforeDiskWrite(
 					normalizedScriptPath,
-					openEditorsByPath
+					originalText,
+					formattedText,
+					openEditorsByPath,
+					out string editorApplyFailureMessage
 				)
-				: null;
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase(
-					"Beautify.ApplyEditorText",
-					normalizedScriptPath,
-					scriptEditor: beautifyScriptEditor,
-					textEditor: applyTextEditor
-				);
-
-			bool editorTextApplied = BeautifyEditorState.TryApplyTextToEditorBeforeDiskWrite(
-				normalizedScriptPath,
-				originalText,
-				formattedText,
-				openEditorsByPath,
-				out string editorApplyFailureMessage
-			);
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase(
-					"Beautify.ApplyEditorText.Completed",
-					normalizedScriptPath,
-					scriptEditor: beautifyScriptEditor,
-					textEditor: applyTextEditor,
-					extraDetails: $"Result='{editorTextApplied}'"
-				);
-
-			if (!editorTextApplied)
+			)
 			{
 				return BeautifyScriptSkipped(
 					normalizedScriptPath,
@@ -1044,23 +910,7 @@ public partial class SystemExplorerPlugin
 					originalText,
 					openEditorsByPath
 				);
-				long rollbackRefreshToken = traceBatchNativeBoundaries
-					? BeginBeautifyBatchRefreshDiagnostic(
-						normalizedScriptPath,
-						beautifyScriptEditor,
-						applyTextEditor,
-						"Reason='Failed write rollback'"
-					)
-					: 0;
 				ScriptResourceRefreshService.RefreshChangedScripts(new[] { normalizedScriptPath });
-				if (traceBatchNativeBoundaries)
-					CompleteBeautifyBatchRefreshDiagnostic(
-						rollbackRefreshToken,
-						normalizedScriptPath,
-						beautifyScriptEditor,
-						applyTextEditor,
-						"Reason='Failed write rollback'"
-					);
 				BeautifyEditorState.RestoreEditorViewStateNowAndDeferred(editorViewState);
 				return BeautifyScriptFailed(
 					normalizedScriptPath,
@@ -1068,40 +918,11 @@ public partial class SystemExplorerPlugin
 				);
 			}
 
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase(
-					"Beautify.ApplyCommittedBuffers",
-					normalizedScriptPath,
-					scriptEditor: beautifyScriptEditor,
-					textEditor: applyTextEditor
-				);
 			OpenScriptEditorBufferBatchService.ApplyCommittedTexts(
 				openEditorsByPath,
 				updatedTextsByPath
 			);
-			if (traceBatchNativeBoundaries)
-				LogBeautifyDiagnosticPhase(
-					"Beautify.ApplyCommittedBuffers.Completed",
-					normalizedScriptPath,
-					scriptEditor: beautifyScriptEditor,
-					textEditor: applyTextEditor
-				);
-
-			long refreshToken = traceBatchNativeBoundaries
-				? BeginBeautifyBatchRefreshDiagnostic(
-					normalizedScriptPath,
-					beautifyScriptEditor,
-					applyTextEditor
-				)
-				: 0;
 			ScriptResourceRefreshService.RefreshChangedScripts(new[] { normalizedScriptPath });
-			if (traceBatchNativeBoundaries)
-				CompleteBeautifyBatchRefreshDiagnostic(
-					refreshToken,
-					normalizedScriptPath,
-					beautifyScriptEditor,
-					applyTextEditor
-				);
 			BeautifyEditorState.RestoreEditorViewStateNowAndDeferred(editorViewState);
 
 			DebugLogger.LogOperation($"{operationName} Completed", normalizedScriptPath);
@@ -1115,25 +936,6 @@ public partial class SystemExplorerPlugin
 			timing?.CompleteApplyWriteRefresh(applyWriteRefreshStarted);
 		}
 
-	}
-
-	private static TextEdit TryGetBeautifyDiagnosticTextEditor(
-		string scriptPath,
-		Dictionary<string, OpenScriptEditorBuffer> openEditorsByPath
-	)
-	{
-		if (
-			openEditorsByPath != null
-			&& openEditorsByPath.TryGetValue(
-				ScriptPathUtility.Normalize(scriptPath),
-				out OpenScriptEditorBuffer openEditor
-			)
-		)
-		{
-			return openEditor.TextEditor;
-		}
-
-		return null;
 	}
 
 	private void StorePendingBeautifyAfterCSharpierInstall(

@@ -394,10 +394,14 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		GD.PushWarning(userMessage);
+		PushSystemExplorerWarning(userMessage, mirrorToDebugLog: false);
 
-		if (!string.IsNullOrWhiteSpace(technicalDetails))
-			DebugLogger.LogOperation("Tree operation warning", technicalDetails);
+		DebugLogger.LogOperation(
+			"Warning: Tree operation",
+			string.IsNullOrWhiteSpace(technicalDetails)
+				? userMessage ?? ""
+				: $"{userMessage} | TechnicalDetails='{technicalDetails}'"
+		);
 	}
 
 	private bool HasActiveTreeOperationFailure =>

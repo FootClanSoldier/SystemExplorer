@@ -269,6 +269,9 @@ public partial class SystemExplorerPlugin
 		finally
 		{
 			CancelBeautifyManagedStateForShutdown();
+			ShutdownAutocompleteCompletionTransport("Plugin Operation Lifecycle Shutdown");
+			ShutdownCodeServiceDocumentSynchronization("Plugin Operation Lifecycle Shutdown");
+			ResetCodeServiceManagedStateForOperationLifecycleShutdown("Plugin Operation Lifecycle Shutdown");
 			TryLogEditorOperation("Plugin Operation Lifetime Shutdown");
 		}
 	}

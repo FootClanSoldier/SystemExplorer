@@ -4,6 +4,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 namespace SystemExplorer.Diagnostics;
 
@@ -14,7 +15,7 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 	private readonly Func<bool> _isEnabled;
 	private readonly SystemExplorerPersistentLogFile _persistentLogFile = new();
 
-	private bool _disposed;
+	private int _disposed;
 
 	internal SystemExplorerDebugLogger(Func<bool> isEnabled)
 	{
@@ -25,6 +26,9 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 	{
 		get
 		{
+			if (Volatile.Read(ref _disposed) != 0)
+				return false;
+
 			try
 			{
 				return _isEnabled();
@@ -64,8 +68,7 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 		if (!IsEnabled)
 			return;
 
-		string message = CreateOperationMessage(operation, details);
-		WriteEntry(message);
+		WriteEntry(CreateOperationMessage(operation, details));
 	}
 
 	internal void LogOperation(string operation, Func<string> detailsFactory)
@@ -86,29 +89,12 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 		}
 	}
 
-	internal void LogPersistentFileOnlyOperation(string operation, string details = "")
-	{
-		if (!IsEnabled || _disposed)
-			return;
-
-		try
-		{
-			string message = CreateOperationMessage(operation, details);
-			TryWriteFileEntry(message);
-		}
-		catch
-		{
-			// Timing-sensitive crash breadcrumbs are best-effort and must fail closed.
-		}
-	}
-
 	internal Action<string, string> CreatePersistentFileOnlyDiagnosticSink()
 	{
-		if (!IsEnabled || _disposed)
+		if (!IsEnabled)
 			return null;
 
 		EnsurePersistentFileSinkOpen();
-
 		if (!_persistentLogFile.IsOpen)
 			return null;
 
@@ -118,49 +104,35 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 
 	public void Dispose()
 	{
-		if (_disposed)
+		if (Interlocked.Exchange(ref _disposed, 1) != 0)
 			return;
 
-		_disposed = true;
 		_persistentLogFile.DisposeBestEffort();
 	}
 
 	private void WriteEntry(string message)
 	{
-		TryWriteFileEntry(message ?? "");
+		if (Volatile.Read(ref _disposed) != 0)
+			return;
+
+		EnsurePersistentFileSinkOpen();
+		_persistentLogFile.TryWrite(message ?? "");
 	}
 
-	private string TryWriteFileEntry(string message)
+	private void EnsurePersistentFileSinkOpen()
 	{
-		if (_disposed)
-			return "";
-
-		string openStatus = EnsurePersistentFileSinkOpen();
-		if (!_persistentLogFile.IsOpen)
-			return openStatus;
-
-		string writeStatus = _persistentLogFile.TryWrite(message);
-		if (!string.IsNullOrWhiteSpace(writeStatus))
-			return writeStatus;
-
-		return openStatus;
-	}
-
-	private string EnsurePersistentFileSinkOpen()
-	{
-		if (_disposed || _persistentLogFile.IsUnavailable)
-			return "";
+		if (Volatile.Read(ref _disposed) != 0 || _persistentLogFile.IsUnavailable)
+			return;
 		if (_persistentLogFile.IsOpen)
-			return "";
+			return;
 
 		try
 		{
-			string filePath = CreateProcessLogPath();
-			return _persistentLogFile.EnsureOpen(filePath);
+			_persistentLogFile.EnsureOpen(CreateProcessLogPath());
 		}
 		catch (Exception exception)
 		{
-			return _persistentLogFile.DisableAfterOpenFailure(exception);
+			_persistentLogFile.DisableAfterOpenFailure(exception);
 		}
 	}
 
@@ -180,7 +152,6 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 			$"system_explorer_debug_{processStartTime:yyyyMMdd_HHmmss_fffffff}_pid{System.Environment.ProcessId}.log";
 		return Path.Combine(absoluteDirectory, fileName);
 	}
-
 }
 
 internal sealed class SystemExplorerPersistentDiagnosticSink
@@ -207,13 +178,14 @@ internal sealed class SystemExplorerPersistentDiagnosticSink
 		}
 		catch
 		{
+			// Captured async diagnostic sinks are logging-only and fail closed.
 		}
 	}
 }
 
 internal sealed class SystemExplorerPersistentLogFile
 {
-	private const string ConsolePrefix = "[SystemExplorer]";
+	private const string LogPrefix = "[SystemExplorer]";
 
 	private readonly object _sync = new();
 
@@ -240,12 +212,12 @@ internal sealed class SystemExplorerPersistentLogFile
 		}
 	}
 
-	internal string EnsureOpen(string filePath)
+	internal void EnsureOpen(string filePath)
 	{
 		lock (_sync)
 		{
 			if (_disposed || _unavailable || _writer != null)
-				return "";
+				return;
 
 			try
 			{
@@ -255,69 +227,73 @@ internal sealed class SystemExplorerPersistentLogFile
 					throw new IOException("The debug log directory path could not be resolved.");
 
 				Directory.CreateDirectory(directoryPath);
-				var stream = new System.IO.FileStream(
+				FileStream stream = null;
+				try
+				{
+					 stream = new System.IO.FileStream(
 					_filePath,
 					System.IO.FileMode.Append,
 					System.IO.FileAccess.Write,
 					System.IO.FileShare.ReadWrite
-				);
-				_writer = new StreamWriter(stream, new UTF8Encoding(false));
+					);
+					_writer = new StreamWriter(stream, new UTF8Encoding(false));
+					stream = null;
 
-				string startedMessage =
-					$"System Explorer debug file logging started -> Path='{_filePath}'";
-				WriteFileLineLocked(startedMessage);
-				return startedMessage;
+					WriteFileLineLocked(
+						$"System Explorer debug file logging started -> Path='{_filePath}'"
+					);
+				}
+				finally
+				{
+					stream?.Dispose();
+				}
 			}
-			catch (Exception exception)
+			catch
 			{
-				return DisableAfterFailureLocked(exception);
+				DisableAfterFailureLocked();
 			}
 		}
 	}
 
-	internal string DisableAfterOpenFailure(Exception exception)
+	internal void DisableAfterOpenFailure(Exception _)
 	{
 		lock (_sync)
-			return DisableAfterFailureLocked(exception);
+			DisableAfterFailureLocked();
 	}
 
-	internal string TryWrite(string message)
+	internal void TryWrite(string message)
 	{
 		lock (_sync)
 		{
 			if (_disposed || _unavailable || _writer == null)
-				return "";
+				return;
 
 			try
 			{
 				WriteFileLineLocked(message ?? "");
-				return "";
 			}
-			catch (Exception exception)
+			catch
 			{
-				return DisableAfterFailureLocked(exception);
+				DisableAfterFailureLocked();
 			}
 		}
 	}
 
-	internal string DisposeBestEffort()
+	internal void DisposeBestEffort()
 	{
 		lock (_sync)
 		{
 			if (_disposed)
-				return "";
+				return;
 
 			_disposed = true;
-
 			try
 			{
 				_writer?.Dispose();
-				return "";
 			}
-			catch (Exception exception)
+			catch
 			{
-				return
-					$"System Explorer debug file logging dispose failed -> Path='{_filePath}', Exception='{exception.GetType().Name}: {exception.Message}'";
+				// Persistent debug logging is best-effort and has no Godot fallback.
 			}
 			finally
 			{
@@ -326,7 +302,7 @@ internal sealed class SystemExplorerPersistentLogFile
 		}
 	}
 
-	private string DisableAfterFailureLocked(Exception exception)
+	private void DisableAfterFailureLocked()
 	{
 		_unavailable = true;
 		try
@@ -340,9 +316,6 @@ internal sealed class SystemExplorerPersistentLogFile
 		{
 			_writer = null;
 		}
-
-		return
-			$"System Explorer debug file logging disabled after failure -> Path='{_filePath}', Exception='{exception?.GetType().Name ?? "Unknown"}: {exception?.Message ?? "Unknown error."}'";
 	}
 
 	private void WriteFileLineLocked(string message)
@@ -350,7 +323,7 @@ internal sealed class SystemExplorerPersistentLogFile
 		string line =
 			$"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz}] "
 			+ $"[T{System.Environment.CurrentManagedThreadId}] "
-			+ $"{ConsolePrefix} {NormalizePhysicalLine(message)}";
+			+ $"{LogPrefix} {NormalizePhysicalLine(message)}";
 		_writer.WriteLine(line);
 		_writer.Flush();
 	}

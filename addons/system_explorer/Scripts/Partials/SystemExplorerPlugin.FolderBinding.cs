@@ -564,13 +564,13 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(physicalFolderPath))
 		{
-			GD.PushWarning("System Explorer can only bind folders under res://.");
+			PushSystemExplorerWarning("System Explorer can only bind folders under res://.");
 			return;
 		}
 
 		if (!DirAccess.DirExistsAbsolute(physicalFolderPath))
 		{
-			GD.PushWarning($"System Explorer could not find folder: {physicalFolderPath}");
+			PushSystemExplorerWarning($"System Explorer could not find folder: {physicalFolderPath}");
 			return;
 		}
 

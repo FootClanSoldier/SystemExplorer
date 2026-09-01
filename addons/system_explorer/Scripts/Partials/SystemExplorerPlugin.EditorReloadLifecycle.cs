@@ -46,7 +46,6 @@ public partial class SystemExplorerPlugin
 	private ManagedAssemblyRecoveryState _managedAssemblyRecoveryState;
 	private PersistentTreeStateLoadFailureKind _persistentTreeStateLoadFailureKind;
 	private int _managedAssemblyRecoveryDeferredAttempts;
-	private long _managedAssemblyRecoveryOperationToken;
 	private string _managedAssemblyRecoveryReason = "";
 
 	private bool HasMissingSystemsWithFolderBindingsConflict =>
@@ -106,42 +105,15 @@ public partial class SystemExplorerPlugin
 
 	private bool EnsureManagedAssemblyStateCurrent(string reason)
 	{
-		return EnsureManagedAssemblyStateCurrent(reason, diagnosticPhase: null);
-	}
-
-	private bool EnsureManagedAssemblyStateCurrent(
-		string reason,
-		Action<string, string> diagnosticPhase
-	)
-	{
-		bool hasVerifiedPersistentTreeState = HasVerifiedPersistentTreeStateForCurrentAssembly;
-		diagnosticPhase?.Invoke(
-			"PersistentStateAuthority.Checked",
-			$"Current='{hasVerifiedPersistentTreeState}'"
-		);
-
-		bool criticalManagedAssemblySignalsCurrent = false;
-		if (hasVerifiedPersistentTreeState)
+		if (
+			HasVerifiedPersistentTreeStateForCurrentAssembly
+			&& VerifyCriticalManagedAssemblySignals()
+		)
 		{
-			diagnosticPhase?.Invoke("VerifyCriticalManagedAssemblySignals.Begin", "");
-			criticalManagedAssemblySignalsCurrent = VerifyCriticalManagedAssemblySignals();
-			diagnosticPhase?.Invoke(
-				"VerifyCriticalManagedAssemblySignals.Returned",
-				$"Result='{criticalManagedAssemblySignalsCurrent}'"
-			);
-		}
-
-		if (hasVerifiedPersistentTreeState && criticalManagedAssemblySignalsCurrent)
-		{
-			diagnosticPhase?.Invoke("EnsureEditorOperationLifecycleCurrent.Begin", "");
 			EnsureEditorOperationLifecycleCurrentForManagedAssembly();
-			diagnosticPhase?.Invoke("EnsureEditorOperationLifecycleCurrent.Returned", "");
 			_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Completed;
-			diagnosticPhase?.Invoke("FastPath.ReturnedTrue", "");
 			return true;
 		}
-
-		diagnosticPhase?.Invoke("RecoveryPath.Begin", "");
 
 		if (_managedAssemblyRecoveryState == ManagedAssemblyRecoveryState.PermanentlyFailed)
 			return false;
@@ -149,21 +121,13 @@ public partial class SystemExplorerPlugin
 		if (_isRecoveringManagedAssemblyState)
 			return false;
 
-		diagnosticPhase?.Invoke("TryRecoverManagedAssemblyEditorIntegration.Begin", "");
-		bool recovered = TryRecoverManagedAssemblyEditorIntegration(reason, out string failureDetail);
-		diagnosticPhase?.Invoke(
-			"TryRecoverManagedAssemblyEditorIntegration.Returned",
-			$"Result='{recovered}'"
-		);
-		if (recovered)
+		if (TryRecoverManagedAssemblyEditorIntegration(reason, out string failureDetail))
 			return true;
 
 		if (_managedAssemblyRecoveryState == ManagedAssemblyRecoveryState.PermanentlyFailed)
 			return false;
 
-		diagnosticPhase?.Invoke("QueueManagedAssemblyRecovery.Begin", "");
 		QueueManagedAssemblyRecovery(reason, failureDetail);
-		diagnosticPhase?.Invoke("QueueManagedAssemblyRecovery.Returned", "");
 		return false;
 	}
 
@@ -212,14 +176,14 @@ public partial class SystemExplorerPlugin
 	{
 		_loadedPersistentTreeStateGeneration = ManagedAssemblyGeneration;
 		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Completed;
-		AdvanceManagedAssemblyRecoveryOperationToken();
 		_managedAssemblyRecoveryDeferredAttempts = 0;
 		_managedAssemblyRecoveryReason = "";
 		ClearManagedAssemblyRecoveryFailure();
 		EnsureEditorShortcutsRegistered();
 		BuildTree(keepCurrentExpansionState: true);
 		RestorePersistentTreeSelectionBestEffort(reason);
-		CallDeferred(nameof(MakeSystemExplorerDockVisible), ManagedAssemblyGeneration);
+		CallDeferred(nameof(MakeSystemExplorerDockVisible));
+		StartCodeServiceSessionEnsure("Managed Assembly Recovery");
 		DebugLogger.LogOperation("Managed assembly recovery completed", $"Reason='{reason}', Strategy='{strategy}'");
 		return true;
 	}
@@ -299,64 +263,20 @@ public partial class SystemExplorerPlugin
 			&& IsPluginSignalConnected(_contextQuickActionsSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal));
 	}
 
-	private long AdvanceManagedAssemblyRecoveryOperationToken()
-	{
-		unchecked
-		{
-			_managedAssemblyRecoveryOperationToken++;
-			if (_managedAssemblyRecoveryOperationToken <= 0)
-				_managedAssemblyRecoveryOperationToken = 1;
-		}
-
-		return _managedAssemblyRecoveryOperationToken;
-	}
-
 	private void QueueManagedAssemblyRecovery(string reason, string failureDetail)
 	{
 		_managedAssemblyRecoveryReason = reason ?? "Managed Assembly Recovery";
 		if (_managedAssemblyRecoveryState == ManagedAssemblyRecoveryState.Queued)
 			return;
-
 		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Queued;
-		long operationToken = AdvanceManagedAssemblyRecoveryOperationToken();
-		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
-		DebugLogger.LogOperation(
-			"Managed assembly recovery deferred",
-			$"{failureDetail ?? ""}, OperationToken='{operationToken}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
-		);
-		CallDeferred(
-			nameof(RunDeferredManagedAssemblyRecovery),
-			operationToken,
-			scheduledManagedAssemblyGeneration
-		);
+		DebugLogger.LogOperation("Managed assembly recovery deferred", failureDetail);
+		CallDeferred(nameof(RunDeferredManagedAssemblyRecovery));
 	}
 
-	private void RunDeferredManagedAssemblyRecovery(
-		long operationToken,
-		string scheduledManagedAssemblyGeneration
-	)
+	private void RunDeferredManagedAssemblyRecovery()
 	{
-		if (
-			!string.Equals(
-				scheduledManagedAssemblyGeneration,
-				ManagedAssemblyGeneration,
-				StringComparison.Ordinal
-			)
-		)
-		{
-			DebugLogger.LogPersistentFileOnlyOperation(
-				"Managed assembly deferred recovery rejected",
-				$"Reason='StaleManagedAssemblyGeneration', Operation='ManagedAssemblyRecovery', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', ScheduledOperationToken='{operationToken}', CurrentOperationToken='{_managedAssemblyRecoveryOperationToken}'"
-			);
-			return;
-		}
-
-		if (operationToken != _managedAssemblyRecoveryOperationToken)
-			return;
-
 		if (_managedAssemblyRecoveryState != ManagedAssemblyRecoveryState.Queued)
 			return;
-
 		_managedAssemblyRecoveryDeferredAttempts++;
 		if (TryRecoverManagedAssemblyEditorIntegration(_managedAssemblyRecoveryReason, out string failureDetail))
 			return;
@@ -365,16 +285,10 @@ public partial class SystemExplorerPlugin
 		if (_managedAssemblyRecoveryDeferredAttempts < ManagedAssemblyRecoveryMaximumDeferredAttempts)
 		{
 			_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.Queued;
-			long retryOperationToken = AdvanceManagedAssemblyRecoveryOperationToken();
-			CallDeferred(
-				nameof(RunDeferredManagedAssemblyRecovery),
-				retryOperationToken,
-				ManagedAssemblyGeneration
-			);
+			CallDeferred(nameof(RunDeferredManagedAssemblyRecovery));
 			return;
 		}
 		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.PermanentlyFailed;
-		AdvanceManagedAssemblyRecoveryOperationToken();
 		ReportManagedAssemblyRecoveryFailure(_managedAssemblyRecoveryReason, failureDetail);
 	}
 
@@ -571,6 +485,11 @@ public partial class SystemExplorerPlugin
 				return false;
 			}
 
+			// Phase-7 document synchronization is additive and is not yet a user-facing
+			// semantic feature. A binding/composition failure must not fail managed dock
+			// recovery or disable autocomplete/namespace refactoring.
+			EnsureCodeServiceDocumentSynchronizationLifecycleCurrent();
+
 			if (!TryEnsureNamespaceRefactorHost(out _))
 			{
 				failureDetail = "The Refactor Namespace managed host could not be restored.";
@@ -588,9 +507,6 @@ public partial class SystemExplorerPlugin
 
 	private void ResetManagedAssemblyTransientStateAfterReload()
 	{
-		AdvanceManagedAssemblyRecoveryOperationToken();
-		BeginAutocompleteReloadStabilization();
-		InvalidateScriptEditorLifecycle("ResetManagedAssemblyTransientStateAfterReload");
 		_systemExplorerToggleFocusReturnTarget =
 			SystemExplorerToggleFocusReturnTarget.Tree;
 		RecoverEditorOperationBusyCursorAfterManagedAssemblyReload();
@@ -599,6 +515,8 @@ public partial class SystemExplorerPlugin
 		_boundFolderSyncRunning = false;
 		ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload();
 		ResetAutocompleteTransientStateAfterManagedAssemblyReload();
+		ResetCodeServiceDocumentSynchronizationAfterManagedAssemblyReload();
+		ResetCodeServiceManagedStateForOperationLifecycleShutdown("Managed Assembly Reload");
 		CancelPendingScriptRenameEditorRestore();
 		ResetTreeOperationDialogQueuedStateAfterManagedAssemblyReload();
 		ResetUnsafePendingTreeOperationsAfterManagedAssemblyReload();
@@ -606,15 +524,11 @@ public partial class SystemExplorerPlugin
 
 	private void ResetUnsafePendingTreeOperationsAfterManagedAssemblyReload()
 	{
-		ResetTreeMouseScriptClickIntent();
-		InvalidateContextMenuOpenRequest("ManagedAssemblyReload");
-		_pendingQuickActionsNoScriptsFound = false;
 		_pendingRemoveMetadata = "";
 		_pendingRenameMetadata = "";
 		_pendingAddFolderMetadata = "";
 		_pendingFolderBindingMetadata = "";
 		_pendingShowInFileManagerMetadata = "";
-		InvalidateFileManagerOpenRequest("ManagedAssemblyReload");
 		_pendingBeautifyScriptMetadata = "";
 		_pendingBeautifyAfterCSharpierInstallMetadata = "";
 		_pendingBeautifyAfterCSharpierInstallScriptPaths = Array.Empty<string>();
@@ -640,10 +554,6 @@ public partial class SystemExplorerPlugin
 		_isCreateScriptInputWarningPopupPending = false;
 		_namespaceRefactorHost = null;
 
-		HideWindowForManagedAssemblyReload(_contextQuickActionsSubmenu);
-		HideWindowForManagedAssemblyReload(_contextAddSubmenu);
-		HideWindowForManagedAssemblyReload(_contextNewSubmenu);
-		HideWindowForManagedAssemblyReload(_contextMenu);
 		HideWindowForManagedAssemblyReload(_removeDialog);
 		HideWindowForManagedAssemblyReload(_treeShortcutConflictDialog);
 		HideWindowForManagedAssemblyReload(_renameInputWarningDialog);
@@ -662,6 +572,7 @@ public partial class SystemExplorerPlugin
 		HideWindowForManagedAssemblyReload(_missingScriptDialog);
 		HideWindowForManagedAssemblyReload(_missingSceneDialog);
 		HideWindowForManagedAssemblyReload(_namespaceRefactorDialog);
+		HideWindowForManagedAssemblyReload(_codeServiceInstallResultDialog);
 		HideWindowForManagedAssemblyReload(_csharpierNotInstalledDialog);
 	}
 

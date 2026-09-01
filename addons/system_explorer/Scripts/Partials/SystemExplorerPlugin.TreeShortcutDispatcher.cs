@@ -373,7 +373,7 @@ public partial class SystemExplorerPlugin
 			catch (Exception exception)
 			{
 				DebugLogger.LogOperation(
-					"Shortcut conflict dialog presentation failed",
+					"Warning: Shortcut conflict dialog presentation failed",
 					$"{details}, Exception='{exception}'"
 				);
 			}
@@ -381,12 +381,12 @@ public partial class SystemExplorerPlugin
 		else
 		{
 			DebugLogger.LogOperation(
-				"Shortcut conflict dialog unavailable",
+				"Warning: Shortcut conflict dialog unavailable",
 				details
 			);
 		}
 
-		GD.PushWarning($"Shortcut Conflict: {message}");
+		PushSystemExplorerWarning($"Shortcut Conflict: {message}", mirrorToDebugLog: false);
 	}
 	#endregion
 }

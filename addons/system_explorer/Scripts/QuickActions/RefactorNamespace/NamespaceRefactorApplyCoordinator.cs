@@ -98,6 +98,11 @@ internal sealed class NamespaceRefactorApplyCoordinator
 			);
 		}
 
+		ReportPostCommitScriptCacheWarning(
+			applyResult,
+			"Refactor Namespace",
+			diagnosticContext
+		);
 		_showIncompleteWriteReport(applyResult.FailedWritePaths);
 
 		if (appliedCount == 0)
@@ -212,6 +217,11 @@ internal sealed class NamespaceRefactorApplyCoordinator
 			);
 		}
 
+		ReportPostCommitScriptCacheWarning(
+			applyResult,
+			operationName,
+			diagnosticContext
+		);
 		_showIncompleteWriteReport(applyResult.FailedWritePaths);
 
 		if (appliedCount == 0)
@@ -234,6 +244,31 @@ internal sealed class NamespaceRefactorApplyCoordinator
 			() => $"Completed; Operation='{operationName}'; AppliedCount={appliedCount}; IntendedCount={intendedCount}; PartialWriteFailure={applyResult.FailedWritePaths.Count > 0}; FailedPaths={diagnosticContext.FormatPaths(applyResult.FailedWritePaths)}"
 		);
 		return true;
+	}
+
+	private void ReportPostCommitScriptCacheWarning(
+		NamespaceRefactorPendingWriteApplyResult applyResult,
+		string operationName,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		int failedCount = applyResult?.ScriptCacheReconciliationResult?.Failures.Count ?? 0;
+
+		if (failedCount == 0)
+			return;
+
+		string resolvedOperationName = string.IsNullOrWhiteSpace(operationName)
+			? "Namespace mutation"
+			: operationName;
+
+		diagnosticContext?.Log(
+			"ScriptCacheReconciliation",
+			() =>
+				$"Post-commit coherence warning presented; FailedCount={failedCount}; FailedPaths={diagnosticContext.FormatPaths(applyResult.ScriptCacheReconciliationResult.FailedPaths)}"
+		);
+		_showWarning(
+			$"{resolvedOperationName} updated the files on disk, but Godot could not verify cached Script source/editor coherence for {failedCount} script(s). The file changes were kept. Reload or reopen the affected scripts, or restart Godot, before running another namespace mutation."
+		);
 	}
 }
 #endif

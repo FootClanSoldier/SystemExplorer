@@ -38,6 +38,7 @@ internal sealed class NamespaceRefactorPendingWriteApplyResult
 	internal IReadOnlyList<string> UnsafeOpenScriptPaths { get; }
 	internal IReadOnlyList<string> UnsavedScriptPaths { get; }
 	internal ScriptEditorBufferAutosaveResult FailedAutosave { get; }
+	internal ScriptResourceCacheReconciliationResult ScriptCacheReconciliationResult { get; }
 
 	private NamespaceRefactorPendingWriteApplyResult(
 		NamespaceRefactorPendingWriteApplyFailure failure,
@@ -49,7 +50,8 @@ internal sealed class NamespaceRefactorPendingWriteApplyResult
 		string affectedOpenBufferFailureMessage,
 		IEnumerable<string> unsafeOpenScriptPaths,
 		IEnumerable<string> unsavedScriptPaths,
-		ScriptEditorBufferAutosaveResult failedAutosave
+		ScriptEditorBufferAutosaveResult failedAutosave,
+		ScriptResourceCacheReconciliationResult scriptCacheReconciliationResult
 	)
 	{
 		Failure = failure;
@@ -62,6 +64,9 @@ internal sealed class NamespaceRefactorPendingWriteApplyResult
 		UnsafeOpenScriptPaths = CreateReadOnlyList(unsafeOpenScriptPaths);
 		UnsavedScriptPaths = CreateReadOnlyList(unsavedScriptPaths);
 		FailedAutosave = failedAutosave;
+		ScriptCacheReconciliationResult =
+			scriptCacheReconciliationResult
+			?? ScriptResourceCacheReconciliationResult.NotAttempted();
 	}
 
 	internal static NamespaceRefactorPendingWriteApplyResult Completed(
@@ -69,7 +74,8 @@ internal sealed class NamespaceRefactorPendingWriteApplyResult
 		NamespaceRefactorPendingWriteSet finalWriteSet,
 		NamespaceRefactorPendingWriteSet appliedWriteSet,
 		IEnumerable<string> failedWritePaths,
-		int intendedWritePathCount
+		int intendedWritePathCount,
+		ScriptResourceCacheReconciliationResult scriptCacheReconciliationResult
 	)
 	{
 		return new NamespaceRefactorPendingWriteApplyResult(
@@ -82,7 +88,8 @@ internal sealed class NamespaceRefactorPendingWriteApplyResult
 			"",
 			null,
 			null,
-			default
+			default,
+			scriptCacheReconciliationResult
 		);
 	}
 
@@ -106,7 +113,8 @@ internal sealed class NamespaceRefactorPendingWriteApplyResult
 			affectedOpenBufferFailureMessage,
 			unsafeOpenScriptPaths,
 			unsavedScriptPaths,
-			failedAutosave
+			failedAutosave,
+			ScriptResourceCacheReconciliationResult.NotAttempted()
 		);
 	}
 
@@ -124,6 +132,8 @@ internal sealed class NamespaceRefactorPendingWriteApplyService
 	private readonly ScriptEditorBufferAutosaveCoordinator _autosaveCoordinator;
 	private readonly ScriptEditorBufferBatchService _bufferBatchService;
 	private readonly Func<string, string, bool> _writeText;
+	private readonly Func<IReadOnlyDictionary<string, string>, ScriptResourceCacheReconciliationResult>
+		_reconcileCommittedScriptResources;
 	private readonly Action<IEnumerable<string>> _refreshChangedScripts;
 
 	internal NamespaceRefactorPendingWriteApplyService(
@@ -132,6 +142,8 @@ internal sealed class NamespaceRefactorPendingWriteApplyService
 		ScriptEditorBufferAutosaveCoordinator autosaveCoordinator,
 		ScriptEditorBufferBatchService bufferBatchService,
 		Func<string, string, bool> writeText,
+		Func<IReadOnlyDictionary<string, string>, ScriptResourceCacheReconciliationResult>
+			reconcileCommittedScriptResources,
 		Action<IEnumerable<string>> refreshChangedScripts
 	)
 	{
@@ -144,6 +156,9 @@ internal sealed class NamespaceRefactorPendingWriteApplyService
 		_bufferBatchService =
 			bufferBatchService ?? throw new ArgumentNullException(nameof(bufferBatchService));
 		_writeText = writeText ?? throw new ArgumentNullException(nameof(writeText));
+		_reconcileCommittedScriptResources =
+			reconcileCommittedScriptResources
+			?? throw new ArgumentNullException(nameof(reconcileCommittedScriptResources));
 		_refreshChangedScripts =
 			refreshChangedScripts
 			?? throw new ArgumentNullException(nameof(refreshChangedScripts));
@@ -309,8 +324,57 @@ internal sealed class NamespaceRefactorPendingWriteApplyService
 			writeOutcome.AppliedPendingWrites
 		);
 
+		ScriptResourceCacheReconciliationResult scriptCacheReconciliationResult =
+			ScriptResourceCacheReconciliationResult.NotAttempted();
+
 		if (writeOutcome.AppliedPendingWrites.Count > 0)
 		{
+			diagnosticContext?.Log(
+				"ScriptCacheReconciliation",
+				() =>
+					$"Committed Script cache reconciliation started; AttemptedPathCount={writeOutcome.AppliedPendingWrites.Count}; Paths={diagnosticContext.FormatPaths(writeOutcome.AppliedPendingWrites.Keys)}"
+			);
+
+			try
+			{
+				scriptCacheReconciliationResult =
+					_reconcileCommittedScriptResources(writeOutcome.AppliedPendingWrites);
+
+				if (scriptCacheReconciliationResult == null)
+				{
+					scriptCacheReconciliationResult =
+						ScriptResourceCacheReconciliationResult.FailedForPaths(
+							writeOutcome.AppliedPendingWrites.Keys,
+							"Script cache reconciliation returned a null result."
+						);
+				}
+			}
+			catch (Exception exception)
+			{
+				scriptCacheReconciliationResult =
+					ScriptResourceCacheReconciliationResult.FailedForPaths(
+						writeOutcome.AppliedPendingWrites.Keys,
+						NormalizeDiagnosticDetail(
+							$"Script cache reconciliation threw {exception.GetType().Name}: {exception.Message}"
+						)
+					);
+			}
+
+			diagnosticContext?.Log(
+				"ScriptCacheReconciliation",
+				() =>
+					$"Committed Script cache reconciliation completed; Success={scriptCacheReconciliationResult.Success}; AttemptedPathCount={scriptCacheReconciliationResult.AttemptedPathCount}; NotCachedCount={scriptCacheReconciliationResult.NotCachedPaths.Count}; AlreadyCurrentCount={scriptCacheReconciliationResult.AlreadyCurrentPaths.Count}; SourceUpdatedCount={scriptCacheReconciliationResult.SourceUpdatedPaths.Count}; FailedCount={scriptCacheReconciliationResult.Failures.Count}; NotCachedPaths={diagnosticContext.FormatPaths(scriptCacheReconciliationResult.NotCachedPaths)}; AlreadyCurrentPaths={diagnosticContext.FormatPaths(scriptCacheReconciliationResult.AlreadyCurrentPaths)}; SourceUpdatedPaths={diagnosticContext.FormatPaths(scriptCacheReconciliationResult.SourceUpdatedPaths)}; FailedPaths={diagnosticContext.FormatPaths(scriptCacheReconciliationResult.FailedPaths)}"
+			);
+
+			foreach (ScriptResourceCacheReconciliationFailure failure in scriptCacheReconciliationResult.Failures)
+			{
+				diagnosticContext?.Log(
+					"ScriptCacheReconciliation",
+					() =>
+						$"Committed Script cache reconciliation failure; Path='{failure.Path ?? ""}'; FailureDetail='{NormalizeDiagnosticDetail(failure.FailureDetail)}'."
+				);
+			}
+
 			diagnosticContext?.Log(
 				"ImmediateSync",
 				() => $"ApplyCommittedTexts started; PathCount={writeOutcome.AppliedPendingWrites.Count}; Groups={FormatGroupCounts(openEditorGroupsByPath, diagnosticContext)}"
@@ -333,7 +397,8 @@ internal sealed class NamespaceRefactorPendingWriteApplyService
 			finalWriteSet,
 			appliedWriteSet,
 			writeOutcome.FailedWritePaths,
-			writeOutcome.IntendedWritePathCount
+			writeOutcome.IntendedWritePathCount,
+			scriptCacheReconciliationResult
 		);
 	}
 
@@ -973,6 +1038,16 @@ internal sealed class NamespaceRefactorPendingWriteApplyService
 			return "[]";
 
 		return $"[{string.Join(", ", groupsByPath.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).Select(pair => $"'{pair.Key}'={pair.Value?.Buffers.Count ?? 0}"))}]";
+	}
+
+	private static string NormalizeDiagnosticDetail(string detail)
+	{
+		if (string.IsNullOrWhiteSpace(detail))
+			return "";
+
+		string normalized = detail.Replace("\r", " ").Replace("\n", " ").Trim();
+		const int maximumLength = 512;
+		return normalized.Length <= maximumLength ? normalized : normalized[..maximumLength];
 	}
 
 	private static NamespaceRefactorPendingWriteApplyFailure GetInitialMatchFailure(

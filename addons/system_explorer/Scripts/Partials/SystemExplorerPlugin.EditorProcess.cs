@@ -14,49 +14,6 @@ public partial class SystemExplorerPlugin
 			ClearPendingPersistentTreeStateSave();
 		}
 
-		try
-		{
-			ProcessPendingContextMenuOpen();
-		}
-		catch
-		{
-			InvalidateContextMenuOpenRequest("ProcessException");
-		}
-
-		try
-		{
-			ProcessAutocompleteReloadStabilization();
-		}
-		catch
-		{
-		}
-
-		try
-		{
-			ProcessAutocompleteScriptTransitionStabilization(delta);
-		}
-		catch
-		{
-		}
-
-		try
-		{
-			ProcessPendingAutocompleteIndexingQuiescence(delta);
-		}
-		catch
-		{
-			ClearPendingAutocompleteIndexingQuiescenceProcessWork();
-		}
-
-		try
-		{
-			ProcessPendingAutocompleteProcessWork(delta);
-		}
-		catch
-		{
-			ClearPendingAutocompleteProcessWork();
-		}
-
 		bool shouldReapplyBusyCursor = false;
 
 		try
@@ -81,13 +38,7 @@ public partial class SystemExplorerPlugin
 	private void RefreshEditorPluginProcessingState(bool busyCursorNeedsProcessing)
 	{
 		TrySetEditorPluginProcessing(
-			busyCursorNeedsProcessing
-				|| HasPendingPersistentTreeStateProcessWork()
-				|| HasPendingContextMenuOpenProcessWork()
-				|| HasPendingAutocompleteReloadStabilizationProcessWork()
-				|| HasPendingAutocompleteScriptTransitionStabilizationProcessWork()
-				|| HasPendingAutocompleteIndexingQuiescenceProcessWork()
-				|| HasPendingAutocompleteProcessWork()
+			busyCursorNeedsProcessing || HasPendingPersistentTreeStateProcessWork()
 		);
 	}
 

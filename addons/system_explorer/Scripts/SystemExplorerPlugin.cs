@@ -108,6 +108,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private OptionButton _namespaceRefactorExistingNamespaceDropdown;
 	private CheckBox _namespaceRefactorWithoutNamespaceOption;
 	private NamespaceRefactorPluginHost _namespaceRefactorHost;
+	private AcceptDialog _codeServiceInstallResultDialog;
 	private AcceptDialog _csharpierInstallResultDialog;
 	private ConfirmationDialog _csharpierNotInstalledDialog;
 	private EditorFileDialog _createScriptDialog;
@@ -159,6 +160,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _contextCategoryAddIcon;
 	private Texture2D _contextCategoryArrowLeftIcon;
 	private Texture2D _contextQuickActionsIcon;
+	private Texture2D _contextInstallCodeIntelligenceIcon;
 	private Texture2D _contextRefactorNamespaceIcon;
 	private Texture2D _contextBeautifyScriptIcon;
 	private Texture2D _scriptFilterSearchIcon;
@@ -184,6 +186,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		TryLogEditorOperation("Enter Tree");
 
 		EnsureProjectSettings();
+		StartCodeServiceSessionEnsureAtStartup();
 		EnsureEditorShortcutsRegistered();
 		LoadEditorIcons();
 		EnsureScriptTemplateExists();
@@ -230,29 +233,14 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		}
 
 		SchedulePendingTreeOperationDialogPresentation();
-		CallDeferred(nameof(MakeSystemExplorerDockVisible), ManagedAssemblyGeneration);
+		CallDeferred(nameof(MakeSystemExplorerDockVisible));
 
 		DebugLogStateSnapshot("Enter Tree Complete");
 		StartCSharpierStartupWarmUp();
 	}
 
-	private void MakeSystemExplorerDockVisible(string scheduledManagedAssemblyGeneration)
+	private void MakeSystemExplorerDockVisible()
 	{
-		if (
-			!string.Equals(
-				scheduledManagedAssemblyGeneration,
-				ManagedAssemblyGeneration,
-				StringComparison.Ordinal
-			)
-		)
-		{
-			DebugLogger.LogPersistentFileOnlyOperation(
-				"Deferred editor operation rejected",
-				$"Reason='StaleManagedAssemblyGeneration', Operation='MakeSystemExplorerDockVisible', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
-			);
-			return;
-		}
-
 		if (!GodotObject.IsInstanceValid(_editorDock))
 		{
 			return;
@@ -284,6 +272,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_contextCategoryAddIcon = GetEditorIcon(editorTheme, "Add");
 		_contextCategoryArrowLeftIcon = GetEditorIcon(editorTheme, "ArrowLeft");
 		_contextQuickActionsIcon = GetEditorIcon(editorTheme, "Tools");
+		_contextInstallCodeIntelligenceIcon = GetEditorIcon(editorTheme, "Favorites");
 		_contextRefactorNamespaceIcon = GetEditorIcon(editorTheme, "Rename");
 		_contextBeautifyScriptIcon = GetEditorIcon(editorTheme, "CodeHighlighter");
 		_contextBeautifyScriptIcon ??= GetEditorIcon(editorTheme, "CSharpScript");
@@ -436,9 +425,6 @@ public sealed class {{CLASS_NAME}}
 	public override void _ExitTree()
 	{
 		TryLogEditorOperation("Exit Tree");
-		ResetTreeMouseScriptClickIntent();
-		InvalidateContextMenuOpenRequest("ExitTree");
-		InvalidateFileManagerOpenRequest("ExitTree");
 		ShutdownEditorOperationLifecycle();
 		FlushAndShutdownTreeStatePersistence();
 
@@ -451,11 +437,9 @@ public sealed class {{CLASS_NAME}}
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 		_isScriptEditorSyncDeferredQueued = false;
-		InvalidateScriptEditorLifecycle("ExitTree");
 		ShutdownTreeOperationDialogs();
 		ShutdownAutocomplete();
 		ShutdownScriptEditorSync();
-		ShutdownScriptEditorLifecycleAssemblyUnloadRegistration();
 		ShutdownFolderBindingFilesystemLifecycle();
 		DisconnectNamespaceRefactorDialogSignals();
 		DisconnectDockSignals();
@@ -477,7 +461,6 @@ public sealed class {{CLASS_NAME}}
 		_dock = null;
 		ClearDockControlReferences();
 		_loadedPersistentTreeStateGeneration = "";
-		AdvanceManagedAssemblyRecoveryOperationToken();
 		_isRecoveringManagedAssemblyState = false;
 		_managedAssemblyRecoveryState = ManagedAssemblyRecoveryState.NotQueued;
 		_managedAssemblyRecoveryDeferredAttempts = 0;
@@ -485,12 +468,27 @@ public sealed class {{CLASS_NAME}}
 		_editorOperationLifetime?.Dispose();
 		_editorOperationLifetime = null;
 
-		if (_debugLogger != null)
+		SystemExplorerDebugLogger debugLogger = _debugLogger;
+		if (debugLogger != null)
 		{
-			_debugLogger.Log("System Explorer debug logging shutdown completed.");
-			_debugLogger.Dispose();
-			_debugLogger = null;
+			try
+			{
+				debugLogger.Log("System Explorer debug logging shutdown completed.");
+			}
+			catch
+			{
+			}
+
+			try
+			{
+				debugLogger.Dispose();
+			}
+			catch
+			{
+			}
 		}
+
+		_debugLogger = null;
 	}
 
 	#endregion

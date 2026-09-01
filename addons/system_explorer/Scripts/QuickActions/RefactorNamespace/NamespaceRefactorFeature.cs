@@ -21,6 +21,8 @@ internal sealed class NamespaceRefactorFeature
 		new(RefactorNamespaceScopeResolver, RefactorNamespaceSnapshotLoader);
 	private static readonly NamespaceOpenBufferActivationService RefactorNamespaceOpenBufferActivation =
 		new(new ScriptEditorBufferActivationService(ScriptPathUtility.Normalize));
+	private static readonly ScriptResourceCacheReconciliationService
+		RefactorNamespaceScriptResourceCacheReconciliation = new();
 
 	private readonly NamespaceRefactorDialogView _dialogView;
 	private readonly ScriptEditorBufferLocator _bufferLocator;
@@ -226,6 +228,7 @@ internal sealed class NamespaceRefactorFeature
 			_bufferAutosaveCoordinator,
 			_bufferBatchService,
 			ScriptTextFileService.WriteText,
+			RefactorNamespaceScriptResourceCacheReconciliation.ReconcileCommittedTexts,
 			ScriptResourceRefreshService.RefreshChangedScripts
 		);
 

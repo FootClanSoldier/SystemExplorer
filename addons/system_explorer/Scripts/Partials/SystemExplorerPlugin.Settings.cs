@@ -5,13 +5,8 @@ public partial class SystemExplorerPlugin
 {
 	#region Project Settings
 	private const string ProjectSettingsPath = "addons/system_explorer";
-	private const string DiagnosticsSettingsPath = ProjectSettingsPath + "/diagnostics";
-
 	private const string EnableQuickActionsSetting = ProjectSettingsPath + "/enable_quick_actions";
-	private const string LegacyDebugStateSetting = ProjectSettingsPath + "/enable_debug_state";
-	private const string DebugStateSetting = DiagnosticsSettingsPath + "/enable_debug_state";
-	private const string LegacyNavigationStressSetting =
-		DiagnosticsSettingsPath + "/navigation_stress_enabled";
+	private const string DebugStateSetting = ProjectSettingsPath + "/enable_debug_state";
 
 	private bool EnableQuickActions => GetBoolProjectSetting(EnableQuickActionsSetting, false);
 
@@ -20,34 +15,8 @@ public partial class SystemExplorerPlugin
 
 	private void EnsureProjectSettings()
 	{
-		MigrateLegacyProjectSettings();
 		EnsureBoolProjectSetting(EnableQuickActionsSetting, false);
 		EnsureBoolProjectSetting(DebugStateSetting, false);
-	}
-
-	private static void MigrateLegacyProjectSettings()
-	{
-		if (ProjectSettings.HasSetting(LegacyDebugStateSetting))
-		{
-			if (!ProjectSettings.HasSetting(DebugStateSetting))
-			{
-				bool legacyDebugState = GetBoolProjectSetting(
-					LegacyDebugStateSetting,
-					false
-				);
-				ProjectSettings.SetSetting(DebugStateSetting, legacyDebugState);
-			}
-
-			ProjectSettings.SetSetting(LegacyDebugStateSetting, default(Variant));
-		}
-
-		if (ProjectSettings.HasSetting(LegacyNavigationStressSetting))
-		{
-			ProjectSettings.SetSetting(
-				LegacyNavigationStressSetting,
-				default(Variant)
-			);
-		}
 	}
 
 	private static bool GetBoolProjectSetting(string settingPath, bool defaultValue)

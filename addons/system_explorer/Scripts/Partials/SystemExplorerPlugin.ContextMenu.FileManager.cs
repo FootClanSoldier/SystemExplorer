@@ -5,14 +5,6 @@ using System.Collections.Generic;
 public partial class SystemExplorerPlugin
 {
 	#region Context Menu File Manager
-	private const string FileManagerOpenOperationLabel = "System Explorer file manager open";
-
-	private long _fileManagerOpenOperationToken;
-	private bool _fileManagerOpenRequestPending;
-	private string _fileManagerOpenCurrentGlobalPath = "";
-	private bool _fileManagerOpenCurrentOpenFolder;
-	private long _fileManagerOpenSameTargetCoalescedCount;
-
 	private void ShowPendingItemInFileManager()
 	{
 		if (string.IsNullOrWhiteSpace(_pendingShowInFileManagerMetadata))
@@ -54,11 +46,11 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(globalPath))
 		{
-			GD.PushWarning($"Could not resolve file path: {path}");
+			PushSystemExplorerWarning($"Could not resolve file path: {path}");
 			return;
 		}
 
-		QueueFileManagerOpenRequest(globalPath, openFolder: false);
+		OS.ShellShowInFileManager(globalPath, false);
 	}
 
 	private void ShowBoundFolderInFileManager(string boundFolderPath)
@@ -68,7 +60,7 @@ public partial class SystemExplorerPlugin
 
 		if (!DirAccess.DirExistsAbsolute(boundFolderPath))
 		{
-			GD.PushWarning($"Bound folder no longer exists: {boundFolderPath}");
+			PushSystemExplorerWarning($"Bound folder no longer exists: {boundFolderPath}");
 			return;
 		}
 
@@ -76,7 +68,7 @@ public partial class SystemExplorerPlugin
 
 		if (directory == null)
 		{
-			GD.PushWarning($"Could not open bound folder: {boundFolderPath}");
+			PushSystemExplorerWarning($"Could not open bound folder: {boundFolderPath}");
 			return;
 		}
 
@@ -84,312 +76,11 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(globalPath))
 		{
-			GD.PushWarning($"Could not resolve bound folder path: {boundFolderPath}");
+			PushSystemExplorerWarning($"Could not resolve bound folder path: {boundFolderPath}");
 			return;
 		}
 
-		QueueFileManagerOpenRequest(globalPath, openFolder: true);
-	}
-
-	private void QueueFileManagerOpenRequest(string globalPath, bool openFolder)
-	{
-		if (string.IsNullOrWhiteSpace(globalPath))
-			return;
-
-		if (
-			_fileManagerOpenRequestPending
-			&& string.Equals(
-				_fileManagerOpenCurrentGlobalPath,
-				globalPath,
-				System.StringComparison.Ordinal
-			)
-			&& _fileManagerOpenCurrentOpenFolder == openFolder
-		)
-		{
-			unchecked
-			{
-				_fileManagerOpenSameTargetCoalescedCount++;
-				if (_fileManagerOpenSameTargetCoalescedCount <= 0)
-					_fileManagerOpenSameTargetCoalescedCount = 1;
-			}
-
-			DebugLogger.LogPersistentFileOnlyOperation(
-				"System Explorer file manager open request coalesced",
-				$"OperationToken='{_fileManagerOpenOperationToken}', GlobalPath='{_fileManagerOpenCurrentGlobalPath}', OpenFolder='{_fileManagerOpenCurrentOpenFolder}', CoalescedCount='{_fileManagerOpenSameTargetCoalescedCount}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
-			);
-			return;
-		}
-
-		bool supersedesCurrentRequest = _fileManagerOpenRequestPending;
-		long supersededOperationToken = _fileManagerOpenOperationToken;
-		string supersededGlobalPath = _fileManagerOpenCurrentGlobalPath;
-		bool supersededOpenFolder = _fileManagerOpenCurrentOpenFolder;
-		long supersededCoalescedCount = _fileManagerOpenSameTargetCoalescedCount;
-
-		long operationToken = AdvanceFileManagerOpenOperationToken();
-		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
-
-		_fileManagerOpenRequestPending = true;
-		_fileManagerOpenCurrentGlobalPath = globalPath;
-		_fileManagerOpenCurrentOpenFolder = openFolder;
-		_fileManagerOpenSameTargetCoalescedCount = 0;
-
-		if (supersedesCurrentRequest)
-		{
-			DebugLogger.LogPersistentFileOnlyOperation(
-				"System Explorer file manager open request superseded",
-				$"SupersededOperationToken='{supersededOperationToken}', SupersededGlobalPath='{supersededGlobalPath}', SupersededOpenFolder='{supersededOpenFolder}', SupersededCoalescedCount='{supersededCoalescedCount}', CurrentOperationToken='{operationToken}', CurrentGlobalPath='{globalPath}', CurrentOpenFolder='{openFolder}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
-			);
-		}
-
-		DebugLogger.LogPersistentFileOnlyOperation(
-			"System Explorer file manager open request admitted",
-			$"OperationToken='{operationToken}', GlobalPath='{globalPath}', OpenFolder='{openFolder}', CoalescedCount='0', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}'"
-		);
-
-		try
-		{
-			CallDeferred(
-				nameof(ExecuteFileManagerOpenRequestDeferred),
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-		}
-		catch (System.Exception exception)
-		{
-			DebugLogger.LogPersistentFileOnlyOperation(
-				"System Explorer file manager open request scheduling failed",
-				$"OperationToken='{operationToken}', GlobalPath='{globalPath}', OpenFolder='{openFolder}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', ExceptionType='{exception.GetType().FullName}', ExceptionMessage='{exception.Message}'"
-			);
-			InvalidateFileManagerOpenRequest("DeferredSchedulingFailed");
-			throw;
-		}
-	}
-
-	private void ExecuteFileManagerOpenRequestDeferred(
-		long operationToken,
-		string scheduledManagedAssemblyGeneration,
-		string globalPath,
-		bool openFolder
-	)
-	{
-		if (
-			!string.Equals(
-				scheduledManagedAssemblyGeneration,
-				ManagedAssemblyGeneration,
-				System.StringComparison.Ordinal
-			)
-		)
-		{
-			LogFileManagerOpenRequestRejected(
-				"ManagedAssemblyGenerationChanged",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		if (operationToken <= 0)
-		{
-			LogFileManagerOpenRequestRejected(
-				"InvalidOperationToken",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		if (operationToken != _fileManagerOpenOperationToken)
-		{
-			LogFileManagerOpenRequestRejected(
-				"StaleOperationToken",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		if (!_fileManagerOpenRequestPending)
-		{
-			LogFileManagerOpenRequestRejected(
-				"RequestNoLongerPending",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		if (
-			!string.Equals(
-				globalPath,
-				_fileManagerOpenCurrentGlobalPath,
-				System.StringComparison.Ordinal
-			)
-		)
-		{
-			LogFileManagerOpenRequestRejected(
-				"GlobalPathAuthorityMismatch",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		if (openFolder != _fileManagerOpenCurrentOpenFolder)
-		{
-			LogFileManagerOpenRequestRejected(
-				"OpenFolderAuthorityMismatch",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		if (!GodotObject.IsInstanceValid(this))
-		{
-			LogFileManagerOpenRequestRejected(
-				"PluginInstanceInvalid",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		if (!IsInsideTree())
-		{
-			LogFileManagerOpenRequestRejected(
-				"PluginOutsideTree",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder
-			);
-			return;
-		}
-
-		long coalescedCount = _fileManagerOpenSameTargetCoalescedCount;
-
-		try
-		{
-			LogFileManagerOpenBoundary(
-				"Begin",
-				operationToken,
-				scheduledManagedAssemblyGeneration,
-				globalPath,
-				openFolder,
-				coalescedCount
-			);
-
-			var result = OS.ShellShowInFileManager(globalPath, openFolder);
-
-			DebugLogger.LogPersistentFileOnlyOperation(
-				FileManagerOpenOperationLabel,
-				$"Phase='Returned', OperationToken='{operationToken}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', GlobalPath='{globalPath}', OpenFolder='{openFolder}', CoalescedCount='{coalescedCount}', ReturnValue='{result}'"
-			);
-		}
-		catch (System.Exception exception)
-		{
-			DebugLogger.LogPersistentFileOnlyOperation(
-				FileManagerOpenOperationLabel,
-				$"Phase='Failed', OperationToken='{operationToken}', ManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration}', GlobalPath='{globalPath}', OpenFolder='{openFolder}', CoalescedCount='{coalescedCount}', ExceptionType='{exception.GetType().FullName}', ExceptionMessage='{exception.Message}'"
-			);
-			throw;
-		}
-		finally
-		{
-			ConsumeCurrentFileManagerOpenRequest(operationToken);
-		}
-	}
-
-	private void LogFileManagerOpenBoundary(
-		string phase,
-		long operationToken,
-		string managedAssemblyGeneration,
-		string globalPath,
-		bool openFolder,
-		long coalescedCount
-	)
-	{
-		DebugLogger.LogPersistentFileOnlyOperation(
-			FileManagerOpenOperationLabel,
-			$"Phase='{phase}', OperationToken='{operationToken}', ManagedAssemblyGeneration='{managedAssemblyGeneration}', GlobalPath='{globalPath}', OpenFolder='{openFolder}', CoalescedCount='{coalescedCount}'"
-		);
-	}
-
-	private void LogFileManagerOpenRequestRejected(
-		string reason,
-		long operationToken,
-		string scheduledManagedAssemblyGeneration,
-		string globalPath,
-		bool openFolder
-	)
-	{
-		DebugLogger.LogPersistentFileOnlyOperation(
-			"System Explorer file manager open request rejected",
-			$"Reason='{reason}', OperationToken='{operationToken}', CurrentOperationToken='{_fileManagerOpenOperationToken}', ScheduledManagedAssemblyGeneration='{scheduledManagedAssemblyGeneration ?? ""}', CurrentManagedAssemblyGeneration='{ManagedAssemblyGeneration}', GlobalPath='{globalPath ?? ""}', OpenFolder='{openFolder}', CurrentRequestPending='{_fileManagerOpenRequestPending}', CurrentGlobalPath='{_fileManagerOpenCurrentGlobalPath}', CurrentOpenFolder='{_fileManagerOpenCurrentOpenFolder}', CurrentCoalescedCount='{_fileManagerOpenSameTargetCoalescedCount}'"
-		);
-	}
-
-	private long AdvanceFileManagerOpenOperationToken()
-	{
-		unchecked
-		{
-			_fileManagerOpenOperationToken++;
-			if (_fileManagerOpenOperationToken <= 0)
-				_fileManagerOpenOperationToken = 1;
-		}
-
-		return _fileManagerOpenOperationToken;
-	}
-
-	private void ConsumeCurrentFileManagerOpenRequest(long operationToken)
-	{
-		if (operationToken != _fileManagerOpenOperationToken)
-			return;
-
-		_fileManagerOpenRequestPending = false;
-		_fileManagerOpenCurrentGlobalPath = "";
-		_fileManagerOpenCurrentOpenFolder = false;
-		_fileManagerOpenSameTargetCoalescedCount = 0;
-	}
-
-	private void InvalidateFileManagerOpenRequest(string reason)
-	{
-		bool hadCurrentRequest = _fileManagerOpenRequestPending;
-		long invalidatedOperationToken = _fileManagerOpenOperationToken;
-		string invalidatedGlobalPath = _fileManagerOpenCurrentGlobalPath;
-		bool invalidatedOpenFolder = _fileManagerOpenCurrentOpenFolder;
-		long invalidatedCoalescedCount = _fileManagerOpenSameTargetCoalescedCount;
-
-		_fileManagerOpenRequestPending = false;
-		_fileManagerOpenCurrentGlobalPath = "";
-		_fileManagerOpenCurrentOpenFolder = false;
-		_fileManagerOpenSameTargetCoalescedCount = 0;
-		long currentOperationToken = AdvanceFileManagerOpenOperationToken();
-
-		if (!hadCurrentRequest)
-			return;
-
-		DebugLogger.LogPersistentFileOnlyOperation(
-			"System Explorer file manager open request invalidated",
-			$"Reason='{reason ?? ""}', InvalidatedOperationToken='{invalidatedOperationToken}', CurrentOperationToken='{currentOperationToken}', GlobalPath='{invalidatedGlobalPath}', OpenFolder='{invalidatedOpenFolder}', CoalescedCount='{invalidatedCoalescedCount}', ManagedAssemblyGeneration='{ManagedAssemblyGeneration}'"
-		);
+		OS.ShellShowInFileManager(globalPath, true);
 	}
 
 	private bool TryGetFileManagerTargetFromMetadata(
@@ -483,7 +174,7 @@ public partial class SystemExplorerPlugin
 
 		if (string.IsNullOrWhiteSpace(entry))
 		{
-			GD.PushWarning(
+			PushSystemExplorerWarning(
 				$"System Explorer could not find a script or scene in folder: {folderPath}"
 			);
 			return false;

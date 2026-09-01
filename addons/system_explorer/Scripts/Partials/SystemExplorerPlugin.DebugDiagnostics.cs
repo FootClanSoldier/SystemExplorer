@@ -6,6 +6,22 @@ public partial class SystemExplorerPlugin
 {
 	#region Debug Diagnostics
 
+	private void PushSystemExplorerWarning(string message, bool mirrorToDebugLog = true)
+	{
+		if (mirrorToDebugLog)
+			DebugLogger.LogOperation("Warning", message ?? "");
+
+		GD.PushWarning(message);
+	}
+
+	private void PushSystemExplorerError(string message, bool mirrorToDebugLog = true)
+	{
+		if (mirrorToDebugLog)
+			DebugLogger.LogOperation("Error", message ?? "");
+
+		GD.PushError(message);
+	}
+
 	private void DebugLogStateSnapshot(string label)
 	{
 		if (!DebugState)

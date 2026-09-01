@@ -231,8 +231,15 @@ internal sealed class NamespaceRefactorPluginHost
 
 	internal void ApplyDeferredBufferRefresh(long requestToken)
 	{
-		if (!_pendingDeferredBufferRefreshRequests.TryGetValue(requestToken, out DeferredBufferRefreshRequest request))
+		if (
+			!_pendingDeferredBufferRefreshRequests.TryGetValue(
+				requestToken,
+				out DeferredBufferRefreshRequest request
+			)
+		)
+		{
 			return;
+		}
 
 		_pendingDeferredBufferRefreshRequests.Remove(requestToken);
 		NamespaceRefactorDiagnosticContext diagnosticContext = request.DiagnosticContext;
@@ -267,6 +274,7 @@ internal sealed class NamespaceRefactorPluginHost
 			$"{heading}\n\n{string.Join("\n", failedWritePaths)}";
 		_scheduleDeferredIncompleteWriteReportPresentation();
 	}
+
 
 	private void ShowConfiguredDialog(bool selectAllNewNamespace)
 	{

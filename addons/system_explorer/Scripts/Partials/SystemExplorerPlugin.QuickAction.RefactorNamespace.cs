@@ -3,7 +3,6 @@ using Godot;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using SystemExplorer.Autocomplete;
 using SystemExplorer.EditorIntegration.Operations;
 using SystemExplorer.QuickActions.RefactorNamespace;
 
@@ -233,60 +232,19 @@ public partial class SystemExplorerPlugin
 		if (!IsEditorOperationAccessValid(operation))
 			return;
 
-		if (
-			!TryBeginAutocompleteExternalMutation(
-				AutocompleteExternalMutationOrigin.NamespaceRefactor,
-				operation.OperationName,
-				out long externalMutationOperationToken
-			)
-		)
-		{
-			throw new InvalidOperationException(
-				$"{operation.OperationName} could not acquire autocomplete ExternalMutationLease authority."
-			);
-		}
+		SceneTree tree = GetTree();
 
-		try
-		{
-			LogNamespaceRefactorForegroundBoundary(
-				"BeforeProcessFrameAwait",
-				externalMutationOperationToken
-			);
+		if (tree == null || !GodotObject.IsInstanceValid(tree))
+			return;
 
-			SceneTree tree = GetTree();
+		await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
 
-			if (tree == null || !GodotObject.IsInstanceValid(tree))
-				return;
+		operation.CancellationToken.ThrowIfCancellationRequested();
 
-			await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
+		if (!IsEditorOperationAccessValid(operation))
+			return;
 
-			LogNamespaceRefactorForegroundBoundary(
-				"AfterProcessFrameAwait",
-				externalMutationOperationToken
-			);
-
-			operation.CancellationToken.ThrowIfCancellationRequested();
-
-			if (!IsEditorOperationAccessValid(operation))
-				return;
-
-			operationBody();
-		}
-		finally
-		{
-			ScheduleAutocompleteExternalMutationRelease(externalMutationOperationToken);
-		}
-	}
-
-	private void LogNamespaceRefactorForegroundBoundary(
-		string phase,
-		long externalMutationOperationToken
-	)
-	{
-		DebugLogger.LogPersistentFileOnlyOperation(
-			"Namespace Refactor foreground boundary",
-			$"Phase='{phase}', ExternalMutationActive='{IsAutocompleteExternalMutationActive}', OperationToken='{externalMutationOperationToken}', MutationTransactionId='{_autocompleteExternalMutationLease?.MutationTransactionId ?? 0}', Origin='{_autocompleteExternalMutationOrigin}'"
-		);
+		operationBody();
 	}
 
 	private void ScheduleNamespaceRefactorIncompleteWriteReportPresentationDeferred()
@@ -531,7 +489,7 @@ public partial class SystemExplorerPlugin
 			(entry, path) => OpenMissingScriptDialog(entry, path),
 			DebugLogger.Log,
 			() => DebugLogger.IsEnabled,
-			message => GD.PushWarning(message),
+			message => PushSystemExplorerWarning(message),
 			(operation, details) => DebugLogger.LogOperation(operation, details),
 			StartNamespaceRefactorForegroundOperation,
 			BeginBatchScriptEditorContextPreservation,
@@ -556,10 +514,13 @@ public partial class SystemExplorerPlugin
 		if (invalidComponents.Count > 0)
 		{
 			DebugLogger.LogOperation(
-				"Refactor Namespace host recovery failed: invalid UI",
+				"Warning: Refactor Namespace host recovery failed: invalid UI",
 				string.Join(", ", invalidComponents)
 			);
-			GD.PushWarning(NamespaceRefactorIntegrationWarning);
+			PushSystemExplorerWarning(
+				NamespaceRefactorIntegrationWarning,
+				mirrorToDebugLog: false
+			);
 			return false;
 		}
 
@@ -598,10 +559,13 @@ public partial class SystemExplorerPlugin
 		{
 			_namespaceRefactorHost = null;
 			DebugLogger.LogOperation(
-				"Refactor Namespace host recovery failed: composition",
+				"Warning: Refactor Namespace host recovery failed: composition",
 				exception.ToString()
 			);
-			GD.PushWarning(NamespaceRefactorIntegrationWarning);
+			PushSystemExplorerWarning(
+				NamespaceRefactorIntegrationWarning,
+				mirrorToDebugLog: false
+			);
 			return false;
 		}
 	}

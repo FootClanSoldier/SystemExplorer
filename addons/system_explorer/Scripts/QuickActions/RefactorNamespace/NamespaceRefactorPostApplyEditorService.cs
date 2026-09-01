@@ -62,196 +62,209 @@ internal sealed class NamespaceRefactorPostApplyEditorService
 		NamespaceRefactorDiagnosticContext diagnosticContext
 	)
 	{
-		diagnosticContext?.Log(
-			"DeferredSync",
-			() =>
-				$"Deferred refresh consumption started; CallbackOperationId='{diagnosticContext.OperationId}'; StateOwnerOperationId='{_deferredDebugOperationId}'; StoredOriginalTextCount={_deferredOriginalTextsByPath.Count}; Payload='{scriptPathPayload ?? ""}'."
+		Dictionary<string, string> deferredStateOwner = _deferredOriginalTextsByPath;
+		Dictionary<string, string> deferredOriginalTextsByPath = new(
+			deferredStateOwner,
+			StringComparer.OrdinalIgnoreCase
 		);
+		string deferredDebugOperationId = _deferredDebugOperationId;
 
-		if (
-			diagnosticContext?.IsEnabled == true
-			&& !string.IsNullOrWhiteSpace(_deferredDebugOperationId)
-			&& !string.Equals(
-				_deferredDebugOperationId,
-				diagnosticContext.OperationId,
-				StringComparison.Ordinal
-			)
-		)
+		try
 		{
-			diagnosticContext.Log(
+			diagnosticContext?.Log(
 				"DeferredSync",
-				() => $"DeferredStateOperationMismatch; CallbackOperationId='{diagnosticContext.OperationId}'; StateOwnerOperationId='{_deferredDebugOperationId}'."
+				() =>
+					$"Deferred refresh consumption started; CallbackOperationId='{diagnosticContext.OperationId}'; StateOwnerOperationId='{deferredDebugOperationId}'; StoredOriginalTextCount={deferredOriginalTextsByPath.Count}; Payload='{scriptPathPayload ?? ""}'."
 			);
-		}
 
-		IReadOnlyList<string> payloadPaths = NamespaceScriptPathPayloadCodec.Parse(scriptPathPayload);
-		Dictionary<string, string> updatedTextsByPath = new(StringComparer.OrdinalIgnoreCase);
-		List<string> successfullyReadPaths = diagnosticContext?.IsEnabled == true
-			? new List<string>()
-			: null;
-		List<string> missingPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
-		List<string> failedPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
-
-		foreach (string payloadPath in payloadPaths)
-		{
-			ScriptTextFileReadResult readResult;
-
-			try
+			if (
+				diagnosticContext?.IsEnabled == true
+				&& !string.IsNullOrWhiteSpace(deferredDebugOperationId)
+				&& !string.Equals(
+					deferredDebugOperationId,
+					diagnosticContext.OperationId,
+					StringComparison.Ordinal
+				)
+			)
 			{
-				readResult = _readText(payloadPath);
-			}
-			catch (Exception exception)
-			{
-				readResult = ScriptTextFileReadResult.Failed(
-					ScriptTextFileReadStatus.ReadFailed,
-					exception.Message
+				diagnosticContext.Log(
+					"DeferredSync",
+					() => $"DeferredStateOperationMismatch; CallbackOperationId='{diagnosticContext.OperationId}'; StateOwnerOperationId='{deferredDebugOperationId}'."
 				);
 			}
 
-			if (!readResult.IsSuccess)
+			IReadOnlyList<string> payloadPaths = NamespaceScriptPathPayloadCodec.Parse(scriptPathPayload);
+			Dictionary<string, string> updatedTextsByPath = new(StringComparer.OrdinalIgnoreCase);
+			List<string> successfullyReadPaths = diagnosticContext?.IsEnabled == true
+				? new List<string>()
+				: null;
+			List<string> missingPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
+			List<string> failedPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
+
+			foreach (string payloadPath in payloadPaths)
 			{
-				if (readResult.Status == ScriptTextFileReadStatus.MissingFile)
-					missingPaths?.Add(payloadPath);
-				else
+				ScriptTextFileReadResult readResult;
+
+				try
+				{
+					readResult = _readText(payloadPath);
+				}
+				catch (Exception exception)
+				{
+					readResult = ScriptTextFileReadResult.Failed(
+						ScriptTextFileReadStatus.ReadFailed,
+						exception.Message
+					);
+				}
+
+				if (!readResult.IsSuccess)
+				{
+					if (readResult.Status == ScriptTextFileReadStatus.MissingFile)
+						missingPaths?.Add(payloadPath);
+					else
+						failedPaths?.Add(payloadPath);
+
+					diagnosticContext?.Log(
+						"DeferredSync",
+						() =>
+							$"Deferred read-back skipped; Path='{payloadPath ?? ""}'; Status={readResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(readResult.FailureDetail)}'."
+					);
+					continue;
+				}
+
+				string normalizedPath;
+
+				try
+				{
+					normalizedPath = ScriptPathUtility.Normalize(payloadPath);
+				}
+				catch (Exception exception)
+				{
 					failedPaths?.Add(payloadPath);
+					diagnosticContext?.Log(
+						"DeferredSync",
+						() =>
+							$"Deferred read-back path normalization failed; Path='{payloadPath ?? ""}'; Status={ScriptTextFileReadStatus.InvalidPath}; FailureDetail='{NormalizeDiagnosticDetail(exception.Message)}'."
+					);
+					continue;
+				}
 
-				diagnosticContext?.Log(
-					"DeferredSync",
-					() =>
-						$"Deferred read-back skipped; Path='{payloadPath ?? ""}'; Status={readResult.Status}; FailureDetail='{NormalizeDiagnosticDetail(readResult.FailureDetail)}'."
-				);
-				continue;
+				if (string.IsNullOrWhiteSpace(normalizedPath))
+				{
+					failedPaths?.Add(payloadPath);
+					diagnosticContext?.Log(
+						"DeferredSync",
+						() =>
+							$"Deferred read-back path normalization produced an empty path; Path='{payloadPath ?? ""}'; Status={ScriptTextFileReadStatus.InvalidPath}; FailureDetail=''."
+					);
+					continue;
+				}
+
+				updatedTextsByPath[normalizedPath] = readResult.Text;
+				successfullyReadPaths?.Add(normalizedPath);
 			}
 
-			string normalizedPath;
-
-			try
-			{
-				normalizedPath = ScriptPathUtility.Normalize(payloadPath);
-			}
-			catch (Exception exception)
-			{
-				failedPaths?.Add(payloadPath);
-				diagnosticContext?.Log(
-					"DeferredSync",
-					() =>
-						$"Deferred read-back path normalization failed; Path='{payloadPath ?? ""}'; Status={ScriptTextFileReadStatus.InvalidPath}; FailureDetail='{NormalizeDiagnosticDetail(exception.Message)}'."
-				);
-				continue;
-			}
-
-			if (string.IsNullOrWhiteSpace(normalizedPath))
-			{
-				failedPaths?.Add(payloadPath);
-				diagnosticContext?.Log(
-					"DeferredSync",
-					() =>
-						$"Deferred read-back path normalization produced an empty path; Path='{payloadPath ?? ""}'; Status={ScriptTextFileReadStatus.InvalidPath}; FailureDetail=''."
-				);
-				continue;
-			}
-
-			updatedTextsByPath[normalizedPath] = readResult.Text;
-			successfullyReadPaths?.Add(normalizedPath);
-		}
-
-		diagnosticContext?.Log(
-			"DeferredSync",
-			() =>
-				$"Deferred payload files inspected; PayloadPathCount={payloadPaths.Count}; SuccessfulReadCount={successfullyReadPaths?.Count ?? updatedTextsByPath.Count}; MissingCount={missingPaths?.Count ?? 0}; FailedCount={failedPaths?.Count ?? 0}; SuccessfulReadPaths={diagnosticContext.FormatPaths(successfullyReadPaths)}; MissingPaths={diagnosticContext.FormatPaths(missingPaths)}; FailedPaths={diagnosticContext.FormatPaths(failedPaths)}; UpdatedTextCount={updatedTextsByPath.Count}."
-		);
-
-		if (diagnosticContext?.IsEnabled == true)
-		{
-			HashSet<string> payloadPathSet = BuildNormalizedPathSetForDiagnostics(payloadPaths);
-			HashSet<string> storedPathSet = _deferredOriginalTextsByPath.Keys.ToHashSet(
-				StringComparer.OrdinalIgnoreCase
+			diagnosticContext?.Log(
+				"DeferredSync",
+				() =>
+					$"Deferred payload files inspected; PayloadPathCount={payloadPaths.Count}; SuccessfulReadCount={successfullyReadPaths?.Count ?? updatedTextsByPath.Count}; MissingCount={missingPaths?.Count ?? 0}; FailedCount={failedPaths?.Count ?? 0}; SuccessfulReadPaths={diagnosticContext.FormatPaths(successfullyReadPaths)}; MissingPaths={diagnosticContext.FormatPaths(missingPaths)}; FailedPaths={diagnosticContext.FormatPaths(failedPaths)}; UpdatedTextCount={updatedTextsByPath.Count}."
 			);
-			if (!payloadPathSet.SetEquals(storedPathSet))
+
+			if (diagnosticContext?.IsEnabled == true)
+			{
+				HashSet<string> payloadPathSet = BuildNormalizedPathSetForDiagnostics(payloadPaths);
+				HashSet<string> storedPathSet = deferredOriginalTextsByPath.Keys.ToHashSet(
+					StringComparer.OrdinalIgnoreCase
+				);
+				if (!payloadPathSet.SetEquals(storedPathSet))
+				{
+					diagnosticContext.Log(
+						"DeferredSync",
+						() =>
+							$"Deferred state path mismatch; PayloadCount={payloadPathSet.Count}; StoredCount={storedPathSet.Count}; PayloadOnly={diagnosticContext.FormatPaths(payloadPathSet.Except(storedPathSet, StringComparer.OrdinalIgnoreCase))}; StoredOnly={diagnosticContext.FormatPaths(storedPathSet.Except(payloadPathSet, StringComparer.OrdinalIgnoreCase))}."
+					);
+				}
+			}
+
+			if (updatedTextsByPath.Count == 0)
+			{
+				diagnosticContext?.Log(
+					"DeferredSync",
+					() => $"Deferred refresh ended without updated texts; StoredStateMissing={deferredOriginalTextsByPath.Count == 0}."
+				);
+				return;
+			}
+
+			Dictionary<string, string> originalTextsByPath = new(StringComparer.OrdinalIgnoreCase);
+			List<string> originalTextPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
+			List<string> fallbackToUpdatedTextPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
+
+			foreach (string scriptPath in updatedTextsByPath.Keys)
+			{
+				if (deferredOriginalTextsByPath.TryGetValue(scriptPath, out string originalText))
+				{
+					originalTextsByPath[scriptPath] = originalText;
+					originalTextPaths?.Add(scriptPath);
+				}
+				else
+				{
+					originalTextsByPath[scriptPath] = updatedTextsByPath[scriptPath];
+					fallbackToUpdatedTextPaths?.Add(scriptPath);
+				}
+			}
+
+			diagnosticContext?.Log(
+				"DeferredSync",
+				() =>
+					$"Deferred verification texts built; OriginalTextCount={originalTextsByPath.Count}; UpdatedTextCount={updatedTextsByPath.Count}; OriginalStatePathCount={originalTextPaths?.Count ?? 0}; FallbackPathCount={fallbackToUpdatedTextPaths?.Count ?? 0}; OriginalStatePaths={diagnosticContext.FormatPaths(originalTextPaths)}; FallbackToUpdatedTextPaths={diagnosticContext.FormatPaths(fallbackToUpdatedTextPaths)}."
+			);
+
+			ScriptEditorBufferGroupLookupResult lookupResult =
+				_bufferLocator.LocateOpenScriptEditorGroupsByScriptTextsWithoutActivation(
+					scriptEditor,
+					originalTextsByPath,
+					updatedTextsByPath,
+					updatedTextsByPath.Keys,
+					diagnosticContext?.BufferDiagnostics
+				);
+
+			diagnosticContext?.Log(
+				"DeferredSync",
+				() =>
+					$"Deferred lookup completed; Success={lookupResult.Success}; Failure={lookupResult.Failure}; FailurePath='{lookupResult.FailurePath}'; GroupCount={lookupResult.OpenEditorGroupsByPath.Count}; UnsafePaths={diagnosticContext.FormatPaths(lookupResult.UnsafeOpenScriptPaths)}; AmbiguousPaths={diagnosticContext.FormatPaths(lookupResult.AmbiguousOpenScriptPaths)}; UnmatchedRequiredPaths={diagnosticContext.FormatPaths(lookupResult.UnmatchedRequiredPaths)}; ApplyPaths={diagnosticContext.FormatPaths(lookupResult.OpenEditorGroupsByPath.Keys)}."
+			);
+			if (
+				diagnosticContext?.IsEnabled == true
+				&& (
+					!lookupResult.Success
+					|| lookupResult.UnsafeOpenScriptPaths.Count > 0
+					|| lookupResult.AmbiguousOpenScriptPaths.Count > 0
+					|| lookupResult.UnmatchedRequiredPaths.Count > 0
+				)
+			)
 			{
 				diagnosticContext.Log(
 					"DeferredSync",
 					() =>
-						$"Deferred state path mismatch; PayloadCount={payloadPathSet.Count}; StoredCount={storedPathSet.Count}; PayloadOnly={diagnosticContext.FormatPaths(payloadPathSet.Except(storedPathSet, StringComparer.OrdinalIgnoreCase))}; StoredOnly={diagnosticContext.FormatPaths(storedPathSet.Except(payloadPathSet, StringComparer.OrdinalIgnoreCase))}."
+						$"Post-commit deferred coherence anomaly; Success={lookupResult.Success}; Failure={lookupResult.Failure}; FailurePath='{lookupResult.FailurePath}'; UnsafePaths={diagnosticContext.FormatPaths(lookupResult.UnsafeOpenScriptPaths)}; AmbiguousPaths={diagnosticContext.FormatPaths(lookupResult.AmbiguousOpenScriptPaths)}; UnmatchedRequiredPaths={diagnosticContext.FormatPaths(lookupResult.UnmatchedRequiredPaths)}; CompleteSafeApplyPaths={diagnosticContext.FormatPaths(lookupResult.OpenEditorGroupsByPath.Keys)}. Disk changes are already committed; no representative editor was selected for incomplete groups."
 				);
 			}
-		}
 
-		if (updatedTextsByPath.Count == 0)
-		{
-			diagnosticContext?.Log(
-				"DeferredSync",
-				() => $"Deferred refresh ended without updated texts; StoredStateMissing={_deferredOriginalTextsByPath.Count == 0}."
-			);
-			_deferredOriginalTextsByPath.Clear();
-			_deferredDebugOperationId = "";
-			return;
-		}
-
-		Dictionary<string, string> originalTextsByPath = new(StringComparer.OrdinalIgnoreCase);
-		List<string> originalTextPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
-		List<string> fallbackToUpdatedTextPaths = diagnosticContext?.IsEnabled == true ? new List<string>() : null;
-
-		foreach (string scriptPath in updatedTextsByPath.Keys)
-		{
-			if (_deferredOriginalTextsByPath.TryGetValue(scriptPath, out string originalText))
-			{
-				originalTextsByPath[scriptPath] = originalText;
-				originalTextPaths?.Add(scriptPath);
-			}
-			else
-			{
-				originalTextsByPath[scriptPath] = updatedTextsByPath[scriptPath];
-				fallbackToUpdatedTextPaths?.Add(scriptPath);
-			}
-		}
-
-		diagnosticContext?.Log(
-			"DeferredSync",
-			() =>
-				$"Deferred verification texts built; OriginalTextCount={originalTextsByPath.Count}; UpdatedTextCount={updatedTextsByPath.Count}; OriginalStatePathCount={originalTextPaths?.Count ?? 0}; FallbackPathCount={fallbackToUpdatedTextPaths?.Count ?? 0}; OriginalStatePaths={diagnosticContext.FormatPaths(originalTextPaths)}; FallbackToUpdatedTextPaths={diagnosticContext.FormatPaths(fallbackToUpdatedTextPaths)}."
-		);
-
-		_deferredOriginalTextsByPath.Clear();
-		_deferredDebugOperationId = "";
-
-		ScriptEditorBufferGroupLookupResult lookupResult =
-			_bufferLocator.LocateOpenScriptEditorGroupsByScriptTextsWithoutActivation(
-				scriptEditor,
-				originalTextsByPath,
+			_bufferBatchService.ApplyCommittedTexts(
+				lookupResult.OpenEditorGroupsByPath,
 				updatedTextsByPath,
-				null,
 				diagnosticContext?.BufferDiagnostics
 			);
-
-		diagnosticContext?.Log(
-			"DeferredSync",
-			() =>
-				$"Deferred lookup completed; Success={lookupResult.Success}; Failure={lookupResult.Failure}; FailurePath='{lookupResult.FailurePath}'; GroupCount={lookupResult.OpenEditorGroupsByPath.Count}; UnsafePaths={diagnosticContext.FormatPaths(lookupResult.UnsafeOpenScriptPaths)}; AmbiguousPaths={diagnosticContext.FormatPaths(lookupResult.AmbiguousOpenScriptPaths)}; UnmatchedRequiredPaths={diagnosticContext.FormatPaths(lookupResult.UnmatchedRequiredPaths)}; ApplyPaths={diagnosticContext.FormatPaths(lookupResult.OpenEditorGroupsByPath.Keys)}."
-		);
-		if (
-			diagnosticContext?.IsEnabled == true
-			&& (
-				!lookupResult.Success
-				|| lookupResult.UnsafeOpenScriptPaths.Count > 0
-				|| lookupResult.AmbiguousOpenScriptPaths.Count > 0
-				|| lookupResult.UnmatchedRequiredPaths.Count > 0
-			)
-		)
+			diagnosticContext?.Log("DeferredSync", "Deferred ApplyCommittedTexts completed.");
+		}
+		finally
 		{
-			diagnosticContext.Log(
-				"DeferredSync",
-				() =>
-					$"Deferred lookup anomaly observed without behavior change; Success={lookupResult.Success}; Failure={lookupResult.Failure}; FailurePath='{lookupResult.FailurePath}'; UnsafePaths={diagnosticContext.FormatPaths(lookupResult.UnsafeOpenScriptPaths)}; AmbiguousPaths={diagnosticContext.FormatPaths(lookupResult.AmbiguousOpenScriptPaths)}; UnmatchedRequiredPaths={diagnosticContext.FormatPaths(lookupResult.UnmatchedRequiredPaths)}."
+			ClearDeferredStateIfOwned(
+				deferredStateOwner,
+				deferredDebugOperationId,
+				diagnosticContext
 			);
 		}
-
-		_bufferBatchService.ApplyCommittedTexts(
-			lookupResult.OpenEditorGroupsByPath,
-			updatedTextsByPath,
-			diagnosticContext?.BufferDiagnostics
-		);
-		diagnosticContext?.Log("DeferredSync", "Deferred ApplyCommittedTexts completed.");
 	}
 
 	internal void RestoreTargetScriptEditor(
@@ -283,6 +296,32 @@ internal sealed class NamespaceRefactorPostApplyEditorService
 
 		editorInterface.EditScript(script);
 		debugLog?.Invoke($"Refactor Namespace restored target script editor '{normalizedPath}'.");
+	}
+
+	private void ClearDeferredStateIfOwned(
+		Dictionary<string, string> operationState,
+		string operationId,
+		NamespaceRefactorDiagnosticContext diagnosticContext
+	)
+	{
+		if (!ReferenceEquals(_deferredOriginalTextsByPath, operationState))
+		{
+			diagnosticContext?.Log(
+				"DeferredSync",
+				() =>
+					$"Deferred state clear skipped because ownership changed; CompletedStateOwnerOperationId='{operationId ?? ""}'; CurrentStateOwnerOperationId='{_deferredDebugOperationId}'."
+			);
+			return;
+		}
+
+		_deferredOriginalTextsByPath = new Dictionary<string, string>(
+			StringComparer.OrdinalIgnoreCase
+		);
+		_deferredDebugOperationId = "";
+		diagnosticContext?.Log(
+			"DeferredSync",
+			() => $"Deferred state cleared; CompletedStateOwnerOperationId='{operationId ?? ""}'."
+		);
 	}
 
 	private static HashSet<string> BuildNormalizedPathSetForDiagnostics(

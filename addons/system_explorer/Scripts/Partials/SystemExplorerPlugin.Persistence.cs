@@ -1901,9 +1901,15 @@ public partial class SystemExplorerPlugin
 		if (!diskReadResult.IsValid)
 		{
 			DebugLogger.LogOperation(
-				"Recovery From Disk failed: systems file was unusable",
-				$"Status={diskReadResult.Status}, Detail='{diskReadResult.FailureDetail}'"
+				"Error: Recovery From Disk failed: systems file was unusable",
+				$"Reason='{reason}', Required='{requiredSystemName}', Status={diskReadResult.Status}, Detail='{diskReadResult.FailureDetail}'"
 			);
+
+			if (DebugState)
+				PushSystemExplorerError(
+					$"[SystemExplorer] Recovery failed. Reason='{reason}', Required='{requiredSystemName}', Status='{diskReadResult.Status}'.",
+					mirrorToDebugLog: false
+				);
 
 			return false;
 		}
@@ -1916,9 +1922,15 @@ public partial class SystemExplorerPlugin
 		)
 		{
 			DebugLogger.LogOperation(
-				"Recovery From Disk failed: required system missing on disk",
-				requiredSystemName
+				"Error: Recovery From Disk failed: required system missing on disk",
+				$"Reason='{reason}', Required='{requiredSystemName}'"
 			);
+
+			if (DebugState)
+				PushSystemExplorerError(
+					$"[SystemExplorer] Recovery failed. Required system '{requiredSystemName}' was not found on disk. Reason='{reason}'.",
+					mirrorToDebugLog: false
+				);
 
 			return false;
 		}
@@ -1930,16 +1942,20 @@ public partial class SystemExplorerPlugin
 
 		NormalizeAllSystemEntries();
 
-		if (_systems.Count == 0)
+		string recoveryCompletionDetail = _systems.Count == 0
+			? "Recovered a valid empty systems state."
+			: $"{_systems.Count} systems";
+		DebugLogger.LogOperation(
+			"Warning: Recovery From Disk Completed",
+			$"{recoveryCompletionDetail} Reason='{reason}', Required='{requiredSystemName}'"
+		);
+
+		if (DebugState)
 		{
-			DebugLogger.LogOperation(
-				"Recovery From Disk Completed",
-				"Recovered a valid empty systems state."
+			PushSystemExplorerWarning(
+				$"[SystemExplorer] Recovery successful. Reason='{reason}', Required='{requiredSystemName}', Recovered Systems={_systems.Count}",
+				mirrorToDebugLog: false
 			);
-		}
-		else
-		{
-			DebugLogger.LogOperation("Recovery From Disk Completed", $"{_systems.Count} systems");
 		}
 
 		DebugLogStateSnapshot("Recovered From Disk");

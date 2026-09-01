@@ -190,6 +190,15 @@ public partial class SystemExplorerPlugin
 		CreateTreeShortcutConflictDialog();
 
 
+		_codeServiceInstallResultDialog = new AcceptDialog
+		{
+			Title = "C# Code Intelligence Installation",
+			OkButtonText = "OK",
+			MinSize = new Vector2I(520, 180),
+			DialogAutowrap = true,
+			Unresizable = true,
+		};
+
 		_csharpierInstallResultDialog = new AcceptDialog
 		{
 			Title = "Beautify Script",
@@ -238,6 +247,7 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_createScriptDialog);
 		_dock.AddChild(_namespaceRefactorDialog);
 		_dock.AddChild(_namespaceRefactorIncompleteWriteReportDialog);
+		_dock.AddChild(_codeServiceInstallResultDialog);
 		_dock.AddChild(_csharpierInstallResultDialog);
 		_dock.AddChild(_csharpierNotInstalledDialog);
 
@@ -703,6 +713,7 @@ public partial class SystemExplorerPlugin
 		_namespaceRefactorExistingNamespaceOption = null;
 		_namespaceRefactorExistingNamespaceDropdown = null;
 		_namespaceRefactorWithoutNamespaceOption = null;
+		_codeServiceInstallResultDialog = null;
 		_csharpierInstallResultDialog = null;
 		_csharpierNotInstalledDialog = null;
 		_createScriptDialog = null;

@@ -231,7 +231,7 @@ public partial class SystemExplorerPlugin
 
 		if (!recovered)
 		{
-			GD.PushWarning(
+			PushSystemExplorerWarning(
                 "System Explorer could not filter items because the in-memory system list was empty and recovery from disk failed."
 			);
 		}
