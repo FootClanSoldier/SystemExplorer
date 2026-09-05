@@ -24,6 +24,13 @@ public partial class SystemExplorerPlugin
 	private int _codeServiceDocumentBindingRetryAttempts;
 	private int _codeServiceDocumentQuietRetryAttempts;
 	private bool _codeServiceDocumentActiveRecaptureRequired;
+	private string _codeServiceDocumentActivationCandidatePath = "";
+	private bool _codeServiceDocumentActivationCandidateEdited;
+	private string _codeServiceDocumentEstablishedActivePath = "";
+	private bool _codeServiceDocumentActivationBoundaryPending;
+	private bool _codeServiceDocumentCatchUpDeferredQueued;
+	private bool _codeServiceDocumentQuietBoundaryPending;
+	private bool _codeServiceDocumentFlightRetirementPending;
 
 	private bool _codeServiceDocumentHasPendingWorkspaceReadyIntent;
 	private string _codeServiceDocumentPendingWorkspaceSessionId = "";
@@ -70,7 +77,7 @@ public partial class SystemExplorerPlugin
 		if (bindingCurrent)
 		{
 			_codeServiceDocumentBindingRetryAttempts = 0;
-			TryTrackCurrentCodeServiceDocument();
+			RefreshCodeServiceDocumentActivationCandidateFromCurrentBinding(_codeServiceDocumentEditorBinding);
 			TryConsumePendingCodeServiceDocumentWorkspaceReadyIntent();
 		}
 		else
@@ -255,8 +262,24 @@ public partial class SystemExplorerPlugin
 		if (!coordinator.TryRecordTextChanged(documentPath, out _, out _))
 			return;
 
-		_codeServiceDocumentQuietRetryAttempts = 0;
-		RestartCodeServiceDocumentQuietTimer();
+		if (_codeServiceDocumentActivationBoundaryPending
+			&& CodeServiceDocumentPath.Equals(documentPath, _codeServiceDocumentActivationCandidatePath))
+		{
+			_codeServiceDocumentActivationCandidateEdited = true;
+			EnsureCodeServiceDocumentQuietTimerArmed();
+			return;
+		}
+
+		if (CodeServiceDocumentPath.Equals(documentPath, _codeServiceDocumentEstablishedActivePath))
+		{
+			RequestCodeServiceDocumentCatchUp(documentPath);
+			return;
+		}
+
+		// A TextChanged from a bound C# editor whose activation signal was missed must not
+		// bypass pre-admission stability. Record the real edit above, then establish that
+		// exact bound path as the single activation candidate without capturing source text.
+		BeginCodeServiceDocumentActivationCandidate(documentPath, candidateEdited: true);
 	}
 
 	private void OnCodeServiceDocumentScriptClose(Script script)
@@ -315,10 +338,10 @@ public partial class SystemExplorerPlugin
 		}
 
 		TryRefreshCodeServiceOpenDocumentInventory("Script Close");
-		// Do not track/capture the newly active editor merely because navigation occurred.
-		// A stable quiet boundary will track it, while TextChanged tracks it immediately if edited.
-		_codeServiceDocumentQuietRetryAttempts = 0;
-		RestartCodeServiceDocumentQuietTimer();
+		RefreshCodeServiceDocumentActivationCandidateFromCurrentBinding(binding);
+		// Closing any C# tab changes the Service open inventory. Let a newly selected script's
+		// activation deadline remain authoritative instead of resetting it from close traffic.
+		RequestCodeServiceDocumentQuietBoundary();
 	}
 
 	private void OnCodeServiceDocumentScriptChanged(Script script)
@@ -329,7 +352,7 @@ public partial class SystemExplorerPlugin
 		if (coordinator == null || binding == null)
 			return;
 
-		CaptureOutgoingCodeServiceDocumentIfRequired(coordinator, binding);
+		CaptureOutgoingCodeServiceDocumentBeforeImplicitRebindIfRequired(coordinator, binding);
 
 		try
 		{
@@ -344,11 +367,9 @@ public partial class SystemExplorerPlugin
 		}
 
 		TryRefreshCodeServiceOpenDocumentInventory("Script Changed");
-		// Rapid clean navigation must not manufacture full snapshots for every transiently
-		// active editor. The quiet boundary tracks/captures the stable active document; an
-		// actual edit tracks immediately through TryRecordTextChanged.
-		_codeServiceDocumentQuietRetryAttempts = 0;
-		RestartCodeServiceDocumentQuietTimer();
+		// Replace the single cheap activation candidate. Only an actual identity change
+		// restarts the 200 ms activation deadline; no full snapshot is created here.
+		RefreshCodeServiceDocumentActivationCandidateFromCurrentBinding(binding);
 	}
 
 	private void CaptureOutgoingCodeServiceDocumentBeforeImplicitRebindIfRequired(
@@ -371,7 +392,16 @@ public partial class SystemExplorerPlugin
 		CodeServiceDocumentEditorBinding binding
 	)
 	{
-		if (!binding.TryGetBoundDocument(out _, out string documentPath, out CodeEdit codeEdit)
+		if (!binding.TryGetBoundDocument(out _, out string documentPath, out CodeEdit codeEdit))
+			return;
+
+		bool establishedOutgoing =
+			CodeServiceDocumentPath.Equals(documentPath, _codeServiceDocumentEstablishedActivePath);
+		bool editedCandidateOutgoing =
+			_codeServiceDocumentActivationBoundaryPending
+			&& _codeServiceDocumentActivationCandidateEdited
+			&& CodeServiceDocumentPath.Equals(documentPath, _codeServiceDocumentActivationCandidatePath);
+		if ((!establishedOutgoing && !editedCandidateOutgoing)
 			|| !coordinator.ShouldCaptureOnBoundary(documentPath))
 		{
 			return;
@@ -393,6 +423,8 @@ public partial class SystemExplorerPlugin
 
 		if (coordinator.TryCaptureSnapshot(documentPath, text, out CodeServiceDocumentSnapshot snapshot, out string detail))
 		{
+			if (editedCandidateOutgoing)
+				_codeServiceDocumentActivationCandidateEdited = false;
 			TryLogEditorOperation(
 				"CodeService Document Snapshot Captured",
 				$"DocumentPath='{snapshot.DocumentPath}', ClientGeneration='{coordinator.ClientGeneration}', EpochId='{coordinator.EpochId}', ClientVersion='{snapshot.ClientVersion}', Utf8Bytes='{snapshot.Utf8Bytes}', Boundary='Outgoing'"
@@ -410,6 +442,7 @@ public partial class SystemExplorerPlugin
 	private void OnCodeServiceDocumentQuietTimerTimeout()
 	{
 		_codeServiceDocumentBindingRetryQueued = false;
+		_codeServiceDocumentQuietBoundaryPending = false;
 		CodeServiceDocumentSynchronizationCoordinator coordinator =
 			_codeServiceDocumentSynchronizationCoordinator;
 		CodeServiceDocumentEditorBinding binding = _codeServiceDocumentEditorBinding;
@@ -440,49 +473,96 @@ public partial class SystemExplorerPlugin
 
 		_codeServiceDocumentBindingRetryAttempts = 0;
 		TryConsumePendingCodeServiceDocumentWorkspaceReadyIntent();
+		if (_codeServiceDocumentQuietBoundaryPending)
+		{
+			EnsureCodeServiceDocumentQuietTimerArmed();
+			return;
+		}
 		if (!TryRefreshCodeServiceOpenDocumentInventory("Quiet Boundary"))
 			return;
 
-		string activeDocumentPath = "";
-		if (binding.TryGetCurrentDocument(out _, out string currentPath, out CodeEdit codeEdit))
-		{
-			activeDocumentPath = currentPath;
-			coordinator.TryEnsureTracked(currentPath, out _, out _);
-			if (_codeServiceDocumentActiveRecaptureRequired
-				|| coordinator.ShouldCaptureOnBoundary(currentPath))
-			{
-				string text;
-				try
-				{
-					text = codeEdit.Text;
-				}
-				catch (Exception exception)
-				{
-					TryLogEditorOperation(
-						"CodeService Document Snapshot Capture Failed",
-						$"DocumentPath='{currentPath}', Boundary='Quiet', Detail='{exception.Message}'"
-					);
-					return;
-				}
+		bool hasCurrentDocument =
+			binding.TryGetCurrentDocument(out _, out string currentPath, out CodeEdit codeEdit);
+		string currentIdentity = hasCurrentDocument ? currentPath : "";
+		bool admittedActivation = false;
 
-				if (!coordinator.TryCaptureSnapshot(currentPath, text, out CodeServiceDocumentSnapshot snapshot, out string captureDetail))
-				{
-					TryLogEditorOperation(
-						"CodeService Document Snapshot Capture Failed",
-						$"DocumentPath='{currentPath}', Boundary='Quiet', Detail='{captureDetail}'"
-					);
-					// Do not let one locally un-capturable active buffer prevent epoch reconciliation
-					// or replay of other authoritative cached documents. A new flight will never use
-					// an older capture for this path because planning requires captured==live version.
-				}
-				else
-				{
-					_codeServiceDocumentActiveRecaptureRequired = false;
-					TryLogEditorOperation(
-						"CodeService Document Snapshot Captured",
-						$"DocumentPath='{snapshot.DocumentPath}', ClientGeneration='{coordinator.ClientGeneration}', EpochId='{coordinator.EpochId}', ClientVersion='{snapshot.ClientVersion}', Utf8Bytes='{snapshot.Utf8Bytes}', Boundary='Quiet'"
-					);
-				}
+		if (_codeServiceDocumentActivationBoundaryPending)
+		{
+			if (!CodeServiceDocumentActivationIdentityEquals(
+				currentIdentity,
+				_codeServiceDocumentActivationCandidatePath
+			))
+			{
+				BeginCodeServiceDocumentActivationCandidate(
+					currentIdentity,
+					candidateEdited: false
+				);
+				return;
+			}
+
+			_codeServiceDocumentActivationBoundaryPending = false;
+			_codeServiceDocumentActivationCandidateEdited = false;
+			_codeServiceDocumentEstablishedActivePath = currentIdentity;
+			admittedActivation = true;
+		}
+		else if (!CodeServiceDocumentActivationIdentityEquals(
+			currentIdentity,
+			_codeServiceDocumentEstablishedActivePath
+		))
+		{
+			// A missed/recovery rebind is still navigation and cannot bypass the 200 ms gate.
+			BeginCodeServiceDocumentActivationCandidate(currentIdentity, candidateEdited: false);
+			return;
+		}
+
+		string activeDocumentPath = hasCurrentDocument ? currentPath : "";
+		if (hasCurrentDocument)
+			coordinator.TryEnsureTracked(currentPath, out _, out _);
+
+		// Do not manufacture a second full-text state while an actual document flight is
+		// still executing or its terminal result has not yet retired on the Godot thread.
+		// The retirement boundary will re-arm exactly one newest-state catch-up if needed.
+		if (coordinator.IsFlightActive || _codeServiceDocumentFlightRetirementPending)
+			return;
+
+		if (hasCurrentDocument
+			&& (_codeServiceDocumentActiveRecaptureRequired
+				|| coordinator.ShouldCaptureOnBoundary(currentPath)))
+		{
+			string boundary = admittedActivation
+				? "Activation"
+				: (_codeServiceDocumentActiveRecaptureRequired ? "Recovery" : "QuietRetry");
+			string text;
+			try
+			{
+				text = codeEdit.Text;
+			}
+			catch (Exception exception)
+			{
+				TryLogEditorOperation(
+					"CodeService Document Snapshot Capture Failed",
+					$"DocumentPath='{currentPath}', Boundary='{boundary}', Detail='{exception.Message}'"
+				);
+				return;
+			}
+
+			if (!coordinator.TryCaptureSnapshot(currentPath, text, out CodeServiceDocumentSnapshot snapshot, out string captureDetail))
+			{
+				TryLogEditorOperation(
+					"CodeService Document Snapshot Capture Failed",
+					$"DocumentPath='{currentPath}', Boundary='{boundary}', Detail='{captureDetail}'"
+				);
+				// Do not let one locally un-capturable active buffer prevent epoch reconciliation
+				// or replay of other authoritative cached documents. A new flight will never use
+				// an older capture for this path because planning requires captured==live version.
+			}
+			else
+			{
+				_codeServiceDocumentActiveRecaptureRequired = false;
+				TryLogEditorOperation(
+					"CodeService Document Snapshot Captured",
+					$"DocumentPath='{snapshot.DocumentPath}', ClientGeneration='{coordinator.ClientGeneration}', EpochId='{coordinator.EpochId}', ClientVersion='{snapshot.ClientVersion}', Utf8Bytes='{snapshot.Utf8Bytes}', Boundary='{boundary}'"
+				);
 			}
 		}
 
@@ -569,6 +649,224 @@ public partial class SystemExplorerPlugin
 		return true;
 	}
 
+	private static bool CodeServiceDocumentActivationIdentityEquals(string left, string right)
+	{
+		if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
+			return string.IsNullOrEmpty(left) && string.IsNullOrEmpty(right);
+		return CodeServiceDocumentPath.Equals(left, right);
+	}
+
+	private void RefreshCodeServiceDocumentActivationCandidateFromCurrentBinding(
+		CodeServiceDocumentEditorBinding binding
+	)
+	{
+		if (binding == null)
+			return;
+
+		string currentPath = binding.TryGetCurrentDocument(out _, out string documentPath, out _)
+			? documentPath
+			: "";
+
+		if (!_codeServiceDocumentActivationBoundaryPending
+			&& CodeServiceDocumentActivationIdentityEquals(
+				currentPath,
+				_codeServiceDocumentEstablishedActivePath
+			))
+		{
+			return;
+		}
+
+		if (_codeServiceDocumentActivationBoundaryPending
+			&& CodeServiceDocumentActivationIdentityEquals(
+				currentPath,
+				_codeServiceDocumentActivationCandidatePath
+			))
+		{
+			EnsureCodeServiceDocumentQuietTimerArmed();
+			return;
+		}
+
+		BeginCodeServiceDocumentActivationCandidate(currentPath, candidateEdited: false);
+	}
+
+	private void BeginCodeServiceDocumentActivationCandidate(
+		string documentPath,
+		bool candidateEdited
+	)
+	{
+		string nextPath = documentPath ?? "";
+		if (_codeServiceDocumentActivationBoundaryPending
+			&& CodeServiceDocumentActivationIdentityEquals(
+				nextPath,
+				_codeServiceDocumentActivationCandidatePath
+			))
+		{
+			_codeServiceDocumentActivationCandidateEdited |= candidateEdited;
+			EnsureCodeServiceDocumentQuietTimerArmed();
+			return;
+		}
+
+		if (!_codeServiceDocumentActivationBoundaryPending
+			&& CodeServiceDocumentActivationIdentityEquals(
+				nextPath,
+				_codeServiceDocumentEstablishedActivePath
+			))
+		{
+			return;
+		}
+
+		_codeServiceDocumentActivationCandidatePath = nextPath;
+		_codeServiceDocumentActivationCandidateEdited = candidateEdited;
+		_codeServiceDocumentEstablishedActivePath = "";
+		_codeServiceDocumentActivationBoundaryPending = true;
+		RestartCodeServiceDocumentQuietTimer();
+	}
+
+	private void RequestCodeServiceDocumentCatchUp(string documentPath)
+	{
+		CodeServiceDocumentSynchronizationCoordinator coordinator =
+			_codeServiceDocumentSynchronizationCoordinator;
+		if (coordinator == null || coordinator.IsFailedClosed || string.IsNullOrEmpty(documentPath))
+			return;
+
+		if (_codeServiceDocumentActivationBoundaryPending)
+		{
+			EnsureCodeServiceDocumentQuietTimerArmed();
+			return;
+		}
+		if (_codeServiceDocumentQuietBoundaryPending || _codeServiceDocumentBindingRetryQueued)
+		{
+			EnsureCodeServiceDocumentQuietTimerArmed();
+			return;
+		}
+		if (coordinator.IsFlightActive || _codeServiceDocumentFlightRetirementPending)
+			return;
+		if (!CodeServiceDocumentPath.Equals(documentPath, _codeServiceDocumentEstablishedActivePath))
+			return;
+
+		QueueCodeServiceDocumentCatchUpDeferred();
+	}
+
+	private void QueueCodeServiceDocumentCatchUpDeferred()
+	{
+		if (_codeServiceDocumentCatchUpDeferredQueued)
+			return;
+
+		CodeServiceDocumentSynchronizationCoordinator coordinator =
+			_codeServiceDocumentSynchronizationCoordinator;
+		if (coordinator == null || coordinator.IsFailedClosed)
+			return;
+
+		_codeServiceDocumentCatchUpDeferredQueued = true;
+		try
+		{
+			CallDeferred(
+				nameof(ApplyCodeServiceDocumentCatchUpDeferred),
+				coordinator.ClientGeneration,
+				coordinator.EpochId
+			);
+		}
+		catch
+		{
+			_codeServiceDocumentCatchUpDeferredQueued = false;
+		}
+	}
+
+	private void ApplyCodeServiceDocumentCatchUpDeferred(long clientGeneration, string epochId)
+	{
+		if (!IsCodeServiceDocumentCompositionCurrent(clientGeneration, epochId))
+			return;
+
+		_codeServiceDocumentCatchUpDeferredQueued = false;
+		CodeServiceDocumentSynchronizationCoordinator coordinator =
+			_codeServiceDocumentSynchronizationCoordinator;
+		CodeServiceDocumentEditorBinding binding = _codeServiceDocumentEditorBinding;
+		if (coordinator == null || binding == null || coordinator.IsFailedClosed)
+			return;
+
+		if (_codeServiceDocumentActivationBoundaryPending
+			|| _codeServiceDocumentQuietBoundaryPending
+			|| _codeServiceDocumentBindingRetryQueued
+			|| coordinator.IsFlightActive
+			|| _codeServiceDocumentFlightRetirementPending)
+		{
+			return;
+		}
+
+		bool hasCurrentDocument =
+			binding.TryGetCurrentDocument(out _, out string currentPath, out CodeEdit codeEdit);
+		string currentIdentity = hasCurrentDocument ? currentPath : "";
+		if (!CodeServiceDocumentActivationIdentityEquals(
+			currentIdentity,
+			_codeServiceDocumentEstablishedActivePath
+		))
+		{
+			RefreshCodeServiceDocumentActivationCandidateFromCurrentBinding(binding);
+			return;
+		}
+
+		if (!hasCurrentDocument)
+		{
+			StartCodeServiceDocumentSynchronizationFlight("");
+			return;
+		}
+
+		bool recoveryRecapture = _codeServiceDocumentActiveRecaptureRequired;
+		if (recoveryRecapture || coordinator.ShouldCaptureOnBoundary(currentPath))
+		{
+			string boundary = recoveryRecapture ? "Recovery" : "Typing";
+			string text;
+			try
+			{
+				text = codeEdit.Text;
+			}
+			catch (Exception exception)
+			{
+				TryLogEditorOperation(
+					"CodeService Document Snapshot Capture Failed",
+					$"DocumentPath='{currentPath}', Boundary='{boundary}', Detail='{exception.Message}'"
+				);
+				return;
+			}
+
+			if (!coordinator.TryCaptureSnapshot(currentPath, text, out CodeServiceDocumentSnapshot snapshot, out string detail))
+			{
+				TryLogEditorOperation(
+					"CodeService Document Snapshot Capture Failed",
+					$"DocumentPath='{currentPath}', Boundary='{boundary}', Detail='{detail}'"
+				);
+				return;
+			}
+
+			if (recoveryRecapture)
+				_codeServiceDocumentActiveRecaptureRequired = false;
+
+			TryLogEditorOperation(
+				"CodeService Document Snapshot Captured",
+				$"DocumentPath='{snapshot.DocumentPath}', ClientGeneration='{coordinator.ClientGeneration}', EpochId='{coordinator.EpochId}', ClientVersion='{snapshot.ClientVersion}', Utf8Bytes='{snapshot.Utf8Bytes}', Boundary='{boundary}'"
+			);
+		}
+
+		StartCodeServiceDocumentSynchronizationFlight(currentPath);
+	}
+
+	private bool HasCodeServiceDocumentCatchUpWorkForCurrentEstablishedDocument(
+		CodeServiceDocumentSynchronizationCoordinator coordinator
+	)
+	{
+		if (coordinator == null)
+			return false;
+		if (coordinator.HasPendingWork)
+			return true;
+
+		CodeServiceDocumentEditorBinding binding = _codeServiceDocumentEditorBinding;
+		return binding != null
+			&& binding.TryGetCurrentDocument(out _, out string currentPath, out _)
+			&& CodeServiceDocumentPath.Equals(currentPath, _codeServiceDocumentEstablishedActivePath)
+			&& (_codeServiceDocumentActiveRecaptureRequired
+				|| coordinator.ShouldCaptureOnBoundary(currentPath));
+	}
+
 	private void TryTrackCurrentCodeServiceDocument()
 	{
 		CodeServiceDocumentSynchronizationCoordinator coordinator =
@@ -610,7 +908,7 @@ public partial class SystemExplorerPlugin
 		}
 
 		if (!snapshot.IsCurrentVersionSynchronized)
-			RestartCodeServiceDocumentQuietTimer();
+			RequestCodeServiceDocumentCatchUp(documentPath);
 		return true;
 	}
 
@@ -619,8 +917,13 @@ public partial class SystemExplorerPlugin
 		CodeServiceDocumentSynchronizationCoordinator coordinator =
 			_codeServiceDocumentSynchronizationCoordinator;
 		CodeServiceClientCoordinator clientCoordinator = _codeServiceClientCoordinator;
-		if (coordinator == null || clientCoordinator == null || coordinator.IsFlightActive)
+		if (coordinator == null
+			|| clientCoordinator == null
+			|| coordinator.IsFlightActive
+			|| _codeServiceDocumentFlightRetirementPending)
+		{
 			return;
+		}
 
 		if (!coordinator.TryStartFlight(
 			clientCoordinator,
@@ -634,6 +937,7 @@ public partial class SystemExplorerPlugin
 
 		long clientGeneration = coordinator.ClientGeneration;
 		string epochId = coordinator.EpochId;
+		_codeServiceDocumentFlightRetirementPending = true;
 		_codeServiceDocumentFlightObservationTask = ObserveCodeServiceDocumentFlightAsync(
 			flight,
 			clientGeneration,
@@ -707,17 +1011,29 @@ public partial class SystemExplorerPlugin
 		if (coordinator == null || clientCoordinator == null)
 			return;
 
+		// The coordinator releases its pure-managed _activeFlight before this Godot-thread
+		// result boundary. Keep plugin admission closed until retry/backoff/session policy has
+		// actually been applied here, otherwise a TextChanged could race through the gap.
+		_codeServiceDocumentFlightRetirementPending = false;
+
 		if (!clientCoordinator.TryGetReadySessionInfo(out CodeServiceClientSessionInfo currentSession)
 			|| !string.Equals(currentSession.SessionId, sessionId, StringComparison.Ordinal)
 			|| currentSession.ServiceProcessIdentity.ProcessId != serviceProcessId
 			|| currentSession.ServiceProcessIdentity.StartTimeUtcTicks != serviceStartTimeUtcTicks)
 		{
-			// A retired-session result is never allowed to publish into the new session. The
-			// flight itself has already released single-flight admission, however, so re-arm
-			// only from current coordinator state if a replacement Workspace Ready session
-			// has pending/capture work.
-			if (!coordinator.IsFlightActive && (coordinator.HasPendingWork || coordinator.HasCaptureIntent))
-				RestartCodeServiceDocumentQuietTimer();
+			if (HasCodeServiceDocumentCatchUpWorkForCurrentEstablishedDocument(coordinator))
+			{
+				if (_codeServiceDocumentActivationBoundaryPending
+					|| _codeServiceDocumentQuietBoundaryPending
+					|| _codeServiceDocumentBindingRetryQueued)
+				{
+					EnsureCodeServiceDocumentQuietTimerArmed();
+				}
+				else
+				{
+					QueueCodeServiceDocumentCatchUpDeferred();
+				}
+			}
 			return;
 		}
 
@@ -768,13 +1084,24 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 			_codeServiceDocumentQuietRetryAttempts++;
-			RestartCodeServiceDocumentQuietTimer();
+			RequestCodeServiceDocumentQuietBoundary();
 			return;
 		}
 
 		_codeServiceDocumentQuietRetryAttempts = 0;
-		if (hasPendingWork || coordinator.HasCaptureIntent)
-			RestartCodeServiceDocumentQuietTimer();
+		if (hasPendingWork || HasCodeServiceDocumentCatchUpWorkForCurrentEstablishedDocument(coordinator))
+		{
+			if (_codeServiceDocumentActivationBoundaryPending
+				|| _codeServiceDocumentQuietBoundaryPending
+				|| _codeServiceDocumentBindingRetryQueued)
+			{
+				EnsureCodeServiceDocumentQuietTimerArmed();
+			}
+			else
+			{
+				QueueCodeServiceDocumentCatchUpDeferred();
+			}
+		}
 	}
 
 	private bool IsCodeServiceDocumentCompositionCurrent(long clientGeneration, string epochId)
@@ -800,6 +1127,34 @@ public partial class SystemExplorerPlugin
 		catch
 		{
 		}
+	}
+
+	private void EnsureCodeServiceDocumentQuietTimerArmed()
+	{
+		Timer timer = _codeServiceDocumentQuietTimer;
+		if (!IsValidGodotObject(timer))
+			return;
+		try
+		{
+			if (timer.IsStopped())
+				timer.Start(CodeServiceDocumentQuietWindowSeconds);
+		}
+		catch
+		{
+		}
+	}
+
+	private void RequestCodeServiceDocumentQuietBoundary()
+	{
+		_codeServiceDocumentQuietBoundaryPending = true;
+		if (_codeServiceDocumentActivationBoundaryPending)
+		{
+			// Activation keeps its original deadline. Repair/retry/completion traffic may
+			// piggyback that boundary but must not debounce it forward.
+			EnsureCodeServiceDocumentQuietTimerArmed();
+			return;
+		}
+		RestartCodeServiceDocumentQuietTimer();
 	}
 
 	private void QueueCodeServiceDocumentBindingRetry()
@@ -908,7 +1263,8 @@ public partial class SystemExplorerPlugin
 		_codeServiceDocumentActiveRecaptureRequired = true;
 		TryRefreshCodeServiceOpenDocumentInventory("Workspace Ready");
 		TryTrackCurrentCodeServiceDocument();
-		RestartCodeServiceDocumentQuietTimer();
+		RefreshCodeServiceDocumentActivationCandidateFromCurrentBinding(binding);
+		RequestCodeServiceDocumentQuietBoundary();
 
 		TryLogEditorOperation(
 			"CodeService Document Workspace Ready",
@@ -952,6 +1308,13 @@ public partial class SystemExplorerPlugin
 		_codeServiceDocumentBindingRetryAttempts = 0;
 		_codeServiceDocumentQuietRetryAttempts = 0;
 		_codeServiceDocumentActiveRecaptureRequired = false;
+		_codeServiceDocumentActivationCandidatePath = "";
+		_codeServiceDocumentActivationCandidateEdited = false;
+		_codeServiceDocumentEstablishedActivePath = "";
+		_codeServiceDocumentActivationBoundaryPending = false;
+		_codeServiceDocumentCatchUpDeferredQueued = false;
+		_codeServiceDocumentQuietBoundaryPending = false;
+		_codeServiceDocumentFlightRetirementPending = false;
 
 		Timer timer = _codeServiceDocumentQuietTimer;
 		if (IsValidGodotObject(timer))

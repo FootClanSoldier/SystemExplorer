@@ -29,9 +29,13 @@ internal sealed class AutocompleteCodeEditPresenter
 
 		// Preflight every item before crossing the native CodeEdit boundary.
 		// Godot's native completion confirmation indexes the final InsertText
-		// character, so an empty value is unsafe to publish at all.
-		foreach (AutocompleteCompletionItem item in items)
+		// character, so an empty value is unsafe to publish at all. Semantic
+		// location mapping is also preflighted to prevent partial publication
+		// if an impossible internal origin/depth combination reaches this layer.
+		int[] nativeLocations = new int[items.Count];
+		for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
 		{
+			AutocompleteCompletionItem item = items[itemIndex];
 			if (item == null)
 				continue;
 			if (string.IsNullOrEmpty(item.InsertText))
@@ -39,17 +43,28 @@ internal sealed class AutocompleteCodeEditPresenter
 				detail = "Completion item InsertText is empty; native publication was rejected.";
 				return false;
 			}
+			if (!AutocompleteCompletionLocationMapper.TryMap(
+				item.SemanticOrigin,
+				item.InheritanceDepth,
+				out nativeLocations[itemIndex]
+			))
+			{
+				detail = "Completion item semantic location metadata is internally inconsistent.";
+				return false;
+			}
 		}
 
-		foreach (AutocompleteCompletionItem item in items)
+		for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
 		{
+			AutocompleteCompletionItem item = items[itemIndex];
 			if (item == null)
 				continue;
 
 			codeEdit.AddCodeCompletionOption(
 				item.Kind,
 				GetNativeDisplayText(item),
-				item.InsertText
+				item.InsertText,
+				location: nativeLocations[itemIndex]
 			);
 		}
 

@@ -1,5 +1,6 @@
 #if TOOLS
 using Godot;
+using SystemExplorer.CodeService.Completion;
 
 namespace SystemExplorer.CodeService.Autocomplete;
 
@@ -9,6 +10,8 @@ internal sealed record AutocompleteCompletionItem(
 	string InsertText,
 	string FilterText,
 	string SortText,
-	bool Preselect
+	bool Preselect,
+	CodeServiceCompletionSemanticOrigin SemanticOrigin,
+	int? InheritanceDepth
 );
 #endif

@@ -12,11 +12,14 @@ internal sealed class CodeServiceProcessLauncher
 		string executable,
 		string workingDirectory,
 		CodeServiceProcessIdentity godotOwnerIdentity,
+		string projectRoot,
 		bool diagnosticLoggingRequested
 	)
 	{
 		if (string.IsNullOrWhiteSpace(executable))
 			return CodeServiceLaunchResult.Failure("CodeService executable was not resolved.");
+		if (string.IsNullOrWhiteSpace(projectRoot))
+			return CodeServiceLaunchResult.Failure("CodeService projectRoot is required for a new process launch.");
 
 		ProcessStartInfo startInfo = new()
 		{
@@ -40,6 +43,8 @@ internal sealed class CodeServiceProcessLauncher
 		startInfo.ArgumentList.Add(
 			godotOwnerIdentity.StartTimeUtcTicks.ToString(CultureInfo.InvariantCulture)
 		);
+		startInfo.ArgumentList.Add("--project-root");
+		startInfo.ArgumentList.Add(projectRoot);
 		if (diagnosticLoggingRequested)
 			startInfo.ArgumentList.Add("--diagnostic-log");
 

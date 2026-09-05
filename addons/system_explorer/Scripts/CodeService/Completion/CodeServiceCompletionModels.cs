@@ -38,13 +38,25 @@ internal readonly record struct CodeServiceCompletionRequest(
 	int Line,
 	int Character);
 
+internal enum CodeServiceCompletionSemanticOrigin
+{
+	Unknown,
+	Local,
+	CurrentType,
+	BaseType,
+	OtherUserCode,
+	FrameworkOrOther,
+}
+
 internal sealed record CodeServiceCompletionItem(
 	int? Kind,
 	string DisplayText,
 	string InsertText,
 	string FilterText,
 	string SortText,
-	bool Preselect);
+	bool Preselect,
+	CodeServiceCompletionSemanticOrigin SemanticOrigin,
+	int? InheritanceDepth);
 
 internal readonly record struct CodeServiceCompletionResult(
 	CodeServiceCompletionOutcome Outcome,

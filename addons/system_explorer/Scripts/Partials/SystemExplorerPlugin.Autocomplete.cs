@@ -158,13 +158,8 @@ public partial class SystemExplorerPlugin
 
 	private void InvalidateAutocompleteCompletionForScriptChange()
 	{
-		CancellationTokenSource cancellation = null;
 		lock (_autocompleteCompletionStateGate)
-		{
 			_autocompletePendingCompletionIntent = null;
-			cancellation = _autocompleteCompletionFlightCancellation;
-		}
-		try { cancellation?.Cancel(); } catch { }
 	}
 
 	private void OnAutocompleteCodeCompletionRequested()
@@ -228,7 +223,6 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		CancellationTokenSource activeCancellation = null;
 		bool hasActiveFlight;
 		lock (_autocompleteCompletionStateGate)
 		{
@@ -242,13 +236,11 @@ public partial class SystemExplorerPlugin
 					request,
 					admission
 				);
-				activeCancellation = _autocompleteCompletionFlightCancellation;
 			}
 		}
 
 		if (hasActiveFlight)
 		{
-			try { activeCancellation?.Cancel(); } catch { }
 			if (emitIngressDiagnostics && !admission.IsCurrentVersionSynchronized)
 			{
 				TryLogEditorOperation(
@@ -567,7 +559,7 @@ public partial class SystemExplorerPlugin
 				return;
 			case CodeServiceCompletionOutcome.DocumentNotOpen:
 				TryRefreshCodeServiceOpenDocumentInventory("Completion DocumentNotOpen");
-				RestartCodeServiceDocumentQuietTimer();
+				RequestCodeServiceDocumentQuietBoundary();
 				return;
 			case CodeServiceCompletionOutcome.AuthenticationFailed:
 			case CodeServiceCompletionOutcome.TransportUnavailable:
@@ -619,7 +611,9 @@ public partial class SystemExplorerPlugin
 					item.InsertText,
 					item.FilterText,
 					item.SortText,
-					item.Preselect
+					item.Preselect,
+					item.SemanticOrigin,
+					item.InheritanceDepth
 				));
 			}
 		}
@@ -761,7 +755,7 @@ public partial class SystemExplorerPlugin
 
 		if (!currentAdmission.IsCurrentVersionSynchronized)
 		{
-			RestartCodeServiceDocumentQuietTimer();
+			RequestCodeServiceDocumentCatchUp(currentAdmission.DocumentPath);
 			return;
 		}
 		if (IsAutocompleteCompletionSessionBlocked(currentAdmission.Session, out _))
@@ -783,11 +777,10 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private void InvalidateStaleAutocompleteCompletionRequestsAfterTextChanged(
+	private void DiscardStalePendingAutocompleteCompletionIntentAfterTextChanged(
 		long validationGeneration
 	)
 	{
-		CancellationTokenSource cancellation = null;
 		lock (_autocompleteCompletionStateGate)
 		{
 			if (_autocompletePendingCompletionIntent != null
@@ -795,13 +788,7 @@ public partial class SystemExplorerPlugin
 			{
 				_autocompletePendingCompletionIntent = null;
 			}
-			if (_autocompleteCompletionFlightRequest != null
-				&& _autocompleteCompletionFlightRequest.ValidationGeneration < validationGeneration)
-			{
-				cancellation = _autocompleteCompletionFlightCancellation;
-			}
 		}
-		try { cancellation?.Cancel(); } catch { }
 	}
 
 	private bool IsAutocompleteCompletionSessionBlocked(
@@ -985,7 +972,7 @@ public partial class SystemExplorerPlugin
 				out bool suppressAutomaticRequest
 			);
 
-		InvalidateStaleAutocompleteCompletionRequestsAfterTextChanged(generation);
+		DiscardStalePendingAutocompleteCompletionIntentAfterTextChanged(generation);
 
 		if (!scheduledHost.IsValidationCurrent(generation)
 			|| !IsAutocompleteAutomaticTextChangedLifecycleStable()

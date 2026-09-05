@@ -9,7 +9,7 @@ internal static class CodeServiceClientProtocol
 	internal const int ReadinessSchemaVersion = 1;
 	internal const int WorkspaceSchemaVersion = 1;
 	internal const int DocumentSynchronizationSchemaVersion = 1;
-	internal const int CompletionSchemaVersion = 2;
+	internal const int CompletionSchemaVersion = 3;
 
 	internal const string ReadinessRecordType = "codeservice.ready";
 	internal const string HandshakePath = "/control/handshake";

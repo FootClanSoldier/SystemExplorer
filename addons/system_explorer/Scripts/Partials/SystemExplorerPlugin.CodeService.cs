@@ -24,7 +24,7 @@ public partial class SystemExplorerPlugin
 	private CodeServiceProcessIdentity _codeServiceClientOwnerIdentity;
 	private bool _codeServiceClientOwnerIdentityAvailable;
 	private Task _codeServiceClientEnsureObservationTask;
-	private Task _codeServiceWorkspaceEnsureObservationTask;
+	private Task _codeServiceWorkspaceReadyObservationTask;
 	private Task _codeServiceClientRetirementObservationTask;
 	private readonly object _codeServiceClientCallbackGate = new();
 	private long _codeServiceClientCallbackGenerationCounter;
@@ -32,6 +32,8 @@ public partial class SystemExplorerPlugin
 	private long _codeServiceClientCoordinatorCallbackGeneration;
 	private readonly object _codeServiceLaunchSnapshotGate = new();
 	private string _codeServiceLaunchWorkingDirectory = "";
+	private string _codeServiceLaunchProjectRoot = "";
+	private string _codeServiceLaunchProjectRootFailureDetail = "";
 	private bool _codeServiceLaunchDiagnosticLoggingRequested;
 	private CodeServiceToolService _codeServiceLaunchToolService;
 
@@ -395,12 +397,49 @@ public partial class SystemExplorerPlugin
 
 	private void RefreshCodeServiceLaunchSnapshot()
 	{
-		string workingDirectory = GetCodeServiceWorkingDirectory();
+		string workingDirectory;
+		try
+		{
+			workingDirectory = GetCodeServiceWorkingDirectory();
+		}
+		catch
+		{
+			// Snapshot failure must not prevent descriptor discovery/reconnect.
+			workingDirectory = System.Environment.CurrentDirectory;
+		}
+
+		string normalizedProjectRoot = "";
+		string projectRootFailureDetail = "";
+		try
+		{
+			string projectRoot = GetCodeServiceProjectRoot();
+			if (
+				!CodeServiceWorkspacePath.TryNormalize(
+					projectRoot,
+					out normalizedProjectRoot,
+					out string normalizationDetail
+				)
+			)
+			{
+				projectRootFailureDetail = BoundCodeServiceLaunchProjectRootFailureDetail(
+					"Godot project root could not be normalized: " + normalizationDetail
+				);
+			}
+		}
+		catch (Exception exception)
+		{
+			projectRootFailureDetail = BoundCodeServiceLaunchProjectRootFailureDetail(
+				"Godot project root capture failed: " + exception.Message
+			);
+		}
+
 		bool diagnosticLoggingRequested = DebugState;
 		CodeServiceToolService toolService = CodeServiceTools;
 		lock (_codeServiceLaunchSnapshotGate)
 		{
 			_codeServiceLaunchWorkingDirectory = workingDirectory;
+			_codeServiceLaunchProjectRoot = normalizedProjectRoot;
+			_codeServiceLaunchProjectRootFailureDetail = projectRootFailureDetail;
 			_codeServiceLaunchDiagnosticLoggingRequested = diagnosticLoggingRequested;
 			_codeServiceLaunchToolService = toolService;
 		}
@@ -421,11 +460,15 @@ public partial class SystemExplorerPlugin
 			// BCL continuation thread. It therefore uses only the last main-thread composition
 			// snapshot plus filesystem/environment executable resolution.
 			string workingDirectory;
+			string projectRoot;
+			string projectRootFailureDetail;
 			bool diagnosticLoggingRequested;
 			CodeServiceToolService toolService;
 			lock (_codeServiceLaunchSnapshotGate)
 			{
 				workingDirectory = _codeServiceLaunchWorkingDirectory;
+				projectRoot = _codeServiceLaunchProjectRoot;
+				projectRootFailureDetail = _codeServiceLaunchProjectRootFailureDetail;
 				diagnosticLoggingRequested = _codeServiceLaunchDiagnosticLoggingRequested;
 				toolService = _codeServiceLaunchToolService;
 			}
@@ -435,6 +478,14 @@ public partial class SystemExplorerPlugin
 				return CodeServiceClientLaunchPreparation.Unavailable(
 					"The CodeService launch composition snapshot is no longer available."
 				);
+			}
+
+			if (string.IsNullOrWhiteSpace(projectRoot))
+			{
+				string detail = string.IsNullOrWhiteSpace(projectRootFailureDetail)
+					? "The CodeService project root launch snapshot is unavailable."
+					: projectRootFailureDetail;
+				return CodeServiceClientLaunchPreparation.Unavailable(detail);
 			}
 
 			if (!toolService.TryResolveLaunchExecutable(out string executable))
@@ -450,6 +501,7 @@ public partial class SystemExplorerPlugin
 			return CodeServiceClientLaunchPreparation.Success(
 				executable,
 				workingDirectory,
+				projectRoot,
 				diagnosticLoggingRequested
 			);
 		}
@@ -720,19 +772,40 @@ public partial class SystemExplorerPlugin
 		}
 		catch (Exception exception)
 		{
+			string detail = BoundCodeServiceLaunchProjectRootFailureDetail(
+				"Godot project root capture failed: " + exception.Message
+			);
 			TryLogEditorOperation(
 				"CodeService Workspace Protocol Failure",
-				$"Reason='{reason}', Outcome='InvalidRequest', SessionId='{currentInfo.SessionId}', ServicePid='{currentInfo.ServiceProcessIdentity.ProcessId}', Detail='Godot project root capture failed: {exception.Message}'"
+				$"Reason='{reason}', Outcome='InvalidRequest', SessionId='{currentInfo.SessionId}', ServicePid='{currentInfo.ServiceProcessIdentity.ProcessId}', Detail='{detail}'"
 			);
 			return;
 		}
 
-		// The coordinator owns and retires the actual workspace flight. Keep only a
-		// non-authoritative observation reference in the plugin generation; do not add
-		// a plugin-side async continuation/callback around the workspace lifetime.
-		_codeServiceWorkspaceEnsureObservationTask = coordinator.EnsureWorkspaceAsync(
+		if (
+			!CodeServiceWorkspacePath.TryNormalize(
+				projectRoot,
+				out string normalizedProjectRoot,
+				out string normalizationDetail
+			)
+		)
+		{
+			string detail = BoundCodeServiceLaunchProjectRootFailureDetail(
+				"Godot project root could not be normalized: " + normalizationDetail
+			);
+			TryLogEditorOperation(
+				"CodeService Workspace Protocol Failure",
+				$"Reason='{reason}', Outcome='InvalidRequest', SessionId='{currentInfo.SessionId}', ServicePid='{currentInfo.ServiceProcessIdentity.ProcessId}', Detail='{detail}'"
+			);
+			return;
+		}
+
+		// Service owns initialization from the one-time process launch project-root seed.
+		// The plugin keeps only a non-authoritative reference to the coordinator-owned
+		// finite status-only readiness observation.
+		_codeServiceWorkspaceReadyObservationTask = coordinator.ObserveWorkspaceReadyAsync(
 			currentInfo,
-			projectRoot,
+			normalizedProjectRoot,
 			reason
 		);
 	}
@@ -1047,7 +1120,7 @@ public partial class SystemExplorerPlugin
 		_codeServiceClientOwnerIdentityAvailable = false;
 		_codeServiceClientCoordinatorCallbackGeneration = 0;
 		_codeServiceClientEnsureObservationTask = null;
-		_codeServiceWorkspaceEnsureObservationTask = null;
+		_codeServiceWorkspaceReadyObservationTask = null;
 
 		if (retirementTask != null)
 		{
@@ -1066,6 +1139,8 @@ public partial class SystemExplorerPlugin
 		lock (_codeServiceLaunchSnapshotGate)
 		{
 			_codeServiceLaunchWorkingDirectory = "";
+			_codeServiceLaunchProjectRoot = "";
+			_codeServiceLaunchProjectRootFailureDetail = "";
 			_codeServiceLaunchDiagnosticLoggingRequested = false;
 			_codeServiceLaunchToolService = null;
 		}
@@ -1086,6 +1161,18 @@ public partial class SystemExplorerPlugin
 			// Callback admission is already closed. Observe/contain retirement failure
 			// without queueing diagnostics into a retired Godot/plugin generation.
 		}
+	}
+
+	private static string BoundCodeServiceLaunchProjectRootFailureDetail(string detail)
+	{
+		const int maxLength = 512;
+		string bounded = (detail ?? "")
+			.Replace('\r', ' ')
+			.Replace('\n', ' ')
+			.Trim();
+		if (string.IsNullOrEmpty(bounded))
+			bounded = "The CodeService project root launch snapshot is unavailable.";
+		return bounded.Length <= maxLength ? bounded : bounded[..maxLength];
 	}
 
 	private static string GetCodeServiceWorkingDirectory()

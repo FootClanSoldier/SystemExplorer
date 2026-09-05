@@ -19,7 +19,7 @@ internal sealed class CodeServiceClientCoordinator
 		TimeSpan.FromMilliseconds(500),
 	};
 	private static readonly TimeSpan BootstrapDeadline = TimeSpan.FromSeconds(12);
-	private static readonly TimeSpan WorkspaceBusyObservationDeadline = TimeSpan.FromSeconds(60);
+	private static readonly TimeSpan WorkspaceReadyObservationDeadline = TimeSpan.FromSeconds(60);
 	private static readonly TimeSpan[] WorkspaceStatusObservationDelays =
 	{
 		TimeSpan.FromMilliseconds(100),
@@ -124,7 +124,7 @@ internal sealed class CodeServiceClientCoordinator
 		}
 	}
 
-	internal Task<CodeServiceWorkspaceEnsureResult> EnsureWorkspaceAsync(
+	internal Task<CodeServiceWorkspaceEnsureResult> ObserveWorkspaceReadyAsync(
 		CodeServiceClientSessionInfo expectedSessionInfo,
 		string projectRoot,
 		string reason,
@@ -168,7 +168,7 @@ internal sealed class CodeServiceClientCoordinator
 			{
 				return Task.FromResult(
 					CodeServiceWorkspaceEnsureResult.StaleSession(
-						"The verified Ready session changed before workspace establishment was admitted."
+						"The verified Ready session changed before workspace readiness observation was admitted."
 					)
 				);
 			}
@@ -192,7 +192,7 @@ internal sealed class CodeServiceClientCoordinator
 				{
 					return Task.FromResult(
 						CodeServiceWorkspaceEnsureResult.Unavailable(
-							"A different workspace ensure-flight is already active; no request queue is permitted."
+							"A different workspace observation flight is already active; no request queue is permitted."
 						)
 					);
 				}
@@ -204,7 +204,7 @@ internal sealed class CodeServiceClientCoordinator
 						_lifetimeCancellation.Token
 					);
 				long flightGeneration = ++_workspaceFlightGeneration;
-				sharedFlight = RunWorkspaceEnsureAndFinalizeAsync(
+				sharedFlight = RunWorkspaceObservationAndFinalizeAsync(
 					flightGeneration,
 					session,
 					readyGeneration,
@@ -835,13 +835,14 @@ internal sealed class CodeServiceClientCoordinator
 			_state = CodeServiceClientCoordinatorState.Starting;
 			SafeLog(
 				"CodeService Launch Requested",
-				$"Reason='{reason}', OwnerPid='{_ownerIdentity.ProcessId}', OwnerStartTimeUtcTicks='{_ownerIdentity.StartTimeUtcTicks}', Executable='{launchPreparation.Executable}', DiagnosticLoggingRequested='{launchPreparation.DiagnosticLoggingRequested}'"
+				$"Reason='{reason}', OwnerPid='{_ownerIdentity.ProcessId}', OwnerStartTimeUtcTicks='{_ownerIdentity.StartTimeUtcTicks}', Executable='{launchPreparation.Executable}', ProjectRoot='{ToSingleLine(launchPreparation.ProjectRoot)}', DiagnosticLoggingRequested='{launchPreparation.DiagnosticLoggingRequested}'"
 			);
 			// Keep the recovery-admission gate and Process.Start atomic with respect to retirement.
 			launchResult = _processLauncher.Start(
 				launchPreparation.Executable,
 				launchPreparation.WorkingDirectory,
 				_ownerIdentity,
+				launchPreparation.ProjectRoot,
 				launchPreparation.DiagnosticLoggingRequested
 			);
 		}
@@ -854,7 +855,7 @@ internal sealed class CodeServiceClientCoordinator
 			: $"ServiceIdentity='<unavailable>', IdentityDetail='{ToSingleLine(launchedProcess.IdentityDetail)}'";
 		SafeLog(
 			"CodeService Launch Started",
-			$"Reason='{reason}', {launchIdentity}, DiagnosticLoggingRequested='{launchPreparation.DiagnosticLoggingRequested}'"
+			$"Reason='{reason}', {launchIdentity}, ProjectRoot='{ToSingleLine(launchPreparation.ProjectRoot)}', DiagnosticLoggingRequested='{launchPreparation.DiagnosticLoggingRequested}'"
 		);
 
 		lock (_gate)
@@ -1385,7 +1386,7 @@ internal sealed class CodeServiceClientCoordinator
 		}
 	}
 
-	private async Task<CodeServiceWorkspaceEnsureResult> RunWorkspaceEnsureAndFinalizeAsync(
+	private async Task<CodeServiceWorkspaceEnsureResult> RunWorkspaceObservationAndFinalizeAsync(
 		long flightGeneration,
 		CodeServiceClientSession session,
 		long readyGeneration,
@@ -1398,94 +1399,30 @@ internal sealed class CodeServiceClientCoordinator
 		try
 		{
 			if (!IsCurrentReadySession(session, readyGeneration))
-				return CodeServiceWorkspaceEnsureResult.StaleSession("Ready session changed before workspace request started.");
+				return CodeServiceWorkspaceEnsureResult.StaleSession("Ready session changed before workspace observation started.");
 
 			CodeServiceClientSessionInfo info = session.ToInfo();
 			SafeLog(
-				"CodeService Workspace Initialize Started",
+				"CodeService Workspace Observation Started",
 				$"Reason='{reason}', ReadyGeneration='{readyGeneration}', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', ProjectRoot='{ToSingleLine(normalizedProjectRoot)}'"
 			);
 
-			CodeServiceWorkspaceInitializeResult initialize = await session
-				.InitializeWorkspaceAsync(normalizedProjectRoot, flightCancellation.Token)
-				.ConfigureAwait(false);
-
-			if (!IsCurrentReadySession(session, readyGeneration))
-				return CodeServiceWorkspaceEnsureResult.StaleSession("Ready session changed before workspace initialize result publication.");
-
-			switch (initialize.Outcome)
-			{
-				case CodeServiceWorkspaceInitializeOutcome.Ready:
-					LogWorkspaceReady(info, reason, initialize.ReusedExistingWorkspace, initialize.SourceFileCount, initialize.ProjectFileCount, initialize.SolutionFileCount);
-					CodeServiceWorkspaceEnsureResult readyResult = CodeServiceWorkspaceEnsureResult.Ready(initialize);
-					PublishWorkspaceReadyCallbackIfCurrent(session, readyGeneration, info, normalizedProjectRoot, initialize.ReusedExistingWorkspace, reason);
-					return readyResult;
-
-				case CodeServiceWorkspaceInitializeOutcome.Busy:
-					SafeLog(
-						"CodeService Workspace Busy",
-						$"Reason='{reason}', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', State='{initialize.State}', ProjectRoot='{ToSingleLine(initialize.ProjectRoot)}'"
-					);
-					return await ObserveBusyWorkspaceAsync(
-						session,
-						readyGeneration,
-						normalizedProjectRoot,
-						reason,
-						info,
-						flightCancellation.Token
-					).ConfigureAwait(false);
-
-				case CodeServiceWorkspaceInitializeOutcome.WorkspaceMismatch:
-					SafeLog(
-						"CodeService Workspace Protocol Failure",
-						$"Reason='{reason}', Outcome='WorkspaceMismatch', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', RequestedProjectRoot='{ToSingleLine(normalizedProjectRoot)}', CurrentProjectRoot='{ToSingleLine(initialize.ProjectRoot)}'"
-					);
-					return CodeServiceWorkspaceEnsureResult.WorkspaceMismatch(initialize);
-
-				case CodeServiceWorkspaceInitializeOutcome.Faulted:
-					LogWorkspaceFaulted(info, reason, initialize.State, initialize.FaultKind, initialize.SourceFileCount, initialize.ProjectFileCount, initialize.SolutionFileCount);
-					return CodeServiceWorkspaceEnsureResult.Faulted(initialize);
-
-				case CodeServiceWorkspaceInitializeOutcome.InvalidRequest:
-					LogWorkspaceProtocolFailure(info, reason, "InvalidRequest", initialize.Detail);
-					return CodeServiceWorkspaceEnsureResult.InvalidRequest(initialize.Detail);
-
-				case CodeServiceWorkspaceInitializeOutcome.VersionMismatch:
-					LogWorkspaceProtocolFailure(info, reason, "VersionMismatch", initialize.Detail);
-					return CodeServiceWorkspaceEnsureResult.VersionMismatch(initialize.Detail);
-
-				case CodeServiceWorkspaceInitializeOutcome.AuthenticationFailed:
-					LogWorkspaceUnavailable(info, reason, "AuthenticationFailed", initialize.Detail);
-					return CodeServiceWorkspaceEnsureResult.AuthenticationFailed(initialize.Detail);
-
-				case CodeServiceWorkspaceInitializeOutcome.ControlPlaneUnavailable:
-					LogWorkspaceUnavailable(info, reason, "ControlPlaneUnavailable", initialize.Detail);
-					return CodeServiceWorkspaceEnsureResult.ControlPlaneUnavailable(initialize.Detail);
-
-				case CodeServiceWorkspaceInitializeOutcome.TransportUnavailable:
-					LogWorkspaceUnavailable(info, reason, "TransportUnavailable", initialize.Detail);
-					return CodeServiceWorkspaceEnsureResult.TransportUnavailable(initialize.Detail);
-
-				case CodeServiceWorkspaceInitializeOutcome.Unavailable:
-					LogWorkspaceUnavailable(info, reason, "Unavailable", initialize.Detail);
-					return CodeServiceWorkspaceEnsureResult.Unavailable(initialize.Detail);
-
-				case CodeServiceWorkspaceInitializeOutcome.MalformedResponse:
-					LogWorkspaceProtocolFailure(info, reason, "MalformedResponse", initialize.Detail);
-					return CodeServiceWorkspaceEnsureResult.MalformedResponse(initialize.Detail);
-
-				default:
-					LogWorkspaceProtocolFailure(info, reason, "Unknown", "Unknown workspace initialize result.");
-					return CodeServiceWorkspaceEnsureResult.MalformedResponse("Unknown workspace initialize result.");
-			}
+			return await ObserveWorkspaceReadyStatusAsync(
+				session,
+				readyGeneration,
+				normalizedProjectRoot,
+				reason,
+				info,
+				flightCancellation.Token
+			).ConfigureAwait(false);
 		}
 		catch (OperationCanceledException) when (flightCancellation.IsCancellationRequested)
 		{
 			if (_lifetimeCancellation.IsCancellationRequested)
-				return CodeServiceWorkspaceEnsureResult.Disposed("CodeService workspace ensure-flight was retired with the coordinator lifetime.");
+				return CodeServiceWorkspaceEnsureResult.Disposed("CodeService workspace observation flight was retired with the coordinator lifetime.");
 			if (!IsCurrentReadySession(session, readyGeneration))
-				return CodeServiceWorkspaceEnsureResult.StaleSession("CodeService workspace ensure-flight was retired with its Ready session.");
-			return CodeServiceWorkspaceEnsureResult.Unavailable("CodeService workspace ensure-flight was canceled.");
+				return CodeServiceWorkspaceEnsureResult.StaleSession("CodeService workspace observation flight was retired with its Ready session.");
+			return CodeServiceWorkspaceEnsureResult.Unavailable("CodeService workspace observation flight was canceled.");
 		}
 		catch (Exception exception)
 		{
@@ -1523,7 +1460,7 @@ internal sealed class CodeServiceClientCoordinator
 		}
 	}
 
-	private async Task<CodeServiceWorkspaceEnsureResult> ObserveBusyWorkspaceAsync(
+	private async Task<CodeServiceWorkspaceEnsureResult> ObserveWorkspaceReadyStatusAsync(
 		CodeServiceClientSession session,
 		long readyGeneration,
 		string normalizedProjectRoot,
@@ -1534,22 +1471,18 @@ internal sealed class CodeServiceClientCoordinator
 	{
 		using CancellationTokenSource observationCancellation =
 			CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-		observationCancellation.CancelAfter(WorkspaceBusyObservationDeadline);
+		observationCancellation.CancelAfter(WorkspaceReadyObservationDeadline);
 		int delayIndex = 0;
+		bool waitingLogged = false;
 
 		try
 		{
 			while (true)
 			{
 				if (!IsCurrentReadySession(session, readyGeneration))
-					return CodeServiceWorkspaceEnsureResult.StaleSession("Ready session changed during Busy workspace observation.");
+					return CodeServiceWorkspaceEnsureResult.StaleSession("Ready session changed during workspace readiness observation.");
 
-				TimeSpan delay = WorkspaceStatusObservationDelays[
-					Math.Min(delayIndex, WorkspaceStatusObservationDelays.Length - 1)
-				];
-				delayIndex++;
-				await Task.Delay(delay, observationCancellation.Token).ConfigureAwait(false);
-
+				// First status request is immediate. Delays only follow a matching transient state.
 				CodeServiceWorkspaceStatusResult status = await session
 					.GetWorkspaceStatusAsync(observationCancellation.Token)
 					.ConfigureAwait(false);
@@ -1559,52 +1492,55 @@ internal sealed class CodeServiceClientCoordinator
 
 				if (status.Outcome == CodeServiceWorkspaceStatusOutcome.Success)
 				{
-					if (
-						status.State is CodeServiceWorkspaceState.Initializing
-							or CodeServiceWorkspaceState.Indexing
-					)
+					if (!CodeServiceWorkspacePath.EqualsNormalized(status.ProjectRoot, normalizedProjectRoot))
 					{
-						if (!CodeServiceWorkspacePath.EqualsNormalized(status.ProjectRoot, normalizedProjectRoot))
-						{
-							string detail = "Busy workspace status returned a different projectRoot.";
-							LogWorkspaceProtocolFailure(info, reason, "MalformedResponse", detail);
-							return CodeServiceWorkspaceEnsureResult.MalformedResponse(detail);
-						}
-						continue;
+						string detail = string.IsNullOrEmpty(status.ProjectRoot)
+							? "Workspace status did not contain the startup projectRoot expected by this plugin generation."
+							: "Workspace status returned a different projectRoot than this plugin generation expects.";
+						SafeLog(
+							"CodeService Workspace Protocol Failure",
+							$"Reason='{reason}', Outcome='WorkspaceMismatch', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', ExpectedProjectRoot='{ToSingleLine(normalizedProjectRoot)}', CurrentProjectRoot='{ToSingleLine(status.ProjectRoot)}', Detail='{detail}'"
+						);
+						return CodeServiceWorkspaceEnsureResult.WorkspaceMismatchFromStatus(status, detail);
 					}
 
-					if (status.State == CodeServiceWorkspaceState.Ready)
+					switch (status.State)
 					{
-						if (!CodeServiceWorkspacePath.EqualsNormalized(status.ProjectRoot, normalizedProjectRoot))
-						{
-							string detail = "Ready workspace status returned a different projectRoot.";
-							LogWorkspaceProtocolFailure(info, reason, "MalformedResponse", detail);
-							return CodeServiceWorkspaceEnsureResult.MalformedResponse(detail);
-						}
+						case CodeServiceWorkspaceState.Uninitialized:
+						case CodeServiceWorkspaceState.Initializing:
+						case CodeServiceWorkspaceState.Indexing:
+							if (!waitingLogged)
+							{
+								waitingLogged = true;
+								SafeLog(
+									"CodeService Workspace Waiting",
+									$"Reason='{reason}', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', State='{status.State}', ProjectRoot='{ToSingleLine(status.ProjectRoot)}'"
+								);
+							}
 
-						LogWorkspaceReady(info, reason, null, status.SourceFileCount, status.ProjectFileCount, status.SolutionFileCount);
-						CodeServiceWorkspaceEnsureResult readyResult = CodeServiceWorkspaceEnsureResult.ReadyFromStatus(status);
-						PublishWorkspaceReadyCallbackIfCurrent(session, readyGeneration, info, normalizedProjectRoot, null, reason);
-						return readyResult;
+							TimeSpan delay = WorkspaceStatusObservationDelays[
+								Math.Min(delayIndex, WorkspaceStatusObservationDelays.Length - 1)
+							];
+							delayIndex++;
+							await Task.Delay(delay, observationCancellation.Token).ConfigureAwait(false);
+							continue;
+
+						case CodeServiceWorkspaceState.Ready:
+							LogWorkspaceReady(info, reason, null, status.SourceFileCount, status.ProjectFileCount, status.SolutionFileCount);
+							CodeServiceWorkspaceEnsureResult readyResult = CodeServiceWorkspaceEnsureResult.ReadyFromStatus(status);
+							PublishWorkspaceReadyCallbackIfCurrent(session, readyGeneration, info, normalizedProjectRoot, null, reason);
+							return readyResult;
+
+						case CodeServiceWorkspaceState.Faulted:
+							LogWorkspaceFaulted(info, reason, status.State, status.FaultKind, status.SourceFileCount, status.ProjectFileCount, status.SolutionFileCount);
+							return CodeServiceWorkspaceEnsureResult.FaultedFromStatus(status);
+
+						default:
+							string unexpectedStateDetail =
+								$"Workspace readiness observation reached unexpected state '{status.State}'.";
+							LogWorkspaceProtocolFailure(info, reason, "MalformedResponse", unexpectedStateDetail);
+							return CodeServiceWorkspaceEnsureResult.MalformedResponse(unexpectedStateDetail);
 					}
-
-					if (status.State == CodeServiceWorkspaceState.Faulted)
-					{
-						if (!CodeServiceWorkspacePath.EqualsNormalized(status.ProjectRoot, normalizedProjectRoot))
-						{
-							string detail = "Faulted workspace status returned a different projectRoot.";
-							LogWorkspaceProtocolFailure(info, reason, "MalformedResponse", detail);
-							return CodeServiceWorkspaceEnsureResult.MalformedResponse(detail);
-						}
-
-						LogWorkspaceFaulted(info, reason, status.State, status.FaultKind, status.SourceFileCount, status.ProjectFileCount, status.SolutionFileCount);
-						return CodeServiceWorkspaceEnsureResult.FaultedFromStatus(status);
-					}
-
-					string unexpectedStateDetail =
-						$"Busy workspace observation reached unexpected state '{status.State}'.";
-					LogWorkspaceProtocolFailure(info, reason, "MalformedResponse", unexpectedStateDetail);
-					return CodeServiceWorkspaceEnsureResult.MalformedResponse(unexpectedStateDetail);
 				}
 
 				switch (status.Outcome)
@@ -1642,14 +1578,14 @@ internal sealed class CodeServiceClientCoordinator
 		catch (OperationCanceledException) when (observationCancellation.IsCancellationRequested)
 		{
 			if (!IsCurrentReadySession(session, readyGeneration))
-				return CodeServiceWorkspaceEnsureResult.StaleSession("Ready session changed at Busy observation deadline.");
+				return CodeServiceWorkspaceEnsureResult.StaleSession("Ready session changed at workspace readiness observation deadline.");
 
 			SafeLog(
 				"CodeService Workspace Unavailable",
-				$"Reason='{reason}', Outcome='ObservationTimeout', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', DeadlineSeconds='{WorkspaceBusyObservationDeadline.TotalSeconds:0}'"
+				$"Reason='{reason}', Outcome='ObservationTimeout', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', DeadlineSeconds='{WorkspaceReadyObservationDeadline.TotalSeconds:0}'"
 			);
 			return CodeServiceWorkspaceEnsureResult.ObservationTimeout(
-				$"workspace remained busy beyond the {WorkspaceBusyObservationDeadline.TotalSeconds:0} second observation deadline."
+				$"workspace did not reach Ready within the {WorkspaceReadyObservationDeadline.TotalSeconds:0} second observation deadline."
 			);
 		}
 	}
@@ -1665,7 +1601,7 @@ internal sealed class CodeServiceClientCoordinator
 	{
 		string reused = reusedExistingWorkspace.HasValue
 			? reusedExistingWorkspace.Value.ToString()
-			: "UnknownAfterBusy";
+			: "NotAvailableFromStatus";
 		SafeLog(
 			"CodeService Workspace Ready",
 			$"Reason='{reason}', SessionId='{info.SessionId}', ServicePid='{info.ServiceProcessIdentity.ProcessId}', ReusedExistingWorkspace='{reused}', SourceFileCount='{sourceFileCount}', ProjectFileCount='{projectFileCount}', SolutionFileCount='{solutionFileCount}'"
@@ -2055,6 +1991,11 @@ internal readonly struct CodeServiceWorkspaceEnsureResult
 		=> new(CodeServiceWorkspaceEnsureOutcome.Faulted, result.State, result.ProjectRoot, null, result.SourceFileCount, result.ProjectFileCount, result.SolutionFileCount, result.FaultKind, result.Detail);
 	internal static CodeServiceWorkspaceEnsureResult WorkspaceMismatch(CodeServiceWorkspaceInitializeResult result)
 		=> new(CodeServiceWorkspaceEnsureOutcome.WorkspaceMismatch, result.State, result.ProjectRoot, result.ReusedExistingWorkspace, result.SourceFileCount, result.ProjectFileCount, result.SolutionFileCount, result.FaultKind, result.Detail);
+	internal static CodeServiceWorkspaceEnsureResult WorkspaceMismatchFromStatus(
+		CodeServiceWorkspaceStatusResult result,
+		string detail
+	)
+		=> new(CodeServiceWorkspaceEnsureOutcome.WorkspaceMismatch, result.State, result.ProjectRoot, null, result.SourceFileCount, result.ProjectFileCount, result.SolutionFileCount, result.FaultKind, detail);
 	internal static CodeServiceWorkspaceEnsureResult InvalidRequest(string detail)
 		=> Simple(CodeServiceWorkspaceEnsureOutcome.InvalidRequest, detail);
 	internal static CodeServiceWorkspaceEnsureResult VersionMismatch(string detail)
@@ -2089,6 +2030,7 @@ internal readonly struct CodeServiceClientLaunchPreparation
 		bool canLaunch,
 		string executable,
 		string workingDirectory,
+		string projectRoot,
 		bool diagnosticLoggingRequested,
 		string detail
 	)
@@ -2096,6 +2038,7 @@ internal readonly struct CodeServiceClientLaunchPreparation
 		CanLaunch = canLaunch;
 		Executable = executable ?? "";
 		WorkingDirectory = workingDirectory ?? "";
+		ProjectRoot = projectRoot ?? "";
 		DiagnosticLoggingRequested = diagnosticLoggingRequested;
 		Detail = detail ?? "";
 	}
@@ -2103,19 +2046,50 @@ internal readonly struct CodeServiceClientLaunchPreparation
 	internal bool CanLaunch { get; }
 	internal string Executable { get; }
 	internal string WorkingDirectory { get; }
+	internal string ProjectRoot { get; }
 	internal bool DiagnosticLoggingRequested { get; }
 	internal string Detail { get; }
 
 	internal static CodeServiceClientLaunchPreparation Success(
 		string executable,
 		string workingDirectory,
+		string projectRoot,
 		bool diagnosticLoggingRequested
 	)
 	{
+		if (string.IsNullOrWhiteSpace(executable))
+			throw new ArgumentException("CodeService executable is required for launch preparation.", nameof(executable));
+		if (string.IsNullOrWhiteSpace(workingDirectory))
+			throw new ArgumentException("CodeService workingDirectory is required for launch preparation.", nameof(workingDirectory));
+		if (string.IsNullOrWhiteSpace(projectRoot))
+			throw new ArgumentException("CodeService projectRoot is required for launch preparation.", nameof(projectRoot));
+		if (
+			!CodeServiceWorkspacePath.TryNormalize(
+				projectRoot,
+				out string normalizedProjectRoot,
+				out string normalizationDetail
+			)
+		)
+		{
+			throw new ArgumentException(
+				"CodeService projectRoot launch preparation requires an absolute normalized path: "
+					+ normalizationDetail,
+				nameof(projectRoot)
+			);
+		}
+		if (!CodeServiceWorkspacePath.EqualsNormalized(projectRoot, normalizedProjectRoot))
+		{
+			throw new ArgumentException(
+				"CodeService projectRoot launch preparation requires an already-normalized absolute path.",
+				nameof(projectRoot)
+			);
+		}
+
 		return new CodeServiceClientLaunchPreparation(
 			true,
 			executable,
 			workingDirectory,
+			projectRoot,
 			diagnosticLoggingRequested,
 			""
 		);
@@ -2123,7 +2097,7 @@ internal readonly struct CodeServiceClientLaunchPreparation
 
 	internal static CodeServiceClientLaunchPreparation Unavailable(string detail)
 	{
-		return new CodeServiceClientLaunchPreparation(false, "", "", false, detail);
+		return new CodeServiceClientLaunchPreparation(false, "", "", "", false, detail);
 	}
 }
 

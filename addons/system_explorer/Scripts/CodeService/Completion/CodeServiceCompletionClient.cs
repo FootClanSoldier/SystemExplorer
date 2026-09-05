@@ -575,12 +575,16 @@ internal sealed class CodeServiceCompletionClient
 			int filterTextCount = 0;
 			int sortTextCount = 0;
 			int preselectCount = 0;
+			int semanticOriginCount = 0;
+			int inheritanceDepthCount = 0;
 			int? kind = null;
 			string displayText = null;
 			string insertText = null;
 			string filterText = null;
 			string sortText = null;
 			bool preselect = false;
+			CodeServiceCompletionSemanticOrigin semanticOrigin = CodeServiceCompletionSemanticOrigin.Unknown;
+			int? inheritanceDepth = null;
 
 			foreach (JsonProperty property in item.EnumerateObject())
 			{
@@ -660,6 +664,24 @@ internal sealed class CodeServiceCompletionClient
 						}
 						preselect = property.Value.GetBoolean();
 						break;
+					case "semanticOrigin":
+						if (++semanticOriginCount != 1
+							|| property.Value.ValueKind != JsonValueKind.String
+							|| property.Value.GetString() is not string semanticOriginText
+							|| !TryParseSemanticOrigin(semanticOriginText, out semanticOrigin))
+						{
+							detail = "Completion item semanticOrigin is invalid.";
+							return false;
+						}
+						break;
+					case "inheritanceDepth":
+						if (++inheritanceDepthCount != 1
+							|| !TryReadNullableInt32(property.Value, out inheritanceDepth))
+						{
+							detail = "Completion item inheritanceDepth is invalid.";
+							return false;
+						}
+						break;
 					default:
 						detail = "Completion item contained an unknown property.";
 						return false;
@@ -671,9 +693,17 @@ internal sealed class CodeServiceCompletionClient
 				|| insertTextCount != 1
 				|| filterTextCount != 1
 				|| sortTextCount != 1
-				|| preselectCount != 1)
+				|| preselectCount != 1
+				|| semanticOriginCount != 1
+				|| inheritanceDepthCount != 1)
 			{
 				detail = "Completion item omitted one or more required properties.";
+				return false;
+			}
+
+			if (!IsSemanticMetadataConsistent(semanticOrigin, inheritanceDepth))
+			{
+				detail = "Completion item semanticOrigin and inheritanceDepth are inconsistent.";
 				return false;
 			}
 
@@ -739,13 +769,47 @@ internal sealed class CodeServiceCompletionClient
 				insertText,
 				filterText,
 				sortText,
-				preselect
+				preselect,
+				semanticOrigin,
+				inheritanceDepth
 			));
 		}
 
 		items = parsed.AsReadOnly();
 		return true;
 	}
+
+	private static bool TryParseSemanticOrigin(
+		string value,
+		out CodeServiceCompletionSemanticOrigin semanticOrigin
+	)
+	{
+		semanticOrigin = value switch
+		{
+			"Unknown" => CodeServiceCompletionSemanticOrigin.Unknown,
+			"Local" => CodeServiceCompletionSemanticOrigin.Local,
+			"CurrentType" => CodeServiceCompletionSemanticOrigin.CurrentType,
+			"BaseType" => CodeServiceCompletionSemanticOrigin.BaseType,
+			"OtherUserCode" => CodeServiceCompletionSemanticOrigin.OtherUserCode,
+			"FrameworkOrOther" => CodeServiceCompletionSemanticOrigin.FrameworkOrOther,
+			_ => (CodeServiceCompletionSemanticOrigin)(-1),
+		};
+		return (int)semanticOrigin >= 0;
+	}
+
+	private static bool IsSemanticMetadataConsistent(
+		CodeServiceCompletionSemanticOrigin semanticOrigin,
+		int? inheritanceDepth
+	) => semanticOrigin switch
+	{
+		CodeServiceCompletionSemanticOrigin.CurrentType => inheritanceDepth == 0,
+		CodeServiceCompletionSemanticOrigin.BaseType => inheritanceDepth is int depth && depth >= 1,
+		CodeServiceCompletionSemanticOrigin.Unknown
+			or CodeServiceCompletionSemanticOrigin.Local
+			or CodeServiceCompletionSemanticOrigin.OtherUserCode
+			or CodeServiceCompletionSemanticOrigin.FrameworkOrOther => inheritanceDepth is null,
+		_ => false,
+	};
 
 	private static bool TryValidateRequest(
 		CodeServiceCompletionRequest request,
