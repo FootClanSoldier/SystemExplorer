@@ -36,7 +36,8 @@ internal readonly record struct CodeServiceCompletionRequest(
 	string DocumentPath,
 	long ClientVersion,
 	int Line,
-	int Character);
+	int Character,
+	string Prefix);
 
 internal enum CodeServiceCompletionSemanticOrigin
 {

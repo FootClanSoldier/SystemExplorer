@@ -302,7 +302,8 @@ public partial class SystemExplorerPlugin
 			admission.DocumentPath,
 			admission.ClientVersion,
 			request.Line,
-			request.LspCharacter
+			request.LspCharacter,
+			request.Prefix
 		);
 		var cancellation = new CancellationTokenSource();
 		Task<CodeServiceCompletionResult> flight;

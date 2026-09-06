@@ -68,6 +68,7 @@ internal sealed class CodeServiceCompletionClient
 				writer.WriteNumber("clientVersion", request.ClientVersion);
 				writer.WriteNumber("line", request.Line);
 				writer.WriteNumber("character", request.Character);
+				writer.WriteString("prefix", request.Prefix);
 				writer.WriteEndObject();
 			}
 			body = stream.ToArray();
@@ -558,7 +559,7 @@ internal sealed class CodeServiceCompletionClient
 		int normalizedUtf8Bytes = 0;
 		foreach (JsonElement item in element.EnumerateArray())
 		{
-			if (parsed.Count >= CodeServiceCompletionLimits.MaxCompletionItems)
+			if (parsed.Count >= CodeServiceCompletionLimits.MaxPublishedCompletionItems)
 			{
 				detail = "Completion item count exceeds the local bound.";
 				return false;
@@ -843,6 +844,19 @@ internal sealed class CodeServiceCompletionClient
 			|| request.Character > CodeServiceCompletionLimits.MaxCompletionCharacter)
 		{
 			detail = "Completion character is outside the local bound.";
+			return false;
+		}
+		if (request.Prefix == null)
+		{
+			detail = "Completion prefix is required.";
+			return false;
+		}
+		if (!TryGetBoundedUtf8ByteCount(
+			request.Prefix,
+			CodeServiceCompletionLimits.MaxCompletionPrefixUtf8Bytes,
+			out _))
+		{
+			detail = "Completion prefix exceeds the local UTF-8 bound.";
 			return false;
 		}
 		return true;
