@@ -15,6 +15,7 @@ internal sealed class CodeServiceClientSession : IDisposable
 	private CodeServiceWorkspaceClient _workspaceClient;
 	private CodeServiceDocumentClient _documentClient;
 	private CodeServiceCompletionClient _completionClient;
+	private CodeServiceCompletionResolveClient _completionResolveClient;
 	private CodeServiceClientCredentials _credentials;
 	private int _disposeState;
 
@@ -54,6 +55,11 @@ internal sealed class CodeServiceClientSession : IDisposable
 			SessionId
 		);
 		_completionClient = new CodeServiceCompletionClient(
+			_handshakeClient.HttpClient,
+			_credentials,
+			SessionId
+		);
+		_completionResolveClient = new CodeServiceCompletionResolveClient(
 			_handshakeClient.HttpClient,
 			_credentials,
 			SessionId
@@ -184,6 +190,25 @@ internal sealed class CodeServiceClientSession : IDisposable
 		return completionClient.CompleteAsync(request, cancellationToken);
 	}
 
+	internal Task<CodeServiceCompletionResolveResult> ResolveCompletionAsync(
+		CodeServiceCompletionResolveRequest request,
+		CancellationToken cancellationToken
+	)
+	{
+		CodeServiceCompletionResolveClient resolveClient = Volatile.Read(ref _completionResolveClient);
+		if (resolveClient == null)
+		{
+			return Task.FromResult(
+				CodeServiceCompletionResolveResult.Failure(
+					CodeServiceCompletionResolveOutcome.Disposed,
+					"CodeService client session was retired before completion resolve."
+				)
+			);
+		}
+
+		return resolveClient.ResolveAsync(request, cancellationToken);
+	}
+
 	internal CodeServiceClientSessionInfo ToInfo()
 	{
 		return new CodeServiceClientSessionInfo(
@@ -203,7 +228,10 @@ internal sealed class CodeServiceClientSession : IDisposable
 		if (Interlocked.Exchange(ref _disposeState, 1) != 0)
 			return;
 
-		// Close completion/document/workspace request admission before disposing the shared HTTP transport/credentials.
+		// Close completion/resolve/document/workspace request admission before disposing the shared HTTP transport/credentials.
+		CodeServiceCompletionResolveClient completionResolveClient = Interlocked.Exchange(ref _completionResolveClient, null);
+		completionResolveClient?.CloseAdmission();
+
 		CodeServiceCompletionClient completionClient = Interlocked.Exchange(ref _completionClient, null);
 		completionClient?.CloseAdmission();
 

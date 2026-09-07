@@ -29,7 +29,7 @@ internal sealed class AutocompletePrefixExtractor
 			return false;
 
 		string line = codeEdit.GetLine(lineIndex) ?? "";
-		if (!TryGodotColumnToUtf16Index(line, godotCaretColumn, out int caretUtf16Index))
+		if (!AutocompleteTextPositionConverter.TryGodotColumnToUtf16Index(line, godotCaretColumn, out int caretUtf16Index))
 			return false;
 
 		int prefixStartUtf16 = caretUtf16Index;
@@ -52,55 +52,6 @@ internal sealed class AutocompletePrefixExtractor
 			caretUtf16Index,
 			prefixStartColumn
 		);
-		return true;
-	}
-
-	private static bool TryGodotColumnToUtf16Index(
-		string line,
-		int godotColumn,
-		out int utf16Index
-	)
-	{
-		utf16Index = 0;
-		int currentColumn = 0;
-		while (utf16Index < line.Length && currentColumn < godotColumn)
-		{
-			char current = line[utf16Index];
-			if (char.IsHighSurrogate(current))
-			{
-				if (utf16Index + 1 >= line.Length || !char.IsLowSurrogate(line[utf16Index + 1]))
-					return false;
-				utf16Index += 2;
-			}
-			else if (char.IsLowSurrogate(current))
-			{
-				return false;
-			}
-			else
-			{
-				utf16Index++;
-			}
-			currentColumn++;
-		}
-
-		if (currentColumn != godotColumn)
-			return false;
-
-		// Validate the untouched suffix as well so malformed UTF-16 cannot produce an
-		// apparently valid LSP position at an earlier caret boundary.
-		for (int index = utf16Index; index < line.Length; index++)
-		{
-			if (char.IsHighSurrogate(line[index]))
-			{
-				if (index + 1 >= line.Length || !char.IsLowSurrogate(line[index + 1]))
-					return false;
-				index++;
-			}
-			else if (char.IsLowSurrogate(line[index]))
-			{
-				return false;
-			}
-		}
 		return true;
 	}
 

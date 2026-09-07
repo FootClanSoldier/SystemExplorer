@@ -578,6 +578,8 @@ internal sealed class CodeServiceCompletionClient
 			int preselectCount = 0;
 			int semanticOriginCount = 0;
 			int inheritanceDepthCount = 0;
+			int requiresImportCount = 0;
+			int completionHandleCount = 0;
 			int? kind = null;
 			string displayText = null;
 			string insertText = null;
@@ -586,70 +588,46 @@ internal sealed class CodeServiceCompletionClient
 			bool preselect = false;
 			CodeServiceCompletionSemanticOrigin semanticOrigin = CodeServiceCompletionSemanticOrigin.Unknown;
 			int? inheritanceDepth = null;
+			bool requiresImport = false;
+			Guid? completionHandle = null;
 
 			foreach (JsonProperty property in item.EnumerateObject())
 			{
 				switch (property.Name)
 				{
 					case "kind":
-						if (++kindCount != 1
-							|| !TryReadNullableInt32(property.Value, out kind))
+						if (++kindCount != 1 || !TryReadNullableInt32(property.Value, out kind))
 						{
 							detail = "Completion item kind is invalid.";
 							return false;
 						}
 						break;
 					case "displayText":
-						if (++displayTextCount != 1
-							|| property.Value.ValueKind != JsonValueKind.String)
-						{
-							detail = "Completion item displayText is invalid.";
-							return false;
-						}
-						displayText = property.Value.GetString();
-						if (displayText == null)
+						if (++displayTextCount != 1 || property.Value.ValueKind != JsonValueKind.String
+							|| (displayText = property.Value.GetString()) == null)
 						{
 							detail = "Completion item displayText is invalid.";
 							return false;
 						}
 						break;
 					case "insertText":
-						if (++insertTextCount != 1
-							|| property.Value.ValueKind != JsonValueKind.String)
-						{
-							detail = "Completion item insertText is invalid.";
-							return false;
-						}
-						insertText = property.Value.GetString();
-						if (insertText == null)
+						if (++insertTextCount != 1 || !TryReadNullableString(property.Value, out insertText))
 						{
 							detail = "Completion item insertText is invalid.";
 							return false;
 						}
 						break;
 					case "filterText":
-						if (++filterTextCount != 1
-							|| property.Value.ValueKind != JsonValueKind.String)
-						{
-							detail = "Completion item filterText is invalid.";
-							return false;
-						}
-						filterText = property.Value.GetString();
-						if (filterText == null)
+						if (++filterTextCount != 1 || property.Value.ValueKind != JsonValueKind.String
+							|| (filterText = property.Value.GetString()) == null)
 						{
 							detail = "Completion item filterText is invalid.";
 							return false;
 						}
 						break;
 					case "sortText":
-						if (++sortTextCount != 1
-							|| property.Value.ValueKind != JsonValueKind.String)
-						{
-							detail = "Completion item sortText is invalid.";
-							return false;
-						}
-						sortText = property.Value.GetString();
-						if (sortText == null)
+						if (++sortTextCount != 1 || property.Value.ValueKind != JsonValueKind.String
+							|| (sortText = property.Value.GetString()) == null)
 						{
 							detail = "Completion item sortText is invalid.";
 							return false;
@@ -657,8 +635,7 @@ internal sealed class CodeServiceCompletionClient
 						break;
 					case "preselect":
 						if (++preselectCount != 1
-							|| (property.Value.ValueKind != JsonValueKind.True
-								&& property.Value.ValueKind != JsonValueKind.False))
+							|| (property.Value.ValueKind != JsonValueKind.True && property.Value.ValueKind != JsonValueKind.False))
 						{
 							detail = "Completion item preselect is invalid.";
 							return false;
@@ -666,8 +643,7 @@ internal sealed class CodeServiceCompletionClient
 						preselect = property.Value.GetBoolean();
 						break;
 					case "semanticOrigin":
-						if (++semanticOriginCount != 1
-							|| property.Value.ValueKind != JsonValueKind.String
+						if (++semanticOriginCount != 1 || property.Value.ValueKind != JsonValueKind.String
 							|| property.Value.GetString() is not string semanticOriginText
 							|| !TryParseSemanticOrigin(semanticOriginText, out semanticOrigin))
 						{
@@ -676,10 +652,41 @@ internal sealed class CodeServiceCompletionClient
 						}
 						break;
 					case "inheritanceDepth":
-						if (++inheritanceDepthCount != 1
-							|| !TryReadNullableInt32(property.Value, out inheritanceDepth))
+						if (++inheritanceDepthCount != 1 || !TryReadNullableInt32(property.Value, out inheritanceDepth))
 						{
 							detail = "Completion item inheritanceDepth is invalid.";
+							return false;
+						}
+						break;
+					case "requiresImport":
+						if (++requiresImportCount != 1
+							|| (property.Value.ValueKind != JsonValueKind.True && property.Value.ValueKind != JsonValueKind.False))
+						{
+							detail = "Completion item requiresImport is invalid.";
+							return false;
+						}
+						requiresImport = property.Value.GetBoolean();
+						break;
+					case "completionHandle":
+						if (++completionHandleCount != 1)
+						{
+							detail = "Completion item completionHandle is duplicated.";
+							return false;
+						}
+						if (property.Value.ValueKind == JsonValueKind.Null)
+						{
+							completionHandle = null;
+						}
+						else if (property.Value.ValueKind == JsonValueKind.String
+							&& property.Value.GetString() is string handleText
+							&& TryGetCanonicalGuid(handleText, out Guid parsedHandle)
+							&& parsedHandle != Guid.Empty)
+						{
+							completionHandle = parsedHandle;
+						}
+						else
+						{
+							detail = "Completion item completionHandle is invalid.";
 							return false;
 						}
 						break;
@@ -689,91 +696,64 @@ internal sealed class CodeServiceCompletionClient
 				}
 			}
 
-			if (kindCount != 1
-				|| displayTextCount != 1
-				|| insertTextCount != 1
-				|| filterTextCount != 1
-				|| sortTextCount != 1
-				|| preselectCount != 1
-				|| semanticOriginCount != 1
-				|| inheritanceDepthCount != 1)
+			if (kindCount != 1 || displayTextCount != 1 || insertTextCount != 1 || filterTextCount != 1
+				|| sortTextCount != 1 || preselectCount != 1 || semanticOriginCount != 1
+				|| inheritanceDepthCount != 1 || requiresImportCount != 1 || completionHandleCount != 1)
 			{
-				detail = "Completion item omitted one or more required properties.";
+				detail = "Completion item omitted one or more required schema-v5 properties.";
 				return false;
 			}
-
 			if (!IsSemanticMetadataConsistent(semanticOrigin, inheritanceDepth))
 			{
 				detail = "Completion item semanticOrigin and inheritanceDepth are inconsistent.";
 				return false;
 			}
 
-			if (!TryGetBoundedUtf8ByteCount(
-				displayText,
-				CodeServiceCompletionLimits.MaxDisplayTextUtf8Bytes,
-				out int displayTextBytes))
+			var parsedItem = new CodeServiceCompletionItem(
+				kind, displayText, insertText, filterText, sortText, preselect,
+				semanticOrigin, inheritanceDepth, requiresImport, completionHandle);
+			if (!parsedItem.HasValidCommitContract)
+			{
+				detail = "Completion item violates the schema-v5 commit contract.";
+				return false;
+			}
+
+			if (!TryGetBoundedUtf8ByteCount(displayText, CodeServiceCompletionLimits.MaxDisplayTextUtf8Bytes, out int displayTextBytes))
 			{
 				detail = "Completion item displayText exceeds the local UTF-8 bound.";
 				return false;
 			}
-			if (!TryGetBoundedUtf8ByteCount(
-				insertText,
-				CodeServiceCompletionLimits.MaxInsertTextUtf8Bytes,
-				out int insertTextBytes))
+			int insertTextBytes = 0;
+			if (insertText != null && !TryGetBoundedUtf8ByteCount(insertText, CodeServiceCompletionLimits.MaxInsertTextUtf8Bytes, out insertTextBytes))
 			{
 				detail = "Completion item insertText exceeds the local UTF-8 bound.";
 				return false;
 			}
-			if (!TryGetBoundedUtf8ByteCount(
-				filterText,
-				CodeServiceCompletionLimits.MaxFilterTextUtf8Bytes,
-				out int filterTextBytes))
+			if (!TryGetBoundedUtf8ByteCount(filterText, CodeServiceCompletionLimits.MaxFilterTextUtf8Bytes, out int filterTextBytes))
 			{
 				detail = "Completion item filterText exceeds the local UTF-8 bound.";
 				return false;
 			}
-			if (!TryGetBoundedUtf8ByteCount(
-				sortText,
-				CodeServiceCompletionLimits.MaxSortTextUtf8Bytes,
-				out int sortTextBytes))
+			if (!TryGetBoundedUtf8ByteCount(sortText, CodeServiceCompletionLimits.MaxSortTextUtf8Bytes, out int sortTextBytes))
 			{
 				detail = "Completion item sortText exceeds the local UTF-8 bound.";
 				return false;
 			}
 
 			int itemBytes;
-			try
-			{
-				itemBytes = checked(
-					displayTextBytes
-					+ insertTextBytes
-					+ filterTextBytes
-					+ sortTextBytes
-				);
-			}
+			try { itemBytes = checked(displayTextBytes + insertTextBytes + filterTextBytes + sortTextBytes); }
 			catch (OverflowException)
 			{
 				detail = "Completion item UTF-8 accounting overflowed.";
 				return false;
 			}
-			if (normalizedUtf8Bytes
-				> CodeServiceCompletionLimits.MaxNormalizedCompletionTextUtf8Bytes - itemBytes)
+			if (normalizedUtf8Bytes > CodeServiceCompletionLimits.MaxNormalizedCompletionTextUtf8Bytes - itemBytes)
 			{
 				detail = "Completion item text exceeds the aggregate local UTF-8 bound.";
 				return false;
 			}
-
 			normalizedUtf8Bytes += itemBytes;
-			parsed.Add(new CodeServiceCompletionItem(
-				kind,
-				displayText,
-				insertText,
-				filterText,
-				sortText,
-				preselect,
-				semanticOrigin,
-				inheritanceDepth
-			));
+			parsed.Add(parsedItem);
 		}
 
 		items = parsed.AsReadOnly();

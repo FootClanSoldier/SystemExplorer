@@ -1,4 +1,5 @@
 #if TOOLS
+#nullable enable annotations
 using System;
 using System.Collections.Generic;
 
@@ -52,12 +53,19 @@ internal enum CodeServiceCompletionSemanticOrigin
 internal sealed record CodeServiceCompletionItem(
 	int? Kind,
 	string DisplayText,
-	string InsertText,
+	string? InsertText,
 	string FilterText,
 	string SortText,
 	bool Preselect,
 	CodeServiceCompletionSemanticOrigin SemanticOrigin,
-	int? InheritanceDepth);
+	int? InheritanceDepth,
+	bool RequiresImport,
+	Guid? CompletionHandle)
+{
+	internal bool HasValidCommitContract => RequiresImport
+		? InsertText == null && CompletionHandle.HasValue && CompletionHandle.Value != Guid.Empty
+		: !string.IsNullOrEmpty(InsertText) && !CompletionHandle.HasValue;
+}
 
 internal readonly record struct CodeServiceCompletionResult(
 	CodeServiceCompletionOutcome Outcome,

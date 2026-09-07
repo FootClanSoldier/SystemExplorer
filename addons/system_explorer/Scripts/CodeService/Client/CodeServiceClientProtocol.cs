@@ -9,7 +9,8 @@ internal static class CodeServiceClientProtocol
 	internal const int ReadinessSchemaVersion = 1;
 	internal const int WorkspaceSchemaVersion = 1;
 	internal const int DocumentSynchronizationSchemaVersion = 1;
-	internal const int CompletionSchemaVersion = 4;
+	internal const int CompletionSchemaVersion = 5;
+	internal const int CompletionResolveSchemaVersion = 1;
 
 	internal const string ReadinessRecordType = "codeservice.ready";
 	internal const string HandshakePath = "/control/handshake";
@@ -18,6 +19,7 @@ internal static class CodeServiceClientProtocol
 	internal const string DocumentEpochPath = "/documents/epoch";
 	internal const string DocumentSnapshotPath = "/documents/snapshot";
 	internal const string CompletionPath = "/completion";
+	internal const string CompletionResolvePath = "/completion/resolve";
 
 	internal const string ProtocolVersionHeaderName =
 		"X-SystemExplorer-Protocol-Version";
@@ -54,6 +56,7 @@ internal static class CodeServiceClientProtocol
 	internal const string SemanticUnavailableOutcome = "SemanticUnavailable";
 	internal const string DocumentNotSynchronizedOutcome = "DocumentNotSynchronized";
 	internal const string CompletionUnavailableOutcome = "CompletionUnavailable";
+	internal const string CompletionExpiredOutcome = "CompletionExpired";
 
 	internal const int AuthenticationTokenByteCount = 32;
 	internal const int AuthenticationTokenBase64Length = 44;

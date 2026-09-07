@@ -14,5 +14,8 @@ internal static class CodeServiceCompletionLimits
 	internal const int MaxNormalizedCompletionTextUtf8Bytes = 1024 * 1024;
 	internal const int MaxCompletionLine = 1_000_000;
 	internal const int MaxCompletionCharacter = 1_000_000;
+	internal const int MaxCompletionResolveRequestBodySizeBytes = 16 * 1024;
+	internal const int MaxCompletionResolveResponseBodySizeBytes = 24 * 1024 * 1024;
+	internal const int MaxCompletionResolveEditNewTextUtf8Bytes = 4 * 1024 * 1024;
 }
 #endif

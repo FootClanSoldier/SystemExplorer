@@ -341,6 +341,59 @@ internal sealed class CodeServiceClientCoordinator
 		return result;
 	}
 
+	internal async Task<CodeServiceCompletionResolveResult> ResolveCompletionAsync(
+		CodeServiceClientSessionInfo expectedSession,
+		CodeServiceCompletionResolveRequest request,
+		CancellationToken cancellationToken = default
+	)
+	{
+		CodeServiceClientSession session;
+		long readyGeneration;
+		lock (_gate)
+		{
+			if (_retirementStarted)
+			{
+				return CodeServiceCompletionResolveResult.Failure(
+					CodeServiceCompletionResolveOutcome.Disposed,
+					"CodeService coordinator is retiring."
+				);
+			}
+			if (_state != CodeServiceClientCoordinatorState.Ready
+				|| _currentSession == null
+				|| !IsExactSessionInfo(_currentSession.ToInfo(), expectedSession))
+			{
+				return CodeServiceCompletionResolveResult.Failure(
+					CodeServiceCompletionResolveOutcome.StaleSession,
+					"Expected completion resolve session is no longer the current Ready session."
+				);
+			}
+			session = _currentSession;
+			readyGeneration = _readyGeneration;
+		}
+
+		CodeServiceCompletionResolveResult result = await session.ResolveCompletionAsync(
+			request,
+			cancellationToken
+		).ConfigureAwait(false);
+
+		lock (_gate)
+		{
+			if (_retirementStarted
+				|| _state != CodeServiceClientCoordinatorState.Ready
+				|| _readyGeneration != readyGeneration
+				|| !ReferenceEquals(_currentSession, session)
+				|| !IsExactSessionInfo(session.ToInfo(), expectedSession))
+			{
+				return CodeServiceCompletionResolveResult.Failure(
+					CodeServiceCompletionResolveOutcome.StaleSession,
+					"Completion resolve result belongs to a retired logical service session."
+				);
+			}
+		}
+
+		return result;
+	}
+
 	internal Task<CodeServiceClientEnsureResult> ReportSessionFailureAndEnsureReadyAsync(
 		CodeServiceClientSessionInfo expectedSession,
 		string reason,

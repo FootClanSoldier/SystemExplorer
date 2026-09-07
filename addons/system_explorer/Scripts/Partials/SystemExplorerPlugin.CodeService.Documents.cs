@@ -1250,6 +1250,7 @@ public partial class SystemExplorerPlugin
 
 		if (logicalSessionChanged)
 		{
+			CancelAutocompleteImportResolveForLogicalSessionChange(currentSession);
 			_codeServiceDocumentUnavailableLoggedSessionId = "";
 			_codeServiceDocumentUnavailableLoggedServicePid = 0;
 			_codeServiceDocumentUnavailableLoggedServiceStartTicks = 0;
@@ -1265,6 +1266,7 @@ public partial class SystemExplorerPlugin
 		TryTrackCurrentCodeServiceDocument();
 		RefreshCodeServiceDocumentActivationCandidateFromCurrentBinding(binding);
 		RequestCodeServiceDocumentQuietBoundary();
+		TryResumePendingAutocompleteCompletionAfterWorkspaceReady();
 
 		TryLogEditorOperation(
 			"CodeService Document Workspace Ready",

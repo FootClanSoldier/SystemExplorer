@@ -12,6 +12,7 @@ internal sealed class AutocompleteEditorBinding
 	private const string TextChangedDescription = "C# Autocomplete CodeEdit TextChanged";
 	private const string CompletionRequestedDescription =
 		"C# Autocomplete CodeEdit CodeCompletionRequested";
+	private const string GuiInputDescription = "C# Autocomplete CodeEdit GuiInput";
 
 	private readonly Func<ScriptEditor> _scriptEditorProvider;
 	private readonly Func<GodotObject, StringName, string, string, bool> _connectPluginSignal;
@@ -19,7 +20,9 @@ internal sealed class AutocompleteEditorBinding
 	private readonly string _scriptChangedMethodName;
 	private readonly string _textChangedMethodName;
 	private readonly string _completionRequestedMethodName;
+	private readonly string _guiInputMethodName;
 	private readonly Action _invalidateCompletionState;
+	private readonly Action _invalidateImportResolveState;
 	private readonly AutocompleteCodeEditThemeController _themeController;
 
 	private ScriptEditor _scriptEditor;
@@ -32,7 +35,9 @@ internal sealed class AutocompleteEditorBinding
 		string scriptChangedMethodName,
 		string textChangedMethodName,
 		string completionRequestedMethodName,
+		string guiInputMethodName,
 		Action invalidateCompletionState,
+		Action invalidateImportResolveState,
 		AutocompleteCodeEditThemeController themeController
 	)
 	{
@@ -50,9 +55,13 @@ internal sealed class AutocompleteEditorBinding
 		_completionRequestedMethodName =
 			completionRequestedMethodName
 			?? throw new ArgumentNullException(nameof(completionRequestedMethodName));
+		_guiInputMethodName = guiInputMethodName ?? throw new ArgumentNullException(nameof(guiInputMethodName));
 		_invalidateCompletionState =
 			invalidateCompletionState
 			?? throw new ArgumentNullException(nameof(invalidateCompletionState));
+		_invalidateImportResolveState =
+			invalidateImportResolveState
+			?? throw new ArgumentNullException(nameof(invalidateImportResolveState));
 		_themeController =
 			themeController ?? throw new ArgumentNullException(nameof(themeController));
 	}
@@ -147,6 +156,29 @@ internal sealed class AutocompleteEditorBinding
 			return false;
 		}
 
+		bool guiInputConnected = _connectPluginSignal(
+			codeEdit,
+			Control.SignalName.GuiInput,
+			_guiInputMethodName,
+			GuiInputDescription
+		);
+		if (!guiInputConnected)
+		{
+			_disconnectPluginSignal(
+				codeEdit,
+				CodeEdit.SignalName.CodeCompletionRequested,
+				_completionRequestedMethodName,
+				$"{CompletionRequestedDescription} rollback"
+			);
+			_disconnectPluginSignal(
+				codeEdit,
+				TextEdit.SignalName.TextChanged,
+				_textChangedMethodName,
+				$"{TextChangedDescription} rollback"
+			);
+			return false;
+		}
+
 		_codeEdit = codeEdit;
 		_themeController.Apply(codeEdit);
 		return true;
@@ -196,6 +228,8 @@ internal sealed class AutocompleteEditorBinding
 		_invalidateCompletionState();
 
 		CodeEdit codeEdit = _codeEdit;
+		if (codeEdit != null)
+			_invalidateImportResolveState();
 
 		if (IsValidGodotObject(codeEdit))
 		{
@@ -210,6 +244,12 @@ internal sealed class AutocompleteEditorBinding
 				CodeEdit.SignalName.CodeCompletionRequested,
 				_completionRequestedMethodName,
 				CompletionRequestedDescription
+			);
+			_disconnectPluginSignal(
+				codeEdit,
+				Control.SignalName.GuiInput,
+				_guiInputMethodName,
+				GuiInputDescription
 			);
 
 			if (cancelCompletion)

@@ -15,34 +15,33 @@ internal sealed class AutocompleteCompletionSession
 		string scriptPath,
 		int line,
 		int prefixStartColumn,
-		IReadOnlyList<AutocompleteCompletionItem> publishedItems
-	)
+		long requestGeneration,
+		IReadOnlyList<AutocompleteCompletionItem> publishedItems,
+		AutocompleteCompletionAuthority authority)
 	{
 		if (publishedItems == null)
 			throw new ArgumentNullException(nameof(publishedItems));
+		Authority = authority ?? throw new ArgumentNullException(nameof(authority));
 
 		_scriptPath = scriptPath ?? "";
 		_line = line;
 		_prefixStartColumn = prefixStartColumn;
+		RequestGeneration = requestGeneration;
 		_publishedItems = new List<AutocompleteCompletionItem>(publishedItems).AsReadOnly();
 	}
 
+	internal string ScriptPath => _scriptPath;
+	internal long RequestGeneration { get; }
+	internal AutocompleteCompletionAuthority Authority { get; }
 	internal IReadOnlyList<AutocompleteCompletionItem> PublishedItems => _publishedItems;
 
-	internal bool CanRemainOpen(
-		string scriptPath,
-		int line,
-		int prefixStartColumn,
-		string currentPrefix
-	)
+	internal bool CanRemainOpen(string scriptPath, int line, int prefixStartColumn, string currentPrefix)
 	{
 		if (!string.Equals(_scriptPath, scriptPath ?? "", StringComparison.Ordinal)
 			|| _line != line
 			|| _prefixStartColumn != prefixStartColumn
 			|| currentPrefix == null)
-		{
 			return false;
-		}
 
 		bool hasMatchingItem = false;
 		bool hasActionableMatchingItem = false;
@@ -53,9 +52,15 @@ internal sealed class AutocompleteCompletionSession
 				continue;
 
 			hasMatchingItem = true;
-			string insertText = item?.InsertText ?? "";
-			if (filterText.Length > currentPrefix.Length || insertText.Length > currentPrefix.Length)
+			if (filterText.Length > currentPrefix.Length
+				|| (item?.InsertText != null && item.InsertText.Length > currentPrefix.Length)
+				|| (item?.RequiresImport == true
+					&& item.CompletionHandle.HasValue
+					&& item.DisplayText != null
+					&& item.DisplayText.Length > currentPrefix.Length))
+			{
 				hasActionableMatchingItem = true;
+			}
 		}
 
 		return currentPrefix.Length == 0
