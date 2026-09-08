@@ -1,6 +1,6 @@
 # System Explorer CodeService Bootstrap
 
-`native/CodeServiceBootstrap` contains the Windows x86_64 GDExtension used to
+`Native/CodeServiceBootstrap` contains the Windows x86_64 GDExtension used to
 start SystemExplorer.CodeService as early as possible during Godot startup.
 
 The extension runs at `GDEXTENSION_INITIALIZATION_CORE` and, when native
@@ -36,15 +36,15 @@ readiness, completion warmup, and document processing.
 
 Descriptor:
 
-`native/CodeServiceBootstrap/CodeServiceBootstrap.gdextension`
+`/Scripts/Native/CodeServiceBootstrap/CodeServiceBootstrap.gdextension`
 
 DLL:
 
-`native/CodeServiceBootstrap/bin/CodeServiceBootstrap.windows.editor.x86_64.dll`
+`/Scripts/Native/CodeServiceBootstrap/bin/CodeServiceBootstrap.windows.editor.x86_64.dll`
 
 Bootstrap config:
 
-`native/CodeServiceBootstrap/native_bootstrap.ini`
+`/Scripts/Native/CodeServiceBootstrap/native_bootstrap.ini`
 
 The config is generated and maintained by the managed plugin.
 
