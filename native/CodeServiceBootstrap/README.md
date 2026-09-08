@@ -36,15 +36,15 @@ readiness, completion warmup, and document processing.
 
 Descriptor:
 
-`/Scripts/Native/CodeServiceBootstrap/CodeServiceBootstrap.gdextension`
+`/addons/system_explorer/Scripts/Native/CodeServiceBootstrap/CodeServiceBootstrap.gdextension`
 
 DLL:
 
-`/Scripts/Native/CodeServiceBootstrap/bin/CodeServiceBootstrap.windows.editor.x86_64.dll`
+`/addons/system_explorer/Scripts/Native/CodeServiceBootstrap/bin/CodeServiceBootstrap.windows.editor.x86_64.dll`
 
 Bootstrap config:
 
-`/Scripts/Native/CodeServiceBootstrap/native_bootstrap.ini`
+`/addons/system_explorer/Scripts/Native/CodeServiceBootstrap/native_bootstrap.ini`
 
 The config is generated and maintained by the managed plugin.
 
