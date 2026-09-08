@@ -214,6 +214,7 @@ public partial class SystemExplorerPlugin
 			ShutdownAutocomplete();
 			ShutdownScriptEditorSync();
 			ShutdownFolderBindingFilesystemLifecycle();
+			DisconnectProjectSettingsSignalIntegration();
 			DisconnectNamespaceRefactorDialogSignals();
 			DisconnectDockSignals();
 			_namespaceRefactorHost = null;
@@ -495,6 +496,10 @@ public partial class SystemExplorerPlugin
 				failureDetail = "The Refactor Namespace managed host could not be restored.";
 				return false;
 			}
+
+			// ProjectSettings live synchronization is permanent editor integration, but it
+			// must remain noncritical to dock recovery and CodeService startup.
+			EnsureProjectSettingsSignalIntegrationCurrent();
 
 			return true;
 		}

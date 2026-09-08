@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
+using SystemExplorer.CodeService.Bootstrap;
 using SystemExplorer.CodeService.Client;
 using SystemExplorer.CodeService.Installation;
 using SystemExplorer.CodeService.Runtime;
@@ -15,6 +16,8 @@ public partial class SystemExplorerPlugin
 	private const string CodeServiceLaunchMarkerMetadataKey =
 		"_system_explorer_code_service_launch_v1";
 	private const string CodeServiceLaunchMarkerVersion = "v1";
+	private const string CodeServiceNativeBootstrapConfigResourcePath =
+		"res://addons/system_explorer/Scripts/Native/StartupTiming/native_bootstrap.ini";
 
 	private bool _isInstallingCodeService;
 	private CodeServiceToolService _codeServiceToolService;
@@ -186,11 +189,32 @@ public partial class SystemExplorerPlugin
 
 			if (result.Success)
 			{
+				if (
+					string.Equals(
+						result.InstalledVersion,
+						CodeServiceToolService.RequiredVersion,
+						StringComparison.Ordinal
+					)
+				)
+				{
+					TryPublishCodeServiceNativeBootstrapAuthorization(
+						result.InstalledVersion,
+						"Verified Installation"
+					);
+				}
+
 				CodeServiceClientEnsureResult sessionResult =
 					await EnsureInstalledCodeServiceSessionAsync(operation);
 				result = AddCodeServiceSessionStatusToInstallationResult(
 					result,
 					sessionResult
+				);
+			}
+			else if (IsVerifiedCodeServiceInstallationVersionMismatch(result))
+			{
+				TryDisableCodeServiceNativeBootstrapAuthorization(
+					"Verified Installation Version Mismatch",
+					result.InstalledVersion
 				);
 			}
 
@@ -765,6 +789,27 @@ public partial class SystemExplorerPlugin
 			);
 		}
 
+		if (
+			string.Equals(
+				currentInfo.ServiceVersion,
+				CodeServiceToolService.RequiredVersion,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			TryPublishCodeServiceNativeBootstrapAuthorization(
+				currentInfo.ServiceVersion,
+				"Authenticated Session Ready"
+			);
+		}
+		else
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Authorization Rejected",
+				$"Source='Authenticated Session Ready', ServiceVersion='{currentInfo.ServiceVersion}', RequiredVersion='{CodeServiceToolService.RequiredVersion}'"
+			);
+		}
+
 		string projectRoot;
 		try
 		{
@@ -1062,6 +1107,194 @@ public partial class SystemExplorerPlugin
 	{
 		return left.ProcessId == right.ProcessId
 			&& left.StartTimeUtcTicks == right.StartTimeUtcTicks;
+	}
+
+	private static bool IsVerifiedCodeServiceInstallationVersionMismatch(
+		CodeServiceInstallationResult result
+	)
+	{
+		return !result.Success
+			&& !string.IsNullOrWhiteSpace(result.InstalledVersion)
+			&& !string.Equals(
+				result.InstalledVersion,
+				CodeServiceToolService.RequiredVersion,
+				StringComparison.Ordinal
+			);
+	}
+
+	private void TryPublishCodeServiceNativeBootstrapAuthorization(
+		string verifiedServiceVersion,
+		string source
+	)
+	{
+		if (
+			!string.Equals(
+				verifiedServiceVersion,
+				CodeServiceToolService.RequiredVersion,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Authorization Rejected",
+				$"Source='{source}', VerifiedServiceVersion='{verifiedServiceVersion}', RequiredVersion='{CodeServiceToolService.RequiredVersion}'"
+			);
+			return;
+		}
+
+		if (
+			!TryCreateCodeServiceNativeBootstrapConfigService(
+				out CodeServiceNativeBootstrapConfigService configService,
+				out string compositionDetail
+			)
+		)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Config Write Failed",
+				$"Source='{source}', Detail='{compositionDetail}'"
+			);
+			return;
+		}
+
+		bool diagnosticLogging = DebugState;
+		if (
+			!configService.TryPublishEnabled(
+				verifiedServiceVersion,
+				diagnosticLogging,
+				out bool changed,
+				out string writeDetail
+			)
+		)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Config Write Failed",
+				$"Source='{source}', Detail='{writeDetail}'"
+			);
+			return;
+		}
+
+		if (changed)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Authorized",
+				$"Source='{source}', VerifiedServiceVersion='{verifiedServiceVersion}', DiagnosticLogging='{diagnosticLogging}'"
+			);
+		}
+	}
+
+	private void TrySynchronizeCodeServiceNativeBootstrapDiagnosticLogging(
+		bool diagnosticLogging,
+		string source
+	)
+	{
+		if (
+			!TryCreateCodeServiceNativeBootstrapConfigService(
+				out CodeServiceNativeBootstrapConfigService configService,
+				out string compositionDetail
+			)
+		)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Diagnostic Logging Sync Failed",
+				$"Source='{source}', Detail='{compositionDetail}'"
+			);
+			return;
+		}
+
+		CodeServiceNativeBootstrapDiagnosticSynchronizationResult result =
+			configService.SynchronizeExistingDiagnosticLogging(
+				diagnosticLogging,
+				out string synchronizationDetail
+			);
+
+		if (result == CodeServiceNativeBootstrapDiagnosticSynchronizationResult.Updated)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Diagnostic Logging Synchronized",
+				$"DiagnosticLogging='{diagnosticLogging}', Source='{source}'"
+			);
+		}
+		else if (result == CodeServiceNativeBootstrapDiagnosticSynchronizationResult.Failed)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Diagnostic Logging Sync Failed",
+				$"Source='{source}', Detail='{synchronizationDetail}'"
+			);
+		}
+	}
+
+	private void TryDisableCodeServiceNativeBootstrapAuthorization(
+		string source,
+		string verifiedInstalledVersion
+	)
+	{
+		if (
+			!TryCreateCodeServiceNativeBootstrapConfigService(
+				out CodeServiceNativeBootstrapConfigService configService,
+				out string compositionDetail
+			)
+		)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Config Disable Failed",
+				$"Source='{source}', VerifiedInstalledVersion='{verifiedInstalledVersion}', Detail='{compositionDetail}'"
+			);
+			return;
+		}
+
+		bool diagnosticLogging = DebugState;
+		if (
+			!configService.TryPublishDisabled(
+				diagnosticLogging,
+				out bool changed,
+				out string writeDetail
+			)
+		)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Config Disable Failed",
+				$"Source='{source}', VerifiedInstalledVersion='{verifiedInstalledVersion}', Detail='{writeDetail}'"
+			);
+			return;
+		}
+
+		if (changed)
+		{
+			TryLogEditorOperation(
+				"CodeService Native Bootstrap Disabled",
+				$"Source='{source}', VerifiedInstalledVersion='{verifiedInstalledVersion}', DiagnosticLogging='{diagnosticLogging}'"
+			);
+		}
+	}
+
+	private static bool TryCreateCodeServiceNativeBootstrapConfigService(
+		out CodeServiceNativeBootstrapConfigService configService,
+		out string detail
+	)
+	{
+		configService = null;
+		detail = "";
+
+		try
+		{
+			string absoluteConfigPath = ProjectSettings.GlobalizePath(
+				CodeServiceNativeBootstrapConfigResourcePath
+			);
+			if (string.IsNullOrWhiteSpace(absoluteConfigPath))
+			{
+				detail = "Godot could not globalize the native bootstrap config path.";
+				return false;
+			}
+
+			configService = new CodeServiceNativeBootstrapConfigService(absoluteConfigPath);
+			return true;
+		}
+		catch (Exception exception)
+		{
+			detail =
+				$"Native bootstrap config composition failed: {exception.GetType().Name}, HResult=0x{exception.HResult:X8}.";
+			return false;
+		}
 	}
 
 	private void ShowCodeServiceInstallationResult(CodeServiceInstallationResult result)

@@ -1,4 +1,5 @@
 #if TOOLS
+using System;
 using Godot;
 
 public partial class SystemExplorerPlugin
@@ -7,6 +8,11 @@ public partial class SystemExplorerPlugin
 	private const string ProjectSettingsPath = "addons/system_explorer";
 	private const string EnableQuickActionsSetting = ProjectSettingsPath + "/enable_quick_actions";
 	private const string DebugStateSetting = ProjectSettingsPath + "/enable_debug_state";
+	private static readonly StringName ProjectSettingsChangedSignalName = new("settings_changed");
+
+	private GodotObject _projectSettingsSignalSource;
+	private bool _projectSettingsDebugStateObservationInitialized;
+	private bool _projectSettingsObservedDebugState;
 
 	private bool EnableQuickActions => GetBoolProjectSetting(EnableQuickActionsSetting, false);
 
@@ -17,6 +23,131 @@ public partial class SystemExplorerPlugin
 	{
 		EnsureBoolProjectSetting(EnableQuickActionsSetting, false);
 		EnsureBoolProjectSetting(DebugStateSetting, false);
+	}
+
+	private void InitializeProjectSettingsDebugStateObservation()
+	{
+		_projectSettingsObservedDebugState = DebugState;
+		_projectSettingsDebugStateObservationInitialized = true;
+	}
+
+	private bool EnsureProjectSettingsSignalIntegrationCurrent()
+	{
+		try
+		{
+			GodotObject source = ProjectSettings.Singleton;
+			if (
+				!IsPluginSignalConnected(
+					source,
+					ProjectSettingsChangedSignalName,
+					nameof(OnProjectSettingsChangedSignal)
+				)
+				&& !TryConnectPluginSignal(
+					source,
+					ProjectSettingsChangedSignalName,
+					nameof(OnProjectSettingsChangedSignal),
+					nameof(ProjectSettings)
+				)
+			)
+			{
+				return false;
+			}
+
+			if (
+				!IsPluginSignalConnected(
+					source,
+					ProjectSettingsChangedSignalName,
+					nameof(OnProjectSettingsChangedSignal)
+				)
+			)
+			{
+				return false;
+			}
+
+			_projectSettingsSignalSource = source;
+			return true;
+		}
+		catch (Exception exception)
+		{
+			DebugLogger.LogOperation(
+				"Project Settings signal integration failed",
+				$"Exception='{exception}'"
+			);
+			return false;
+		}
+	}
+
+	private void DisconnectProjectSettingsSignalIntegration()
+	{
+		GodotObject source = _projectSettingsSignalSource;
+		if (!IsValidGodotObject(source))
+		{
+			try
+			{
+				source = ProjectSettings.Singleton;
+			}
+			catch
+			{
+				source = null;
+			}
+		}
+
+		DisconnectPluginSignal(
+			source,
+			ProjectSettingsChangedSignalName,
+			nameof(OnProjectSettingsChangedSignal),
+			nameof(ProjectSettings)
+		);
+		_projectSettingsSignalSource = null;
+	}
+
+	private void OnProjectSettingsChangedSignal()
+	{
+		if (!EnsureManagedAssemblyStateCurrent("Project Settings Changed"))
+			return;
+
+		string[] changedSettings;
+		try
+		{
+			changedSettings = ProjectSettings.GetChangedSettings();
+		}
+		catch (Exception exception)
+		{
+			DebugLogger.LogOperation(
+				"Project Settings changed-settings read failed",
+				$"Exception='{exception}'"
+			);
+			return;
+		}
+
+		bool debugStateChanged = false;
+		foreach (string settingPath in changedSettings)
+		{
+			if (string.Equals(settingPath, DebugStateSetting, StringComparison.Ordinal))
+			{
+				debugStateChanged = true;
+				break;
+			}
+		}
+
+		if (!debugStateChanged)
+			return;
+
+		bool diagnosticLogging = DebugState;
+		if (
+			_projectSettingsDebugStateObservationInitialized
+			&& _projectSettingsObservedDebugState == diagnosticLogging
+		)
+		{
+			return;
+		}
+
+		_projectSettingsObservedDebugState = diagnosticLogging;
+		_projectSettingsDebugStateObservationInitialized = true;
+		TrySynchronizeCodeServiceNativeBootstrapDiagnosticLogging(
+			diagnosticLogging,
+			"Project Settings Changed"
+		);
 	}
 
 	private static bool GetBoolProjectSetting(string settingPath, bool defaultValue)

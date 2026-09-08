@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using SystemExplorer.CodeService.Documents;
 
 public partial class SystemExplorerPlugin
 {
@@ -20,6 +21,7 @@ public partial class SystemExplorerPlugin
 	);
 
 	private PersistentTreeSelection? _persistentTreeSelection;
+	private string _persistentLastScriptDocumentPath = "";
 	private bool _isRestoringOrRebuildingPersistentTreeState;
 	private bool _treeStateSaveDirty;
 	private bool _treeStateSaveQueued;
@@ -27,11 +29,13 @@ public partial class SystemExplorerPlugin
 	private bool _treeStatePersistenceShutdown;
 	private string _lastTreeStateLoadFailure = "";
 	private string _lastTreeStateSaveFailure = "";
+	private string _lastPersistentLastScriptRestoreFailure = "";
 
 	private void LoadPersistentTreeStateBestEffort(string reason)
 	{
 		_expandedItems.Clear();
 		_persistentTreeSelection = null;
+		_persistentLastScriptDocumentPath = "";
 
 		try
 		{
@@ -114,16 +118,39 @@ public partial class SystemExplorerPlugin
 				);
 			}
 
+			if (
+				TryReadPersistentLastScriptDocumentPath(
+					root,
+					out string loadedLastScriptDocumentPath,
+					out string lastScriptFailureDetail
+				)
+			)
+			{
+				_persistentLastScriptDocumentPath = loadedLastScriptDocumentPath;
+				_lastPersistentLastScriptRestoreFailure = "";
+			}
+			else
+			{
+				_persistentLastScriptDocumentPath = "";
+				LogPersistentLastScriptRestoreIgnored(reason, lastScriptFailureDetail);
+			}
+
 			_lastTreeStateLoadFailure = "";
 			DebugLogger.LogOperation(
 				"Persistent tree view state loaded",
-				BuildPersistentTreeStateLogDetail(reason, _expandedItems.Count, _persistentTreeSelection)
+				BuildPersistentTreeStateLogDetail(
+					reason,
+					_expandedItems.Count,
+					_persistentTreeSelection,
+					_persistentLastScriptDocumentPath
+				)
 			);
 		}
 		catch (Exception exception)
 		{
 			_expandedItems.Clear();
 			_persistentTreeSelection = null;
+			_persistentLastScriptDocumentPath = "";
 			LogTreeStateLoadFailureOnce(reason, exception.Message);
 		}
 	}
@@ -172,6 +199,38 @@ public partial class SystemExplorerPlugin
 			return false;
 
 		selection = candidate;
+		return true;
+	}
+
+	private static bool TryReadPersistentLastScriptDocumentPath(
+		JsonElement root,
+		out string documentPath,
+		out string failureDetail
+	)
+	{
+		documentPath = "";
+		failureDetail = "";
+
+		if (!root.TryGetProperty("last_script", out JsonElement lastScriptElement))
+			return true;
+
+		if (lastScriptElement.ValueKind == JsonValueKind.Null)
+			return true;
+
+		if (lastScriptElement.ValueKind != JsonValueKind.String)
+		{
+			failureDetail = "Tree-state last_script must be a string or null.";
+			return false;
+		}
+
+		string candidate = lastScriptElement.GetString() ?? "";
+		if (!CodeServiceDocumentPath.TryValidateWirePath(candidate, out string pathDetail))
+		{
+			failureDetail = $"Tree-state last_script is invalid: {pathDetail}";
+			return false;
+		}
+
+		documentPath = candidate;
 		return true;
 	}
 
@@ -284,6 +343,7 @@ public partial class SystemExplorerPlugin
 				.OrderBy(metadata => metadata, StringComparer.OrdinalIgnoreCase)
 				.ToList();
 			PersistentTreeSelection? selectedItem = _persistentTreeSelection;
+			string lastScriptDocumentPath = _persistentLastScriptDocumentPath;
 
 			if (
 				selectedItem.HasValue
@@ -335,6 +395,13 @@ public partial class SystemExplorerPlugin
 					writer.WriteNullValue();
 				}
 
+				writer.WritePropertyName("last_script");
+
+				if (string.IsNullOrEmpty(lastScriptDocumentPath))
+					writer.WriteNullValue();
+				else
+					writer.WriteStringValue(lastScriptDocumentPath);
+
 				writer.WriteEndObject();
 				writer.Flush();
 			}
@@ -373,13 +440,38 @@ public partial class SystemExplorerPlugin
 			_lastTreeStateSaveFailure = "";
 			DebugLogger.LogOperation(
 				"Persistent tree view state saved",
-				BuildPersistentTreeStateLogDetail(reason, orderedExpandedItems.Count, selectedItem)
+				BuildPersistentTreeStateLogDetail(
+					reason,
+					orderedExpandedItems.Count,
+					selectedItem,
+					lastScriptDocumentPath
+				)
 			);
 		}
 		catch (Exception exception)
 		{
 			LogTreeStateSaveFailureOnce(reason, exception.Message);
 		}
+	}
+
+	private void UpdatePersistentLastScriptFromResourcePath(string resourcePath)
+	{
+		if (
+			!CodeServiceDocumentPath.TryFromResourcePath(
+				resourcePath,
+				out string documentPath,
+				out _
+			)
+		)
+		{
+			return;
+		}
+
+		if (CodeServiceDocumentPath.Equals(_persistentLastScriptDocumentPath, documentPath))
+			return;
+
+		_persistentLastScriptDocumentPath = documentPath;
+		QueuePersistentTreeStateSave();
 	}
 
 	private void UpdatePersistentTreeSelectionFromTreeItem(TreeItem item)
@@ -967,14 +1059,18 @@ public partial class SystemExplorerPlugin
 	private static string BuildPersistentTreeStateLogDetail(
 		string reason,
 		int expandedItemCount,
-		PersistentTreeSelection? selection
+		PersistentTreeSelection? selection,
+		string lastScriptDocumentPath
 	)
 	{
 		string selectionDetail = selection.HasValue
 			? $"SelectedSystem='{selection.Value.SystemName}', SelectedMetadata='{selection.Value.Metadata}'"
 			: "SelectedSystem='<null>', SelectedMetadata='<null>'";
+		string lastScriptDetail = string.IsNullOrEmpty(lastScriptDocumentPath)
+			? "<null>"
+			: lastScriptDocumentPath;
 
-		return $"Reason='{reason}', ExpandedItems={expandedItemCount}, {selectionDetail}";
+		return $"Reason='{reason}', ExpandedItems={expandedItemCount}, {selectionDetail}, LastScript='{lastScriptDetail}'";
 	}
 
 	private static string BuildPersistentTreeSelectionLogDetail(
@@ -995,6 +1091,24 @@ public partial class SystemExplorerPlugin
 			"Persistent tree selection restore ignored",
 			$"Reason='{reason}', {detail}{selectionDetail}"
 		);
+	}
+
+	private void LogPersistentLastScriptRestoreIgnored(string reason, string detail)
+	{
+		string failure = $"Reason='{reason}', Detail='{detail}'";
+		if (
+			string.Equals(
+				_lastPersistentLastScriptRestoreFailure,
+				failure,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		_lastPersistentLastScriptRestoreFailure = failure;
+		DebugLogger.LogOperation("Persistent last script restore ignored", failure);
 	}
 
 	private void LogTreeStateLoadFailureOnce(string reason, string detail)

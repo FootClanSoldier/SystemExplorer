@@ -187,6 +187,8 @@ public partial class SystemExplorerPlugin : EditorPlugin
 
 		EnsureProjectSettings();
 		StartCodeServiceSessionEnsureAtStartup();
+		InitializeProjectSettingsDebugStateObservation();
+		EnsureProjectSettingsSignalIntegrationCurrent();
 		EnsureEditorShortcutsRegistered();
 		LoadEditorIcons();
 		EnsureScriptTemplateExists();
@@ -441,6 +443,7 @@ public sealed class {{CLASS_NAME}}
 		ShutdownAutocomplete();
 		ShutdownScriptEditorSync();
 		ShutdownFolderBindingFilesystemLifecycle();
+		DisconnectProjectSettingsSignalIntegration();
 		DisconnectNamespaceRefactorDialogSignals();
 		DisconnectDockSignals();
 		_namespaceRefactorHost = null;

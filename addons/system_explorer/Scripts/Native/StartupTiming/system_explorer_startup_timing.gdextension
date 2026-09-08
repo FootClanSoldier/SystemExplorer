@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "system_explorer_startup_timing_init"
+compatibility_minimum = "4.6"
+compatibility_maximum = "4.6"
+reloadable = false
+
+[libraries]
+
+windows.editor.x86_64 = "./bin/system_explorer_startup_timing.windows.editor.x86_64.dll"
