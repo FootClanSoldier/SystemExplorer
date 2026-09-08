@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "code_service_bootstrap_init"
+compatibility_minimum = "4.6"
+compatibility_maximum = "4.6"
+reloadable = false
+
+[libraries]
+
+windows.editor.x86_64 = "./bin/CodeServiceBootstrap.windows.editor.x86_64.dll"

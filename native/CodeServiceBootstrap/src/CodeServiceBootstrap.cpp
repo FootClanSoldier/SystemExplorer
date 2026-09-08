@@ -3,14 +3,14 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <shlobj.h>
 
 namespace {
 
 constexpr uint64_t kDotNetDateTimeEpochOffsetTicks = 504911232000000000ULL;
-constexpr wchar_t kLogDirectoryName[] = L"SystemExplorerNativeStartupTiming";
-constexpr wchar_t kLogFilePrefix[] = L"system_explorer_native_startup_";
+constexpr wchar_t kLogFilePrefix[] = L"code_service_bootstrap_";
 constexpr wchar_t kLogFileSuffix[] = L".jsonl";
-constexpr char kPatchName[] = "Plugin.gdextension_startup_document_transport_adoption_v1";
+constexpr char kPatchName[] = "Plugin.gdextension_codeservice_bootstrap_identity_diagnostics_root_v1";
 constexpr char kExpectedServiceVersion[] = "0.1.0";
 constexpr DWORD kPathCapacity = 4096;
 constexpr DWORD kCommandLineCapacity = 12288;
@@ -41,7 +41,7 @@ struct CapturedEvent {
     bool ready;
 };
 
-struct StartupTimingState {
+struct CodeServiceBootstrapState {
     DWORD pid;
     uint64_t processCreationFileTime100ns;
     uint64_t processStartTimeUtcTicks;
@@ -63,7 +63,7 @@ struct BootstrapConfig {
     char verifiedServiceVersion[kServiceVersionCapacity];
 };
 
-StartupTimingState g_state{};
+CodeServiceBootstrapState g_state{};
 
 uint64_t FileTimeToUInt64(const FILETIME &value) {
     return (static_cast<uint64_t>(value.dwHighDateTime) << 32U) |
@@ -138,26 +138,73 @@ bool AppendPathComponent(WideBuffer &buffer, const wchar_t *component) {
     return buffer.ok;
 }
 
-void InitializeLogPath(StartupTimingState &state) {
+bool EnsureDirectoryExists(const wchar_t *path) {
+    if (path == nullptr || path[0] == L'\0') {
+        return false;
+    }
+
+    DWORD attributes = GetFileAttributesW(path);
+    if (attributes != INVALID_FILE_ATTRIBUTES) {
+        return (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U;
+    }
+
+    if (CreateDirectoryW(path, nullptr) != FALSE) {
+        return true;
+    }
+
+    if (GetLastError() != ERROR_ALREADY_EXISTS) {
+        return false;
+    }
+
+    attributes = GetFileAttributesW(path);
+    return attributes != INVALID_FILE_ATTRIBUTES
+        && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U;
+}
+
+bool AppendAndEnsureDirectory(WideBuffer &directory, const wchar_t *component) {
+    if (!AppendPathComponent(directory, component) || !directory.ok) {
+        return false;
+    }
+    return EnsureDirectoryExists(directory.data);
+}
+
+void InitializeLogPath(CodeServiceBootstrapState &state) {
     if (!state.identityReady || !state.diagnosticsEnabled) {
         return;
     }
 
-    wchar_t tempPath[kPathCapacity]{};
-    DWORD tempLength = GetTempPathW(kPathCapacity, tempPath);
-    if (tempLength == 0U || tempLength >= kPathCapacity) {
+    PWSTR localApplicationData = nullptr;
+    const HRESULT knownFolderResult = SHGetKnownFolderPath(
+        FOLDERID_LocalAppData,
+        KF_FLAG_DEFAULT,
+        nullptr,
+        &localApplicationData
+    );
+    if (FAILED(knownFolderResult) || localApplicationData == nullptr || localApplicationData[0] == L'\0') {
+        if (localApplicationData != nullptr) {
+            CoTaskMemFree(localApplicationData);
+        }
         return;
     }
 
     wchar_t directoryPath[kPathCapacity]{};
     WideBuffer directory{directoryPath, kPathCapacity, 0U, true};
-    AppendWideLiteral(directory, tempPath);
-    AppendPathComponent(directory, kLogDirectoryName);
+    AppendWideLiteral(directory, localApplicationData);
+    CoTaskMemFree(localApplicationData);
+    localApplicationData = nullptr;
+
     if (!directory.ok) {
         return;
     }
-
-    CreateDirectoryW(directory.data, nullptr);
+    if (!AppendAndEnsureDirectory(directory, L"SystemExplorer")) {
+        return;
+    }
+    if (!AppendAndEnsureDirectory(directory, L"Diagnostics")) {
+        return;
+    }
+    if (!AppendAndEnsureDirectory(directory, L"CodeServiceBootstrap")) {
+        return;
+    }
 
     WideBuffer path{state.logPath, kPathCapacity, 0U, true};
     AppendWideLiteral(path, directory.data);
@@ -274,7 +321,7 @@ void AppendFixedMillisecondsFromMicroseconds(CharBuffer &buffer, uint64_t micros
     AppendChar(buffer, static_cast<char>('0' + (fractional % 10ULL)));
 }
 
-uint64_t QpcDeltaToMicroseconds(const StartupTimingState &state, const LARGE_INTEGER &counter) {
+uint64_t QpcDeltaToMicroseconds(const CodeServiceBootstrapState &state, const LARGE_INTEGER &counter) {
     if (!state.qpcReady || state.qpcFrequency.QuadPart <= 0 || counter.QuadPart < state.entryCounter.QuadPart) {
         return 0ULL;
     }
@@ -288,7 +335,7 @@ uint64_t QpcDeltaToMicroseconds(const StartupTimingState &state, const LARGE_INT
 }
 
 bool AppendDiagnosticRecord(
-    StartupTimingState &state,
+    CodeServiceBootstrapState &state,
     const char *eventName,
     const char *initializationLevel,
     const FILETIME &eventFileTime,
@@ -394,7 +441,7 @@ bool AppendDiagnosticRecord(
 }
 
 void AppendEventRecord(
-    StartupTimingState &state,
+    CodeServiceBootstrapState &state,
     const char *eventName,
     const char *initializationLevel,
     const FILETIME &eventFileTime,
@@ -416,7 +463,7 @@ void AppendEventRecord(
 }
 
 void CaptureAndAppendBootstrapRecord(
-    StartupTimingState &state,
+    CodeServiceBootstrapState &state,
     const char *eventName,
     const char *reasonCode,
     DWORD win32Error,
@@ -446,7 +493,7 @@ void CaptureAndAppendBootstrapRecord(
 }
 
 void InitializeStateFromEntry(
-    StartupTimingState &state,
+    CodeServiceBootstrapState &state,
     const FILETIME &entryFileTime,
     const LARGE_INTEGER &entryCounter,
     bool entryCounterReady
@@ -477,7 +524,7 @@ void InitializeStateFromEntry(
     }
 }
 
-void CaptureCoreInitializationEvent(StartupTimingState &state) {
+void CaptureCoreInitializationEvent(CodeServiceBootstrapState &state) {
     LARGE_INTEGER counter{};
     FILETIME eventFileTime{};
     const bool counterReady = QueryPerformanceCounter(&counter) != FALSE;
@@ -488,7 +535,7 @@ void CaptureCoreInitializationEvent(StartupTimingState &state) {
     state.coreEvent.ready = counterReady;
 }
 
-void ActivateDiagnostics(StartupTimingState &state) {
+void ActivateDiagnostics(CodeServiceBootstrapState &state) {
     if (state.diagnosticsEnabled) {
         return;
     }
@@ -518,7 +565,7 @@ void ActivateDiagnostics(StartupTimingState &state) {
 }
 
 void CaptureAndAppendInitializationEvent(
-    StartupTimingState &state,
+    CodeServiceBootstrapState &state,
     const char *eventName,
     const char *initializationLevel
 ) {
@@ -616,20 +663,20 @@ bool ResolveBootstrapConfigPath(
     wchar_t *configPath,
     DWORD capacity
 ) {
-    wchar_t startupTimingDirectory[kPathCapacity]{};
-    if (!CopyWideString(startupTimingDirectory, kPathCapacity, modulePath)) {
+    wchar_t bootstrapDirectory[kPathCapacity]{};
+    if (!CopyWideString(bootstrapDirectory, kPathCapacity, modulePath)) {
         return false;
     }
 
-    if (!RemoveLastPathComponent(startupTimingDirectory)) {
+    if (!RemoveLastPathComponent(bootstrapDirectory)) {
         return false;
     }
-    if (!RemoveLastPathComponent(startupTimingDirectory)) {
+    if (!RemoveLastPathComponent(bootstrapDirectory)) {
         return false;
     }
 
     WideBuffer path{configPath, capacity, 0U, true};
-    AppendWideLiteral(path, startupTimingDirectory);
+    AppendWideLiteral(path, bootstrapDirectory);
     AppendPathComponent(path, kBootstrapConfigFileName);
     return path.ok;
 }
@@ -1602,7 +1649,7 @@ bool BuildDocumentFileSystemPath(
 }
 
 void CaptureAndAppendStartupDocumentRecord(
-    StartupTimingState &state,
+    CodeServiceBootstrapState &state,
     const char *eventName,
     const char *reasonCode,
     DWORD win32Error,
@@ -1648,7 +1695,7 @@ void CaptureAndAppendStartupDocumentRecord(
 }
 
 bool DiscoverStartupDocumentPath(
-    StartupTimingState &state,
+    CodeServiceBootstrapState &state,
     const wchar_t *projectRoot,
     wchar_t *documentPath,
     DWORD documentPathCapacity
@@ -2050,7 +2097,7 @@ uint64_t TryReadProcessStartTimeUtcTicks(HANDLE process) {
     return FileTimeToUInt64(creation) + kDotNetDateTimeEpochOffsetTicks;
 }
 
-void TryEarlyLaunchCodeService(StartupTimingState &state) {
+void TryEarlyLaunchCodeService(CodeServiceBootstrapState &state) {
     if (InterlockedCompareExchange(&state.coreLaunchAttempted, 1L, 0L) != 0L) {
         return;
     }
@@ -2261,11 +2308,11 @@ void TryEarlyLaunchCodeService(StartupTimingState &state) {
     );
 }
 
-void InitializeSystemExplorerStartupTiming(
+void InitializeCodeServiceBootstrap(
     void *p_userdata,
     GDExtensionInitializationLevel p_level
 ) {
-    StartupTimingState *state = static_cast<StartupTimingState *>(p_userdata);
+    CodeServiceBootstrapState *state = static_cast<CodeServiceBootstrapState *>(p_userdata);
     if (state == nullptr) {
         return;
     }
@@ -2301,7 +2348,7 @@ void InitializeSystemExplorerStartupTiming(
     }
 }
 
-void DeinitializeSystemExplorerStartupTiming(
+void DeinitializeCodeServiceBootstrap(
     void *p_userdata,
     GDExtensionInitializationLevel p_level
 ) {
@@ -2312,7 +2359,7 @@ void DeinitializeSystemExplorerStartupTiming(
 } // namespace
 
 extern "C" __declspec(dllexport) GDExtensionBool
-system_explorer_startup_timing_init(
+code_service_bootstrap_init(
     GDExtensionInterfaceGetProcAddress p_get_proc_address,
     GDExtensionClassLibraryPtr p_library,
     GDExtensionInitialization *r_initialization
@@ -2334,8 +2381,8 @@ system_explorer_startup_timing_init(
 
     r_initialization->minimum_initialization_level = GDEXTENSION_INITIALIZATION_CORE;
     r_initialization->userdata = &g_state;
-    r_initialization->initialize = &InitializeSystemExplorerStartupTiming;
-    r_initialization->deinitialize = &DeinitializeSystemExplorerStartupTiming;
+    r_initialization->initialize = &InitializeCodeServiceBootstrap;
+    r_initialization->deinitialize = &DeinitializeCodeServiceBootstrap;
 
     return static_cast<GDExtensionBool>(1);
 }

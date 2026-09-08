@@ -4,7 +4,7 @@
 
 /*
  * Minimal subset of the Godot 4.6 GDExtension C ABI required by the
- * System Explorer startup-timing diagnostic extension.
+ * System Explorer CodeServiceBootstrap.
  *
  * These definitions mirror the Godot 4.6.3 gdextension_interface data for
  * entry/init callbacks only. Keep this header intentionally small: it is not

@@ -1,5 +1,3 @@
-System Explorer partial class map:
-
 SystemExplorerPlugin.cs (Core file)
 - Constants, shared fields, editor lifecycle, icon loading, template bootstrap, dock registration/removal, and core setup/teardown flow.
 - Calls the CodeService startup ensure hook immediately after EnsureProjectSettings() so DebugState is available before any new service launch; those two calls remain directly adjacent and in the same order. Only after the startup ensure returns does core startup best-effort establish the ProjectSettings live-sync signal integration, so binding failure cannot gate CodeService discovery/handshake/fallback or the remaining dock/persistent-state startup flow.

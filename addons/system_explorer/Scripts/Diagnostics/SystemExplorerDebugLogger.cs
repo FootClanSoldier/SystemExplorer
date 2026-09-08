@@ -1,5 +1,4 @@
 #if TOOLS
-using Godot;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -10,8 +9,6 @@ namespace SystemExplorer.Diagnostics;
 
 internal sealed class SystemExplorerDebugLogger : IDisposable
 {
-	private const string DebugLogDirectory = "user://system_explorer/logs";
-
 	private readonly Func<bool> _isEnabled;
 	private readonly SystemExplorerPersistentLogFile _persistentLogFile = new();
 
@@ -145,7 +142,18 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 
 	private static string CreateProcessLogPath()
 	{
-		string absoluteDirectory = ProjectSettings.GlobalizePath(DebugLogDirectory);
+		string localApplicationData = Environment.GetFolderPath(
+			Environment.SpecialFolder.LocalApplicationData
+		);
+		if (string.IsNullOrWhiteSpace(localApplicationData))
+			throw new IOException("The LocalApplicationData diagnostics root could not be resolved.");
+
+		string absoluteDirectory = Path.Combine(
+			localApplicationData,
+			"SystemExplorer",
+			"Diagnostics",
+			"GodotPlugin"
+		);
 		using Process process = Process.GetCurrentProcess();
 		DateTime processStartTime = process.StartTime;
 		string fileName =

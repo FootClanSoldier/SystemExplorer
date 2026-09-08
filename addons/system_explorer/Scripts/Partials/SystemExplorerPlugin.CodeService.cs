@@ -17,7 +17,7 @@ public partial class SystemExplorerPlugin
 		"_system_explorer_code_service_launch_v1";
 	private const string CodeServiceLaunchMarkerVersion = "v1";
 	private const string CodeServiceNativeBootstrapConfigResourcePath =
-		"res://addons/system_explorer/Scripts/Native/StartupTiming/native_bootstrap.ini";
+		"res://addons/system_explorer/Scripts/Native/CodeServiceBootstrap/native_bootstrap.ini";
 
 	private bool _isInstallingCodeService;
 	private CodeServiceToolService _codeServiceToolService;

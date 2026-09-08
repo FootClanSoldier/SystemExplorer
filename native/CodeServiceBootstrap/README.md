@@ -1,6 +1,6 @@
 # System Explorer CodeService Bootstrap
 
-`Native/StartupTiming` contains the Windows x86_64 GDExtension used to
+`native/CodeServiceBootstrap` contains the Windows x86_64 GDExtension used to
 start SystemExplorer.CodeService as early as possible during Godot startup.
 
 The extension runs at `GDEXTENSION_INITIALIZATION_CORE` and, when native
@@ -36,15 +36,15 @@ readiness, completion warmup, and document processing.
 
 Descriptor:
 
-`Native/StartupTiming/system_explorer_startup_timing.gdextension`
+`native/CodeServiceBootstrap/CodeServiceBootstrap.gdextension`
 
 DLL:
 
-`Native/StartupTiming/bin/system_explorer_startup_timing.windows.editor.x86_64.dll`
+`native/CodeServiceBootstrap/bin/CodeServiceBootstrap.windows.editor.x86_64.dll`
 
 Bootstrap config:
 
-`Native/StartupTiming/native_bootstrap.ini`
+`native/CodeServiceBootstrap/native_bootstrap.ini`
 
 The config is generated and maintained by the managed plugin.
 
@@ -53,10 +53,10 @@ The config is generated and maintained by the managed plugin.
 Windows x86_64, MSVC:
 
 ```text
-cmake -S Native\StartupTiming -B Native\StartupTiming\build -A x64
-cmake --build Native\StartupTiming\build --config Release
+cmake -S native\CodeServiceBootstrap -B native\CodeServiceBootstrap\build -A x64
+cmake --build native\CodeServiceBootstrap\build --config Release
 ```
 
 Output:
 
-`Native/StartupTiming/bin/system_explorer_startup_timing.windows.editor.x86_64.dll`
+`native/CodeServiceBootstrap/bin/CodeServiceBootstrap.windows.editor.x86_64.dll`
