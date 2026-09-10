@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using SystemExplorer.EditorIntegration.ScriptEditing;
 using SystemExplorer.FileOperations;
+using SystemExplorer.Notes;
 
 public partial class SystemExplorerPlugin
 {
@@ -669,6 +670,27 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
+			NoteLifecycleMutation noteLifecycleMutation = NoteLifecycleMutation.NoOp;
+			bool removesNoteStructure =
+				removeMetadata.StartsWith("system::", StringComparison.Ordinal)
+				|| removeMetadata.StartsWith("folder::", StringComparison.Ordinal);
+
+			if (
+				removesNoteStructure
+				&& !TryApplyReversibleNoteRemove(
+					removeMetadata,
+					snapshot,
+					out noteLifecycleMutation
+				)
+			)
+			{
+				DebugLogger.LogOperation(
+					"Virtual remove cancelled: Note lifecycle apply failed",
+					removeMetadata
+				);
+				return;
+			}
+
 			bool virtualRemoveAuthorizationMatchesRemovedSystem =
 				intentionalEmptySaveAuthorization != null
 				&& removeMetadata.StartsWith("system::", StringComparison.Ordinal)
@@ -698,6 +720,12 @@ public partial class SystemExplorerPlugin
 				)
 			)
 			{
+				RollbackNoteLifecycleAfterReversibleMetadataPersistenceFailure(
+					noteLifecycleMutation,
+					"Virtual Remove",
+					removeMetadata
+				);
+
 				if (!HasActiveTreeOperationFailure)
 				{
 					ReportTreeOperationFailure(
@@ -913,6 +941,18 @@ public partial class SystemExplorerPlugin
 			);
 		}
 
+		if (
+			systemsSaved
+			&& metadataRepairResult.RemovedSelectedStructure
+			&& (
+				removeMetadata.StartsWith("system::", StringComparison.Ordinal)
+				|| removeMetadata.StartsWith("folder::", StringComparison.Ordinal)
+			)
+		)
+		{
+			ApplyPhysicalRemoveNoteCleanup(removeMetadata);
+		}
+
 		BuildTree(keepCurrentExpansionState: true);
 		RestoreTreeSelectionAfterRemove(
 			removeSelectionState,
@@ -931,8 +971,8 @@ public partial class SystemExplorerPlugin
 
 		string metadataFailureMessage = GetActiveTreeOperationFailureUserMessage();
 		bool shouldShowPhysicalRemoveResult =
-			requestedPhysicalResources
-			&& (deleteResult.HasIssues || !string.IsNullOrWhiteSpace(metadataFailureMessage));
+			(requestedPhysicalResources && deleteResult.HasIssues)
+			|| !string.IsNullOrWhiteSpace(metadataFailureMessage);
 
 		if (shouldShowPhysicalRemoveResult)
 		{
@@ -1060,7 +1100,9 @@ public partial class SystemExplorerPlugin
 
 		List<string> entries = _systems[occurrence.SystemName];
 		int index = entries.FindIndex(entry =>
-			string.Equals(entry, occurrence.Entry, StringComparison.Ordinal)
+			IsScriptOrSceneEntry(entry)
+			&& !IsSceneEntry(entry)
+			&& string.Equals(entry, occurrence.Entry, StringComparison.Ordinal)
 			&& string.Equals(
 				NormalizeScriptPathForSync(GetScriptPathFromEntry(entry)),
 				occurrence.ScriptPath,
@@ -2446,7 +2488,8 @@ public partial class SystemExplorerPlugin
 				}
 			}
 
-			sections.Add("No System Explorer metadata was removed.");
+			if ((requestedResourcePaths?.Count ?? 0) > 0)
+				sections.Add("No System Explorer metadata was removed.");
 		}
 		else
 		{
@@ -2649,6 +2692,8 @@ public partial class SystemExplorerPlugin
 		bool renameHandledPersistence = false;
 		bool folderBindingsChanged = false;
 		SystemsAndFolderBindingsSnapshot metadataSnapshot = null;
+		NoteLifecycleMutation noteLifecycleMutation = NoteLifecycleMutation.NoOp;
+		string noteLifecycleTargetDescription = "";
 		string oldSystemName = "";
 		string oldFolderMetadata = "";
 		string newFolderPath = "";
@@ -2790,18 +2835,75 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		if (!renameHandledPersistence)
+		{
+			if (itemType == RenameConflictItemType.System)
+			{
+				noteLifecycleTargetDescription =
+					$"System rename '{oldSystemName}' -> '{newName}'";
+
+				if (
+					!TryApplyReversibleNoteSystemRename(
+						oldSystemName,
+						newName,
+						metadataSnapshot,
+						out noteLifecycleMutation
+					)
+				)
+				{
+					DebugLogger.LogOperation(
+						"Rename cancelled: Note lifecycle apply failed",
+						noteLifecycleTargetDescription
+					);
+					return;
+				}
+			}
+			else if (itemType == RenameConflictItemType.Folder)
+			{
+				string systemName = GetSystemNameFromMetadata(oldFolderMetadata);
+				string oldFolderPath = GetFolderPathFromMetadata(oldFolderMetadata);
+				noteLifecycleTargetDescription =
+					$"Folder rename System='{systemName}', OldFolderPath='{oldFolderPath}', NewFolderPath='{newFolderPath}'";
+
+				if (
+					!TryApplyReversibleNoteFolderRename(
+						systemName,
+						oldFolderPath,
+						newFolderPath,
+						metadataSnapshot,
+						out noteLifecycleMutation
+					)
+				)
+				{
+					DebugLogger.LogOperation(
+						"Rename cancelled: Note lifecycle apply failed",
+						noteLifecycleTargetDescription
+					);
+					return;
+				}
+			}
+		}
+
+		string reversibleRenameOperationName =
+			itemType == RenameConflictItemType.System
+				? "Rename System"
+				: "Rename Folder";
+
 		if (
 			!renameHandledPersistence
 			&& !TryPersistReversibleSystemsAndFolderBindingsMutation(
 				metadataSnapshot,
 				systemsChanged: true,
 				folderBindingsChanged: folderBindingsChanged,
-				operationName: itemType == RenameConflictItemType.System
-					? "Rename System"
-					: "Rename Folder"
+				operationName: reversibleRenameOperationName
 			)
 		)
 		{
+			RollbackNoteLifecycleAfterReversibleMetadataPersistenceFailure(
+				noteLifecycleMutation,
+				reversibleRenameOperationName,
+				noteLifecycleTargetDescription
+			);
 			if (!HasActiveTreeOperationFailure)
 			{
 				ReportTreeOperationFailure(
@@ -2998,7 +3100,13 @@ public partial class SystemExplorerPlugin
 
 				if (folderEntryPath == oldFolderPath)
 				{
-					updatedEntries.Add(BuildFolderEntry(newFolderPath, IsEntryLocked(entry)));
+					updatedEntries.Add(
+						BuildFolderEntry(
+							newFolderPath,
+							IsEntryLocked(entry),
+							HasFolderNotePresenceMarker(entry)
+						)
+					);
 					continue;
 				}
 
@@ -3008,7 +3116,13 @@ public partial class SystemExplorerPlugin
 						$"{oldFolderPath}/",
 						$"{newFolderPath}/"
 					);
-					updatedEntries.Add(BuildFolderEntry(childFolderPath, IsEntryLocked(entry)));
+					updatedEntries.Add(
+						BuildFolderEntry(
+							childFolderPath,
+							IsEntryLocked(entry),
+							HasFolderNotePresenceMarker(entry)
+						)
+					);
 					continue;
 				}
 			}
@@ -7355,7 +7469,7 @@ public partial class SystemExplorerPlugin
 
 			foreach (string entry in currentEntries)
 			{
-				if (entry.StartsWith("folder::", StringComparison.Ordinal))
+				if (!IsScriptOrSceneEntry(entry))
 				{
 					updatedEntries.Add(entry);
 					continue;
@@ -7440,7 +7554,7 @@ public partial class SystemExplorerPlugin
 
 			foreach (string entry in _systems[systemName])
 			{
-				if (entry.StartsWith("folder::"))
+				if (!IsScriptOrSceneEntry(entry) || IsSceneEntry(entry))
 				{
 					updatedEntries.Add(entry);
 					continue;

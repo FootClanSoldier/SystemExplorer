@@ -225,10 +225,85 @@ public partial class SystemExplorerPlugin
 		return parts.Length >= 3 ? parts[2] : "";
 	}
 
-	private static string BuildFolderEntry(string folderPath, bool locked = false)
+	private static bool IsSystemLockEntry(string entry)
+	{
+		return string.Equals(entry, SystemLockEntry, System.StringComparison.Ordinal);
+	}
+
+	private static bool IsSystemNotePresenceEntry(string entry)
+	{
+		return string.Equals(entry, SystemNotePresenceEntry, System.StringComparison.Ordinal);
+	}
+
+	private static bool IsSystemMetadataEntry(string entry)
+	{
+		return IsSystemLockEntry(entry) || IsSystemNotePresenceEntry(entry);
+	}
+
+	private static bool IsTreeContentEntry(string entry)
+	{
+		return !IsSystemMetadataEntry(entry);
+	}
+
+	private static bool IsScriptOrSceneEntry(string entry)
+	{
+		return !string.IsNullOrWhiteSpace(entry)
+			&& IsTreeContentEntry(entry)
+			&& !entry.StartsWith("folder::", System.StringComparison.Ordinal);
+	}
+
+	private static string BuildFolderEntry(
+		string folderPath,
+		bool locked = false,
+		bool hasNote = false
+	)
 	{
 		string entry = $"folder::{folderPath}";
+
+		if (hasNote)
+			entry += NotePresenceEntryMarker;
+
 		return locked ? AddLockMarker(entry) : entry;
+	}
+
+	private static bool HasFolderNotePresenceMarker(string entry)
+	{
+		if (
+			string.IsNullOrWhiteSpace(entry)
+			|| !entry.StartsWith("folder::", System.StringComparison.Ordinal)
+		)
+		{
+			return false;
+		}
+
+		string entryWithoutLock = RemoveLockMarker(entry);
+
+		if (
+			!entryWithoutLock.EndsWith(
+				NotePresenceEntryMarker,
+				System.StringComparison.Ordinal
+			)
+		)
+		{
+			return false;
+		}
+
+		return true;
+	}
+
+	private static string RemoveFolderNotePresenceMarker(string entry)
+	{
+		if (!HasFolderNotePresenceMarker(entry))
+			return entry;
+
+		bool locked = IsEntryLocked(entry);
+		string entryWithoutLock = RemoveLockMarker(entry);
+		string entryWithoutNote = entryWithoutLock.Substring(
+			0,
+			entryWithoutLock.Length - NotePresenceEntryMarker.Length
+		);
+
+		return locked ? AddLockMarker(entryWithoutNote) : entryWithoutNote;
 	}
 
 	private static string GetFolderPathFromFolderEntry(string entry)
@@ -236,7 +311,9 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(entry) || !entry.StartsWith("folder::"))
 			return "";
 
-		return RemoveLockMarker(entry).Substring("folder::".Length);
+		string entryWithoutLock = RemoveLockMarker(entry);
+		string entryWithoutNote = RemoveFolderNotePresenceMarker(entryWithoutLock);
+		return entryWithoutNote.Substring("folder::".Length);
 	}
 
 	private bool DoesFolderPathExistInSystem(
@@ -490,12 +567,24 @@ public partial class SystemExplorerPlugin
 			.ToList();
 
 		List<string> explicitFolders = validEntries
-			.Where(entry => entry.StartsWith("folder::"))
-			.GroupBy(GetFolderPathFromFolderEntry)
-			.Select(group => BuildFolderEntry(group.Key, group.Any(IsEntryLocked)))
+			.Where(entry => entry.StartsWith("folder::", System.StringComparison.Ordinal))
+			.GroupBy(GetFolderPathFromFolderEntry, System.StringComparer.Ordinal)
+			.Select(group =>
+				BuildFolderEntry(
+					group.Key,
+					group.Any(IsEntryLocked),
+					group.Any(HasFolderNotePresenceMarker)
+				)
+			)
 			.ToList();
 
-		List<string> systemMarkers = validEntries.Where(IsSystemLockEntry).Distinct().ToList();
+		List<string> systemMarkers = new();
+
+		if (validEntries.Any(IsSystemLockEntry))
+			systemMarkers.Add(SystemLockEntry);
+
+		if (validEntries.Any(IsSystemNotePresenceEntry))
+			systemMarkers.Add(SystemNotePresenceEntry);
 
 		List<string> scripts = validEntries
 			.Where(IsScriptOrSceneEntry)
@@ -527,8 +616,11 @@ public partial class SystemExplorerPlugin
 		{
 			if (
 				!normalized.Any(existing =>
-					GetFolderPathFromFolderEntry(existing)
-					== GetFolderPathFromFolderEntry(folderEntry)
+					string.Equals(
+						GetFolderPathFromFolderEntry(existing),
+						GetFolderPathFromFolderEntry(folderEntry),
+						System.StringComparison.Ordinal
+					)
 				)
 			)
 				normalized.Add(folderEntry);
@@ -538,8 +630,11 @@ public partial class SystemExplorerPlugin
 		{
 			if (
 				!normalized.Any(existing =>
-					GetFolderPathFromFolderEntry(existing)
-					== GetFolderPathFromFolderEntry(folderEntry)
+					string.Equals(
+						GetFolderPathFromFolderEntry(existing),
+						GetFolderPathFromFolderEntry(folderEntry),
+						System.StringComparison.Ordinal
+					)
 				)
 			)
 				normalized.Add(folderEntry);

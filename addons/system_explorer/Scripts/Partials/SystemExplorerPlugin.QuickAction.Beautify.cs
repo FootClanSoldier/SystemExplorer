@@ -1075,7 +1075,7 @@ public partial class SystemExplorerPlugin
 
 	private static bool IsBeautifyScriptEntry(string entry)
 	{
-		if (string.IsNullOrWhiteSpace(entry))
+		if (!IsScriptOrSceneEntry(entry))
 			return false;
 
 		string entryWithoutLinkedScene = GetEntryWithoutLinkedScene(entry);

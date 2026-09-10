@@ -261,7 +261,8 @@ public partial class SystemExplorerPlugin
 			&& IsPluginSignalConnected(_contextMenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal))
 			&& IsPluginSignalConnected(_contextNewSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal))
 			&& IsPluginSignalConnected(_contextAddSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal))
-			&& IsPluginSignalConnected(_contextQuickActionsSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal));
+			&& IsPluginSignalConnected(_contextQuickActionsSubmenu, PopupMenu.SignalName.IdPressed, nameof(OnContextMenuIdPressedSignal))
+			&& VerifyNoteDialogSignals();
 	}
 
 	private void QueueManagedAssemblyRecovery(string reason, string failureDetail)
@@ -418,6 +419,9 @@ public partial class SystemExplorerPlugin
 		if (!AreDockSignalSourcesValid(out failureDetail))
 			return false;
 
+		if (!AreNoteDialogSignalSourcesValid(out failureDetail))
+			return false;
+
 		if (!IsValidGodotObject(_treeOperationDialog))
 		{
 			failureDetail = "The shared tree-operation dialog is unavailable.";
@@ -523,6 +527,8 @@ public partial class SystemExplorerPlugin
 		ResetCodeServiceDocumentSynchronizationAfterManagedAssemblyReload();
 		ResetCodeServiceManagedStateForOperationLifecycleShutdown("Managed Assembly Reload");
 		CancelPendingScriptRenameEditorRestore();
+		ResetPendingContextNoteState();
+		ResetNoteDialogTransientStateAfterManagedAssemblyReload();
 		ResetTreeOperationDialogQueuedStateAfterManagedAssemblyReload();
 		ResetUnsafePendingTreeOperationsAfterManagedAssemblyReload();
 	}

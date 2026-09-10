@@ -20,6 +20,8 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string SceneEntryMarker = "scene::";
 	private const string LockedEntryMarker = "||locked";
 	private const string SystemLockEntry = "systemLock::locked";
+	private const string NotePresenceEntryMarker = "||note";
+	private const string SystemNotePresenceEntry = "systemNote::present";
 	private const float ClickOpenDragThreshold = 6.0f;
 	private const float RightIconClickablePadding = 12.0f;
 	private static readonly Color DragDropTargetHighlightColor = new(1.0f, 1.0f, 1.0f, 0.16f);
@@ -163,6 +165,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _contextInstallCodeIntelligenceIcon;
 	private Texture2D _contextRefactorNamespaceIcon;
 	private Texture2D _contextBeautifyScriptIcon;
+	private Texture2D _contextNoteIcon;
 	private Texture2D _scriptFilterSearchIcon;
 	private Texture2D _systemNameEnterIcon;
 	private Texture2D _scriptFilterCloseIcon;
@@ -278,6 +281,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_contextRefactorNamespaceIcon = GetEditorIcon(editorTheme, "Rename");
 		_contextBeautifyScriptIcon = GetEditorIcon(editorTheme, "CodeHighlighter");
 		_contextBeautifyScriptIcon ??= GetEditorIcon(editorTheme, "CSharpScript");
+		_contextNoteIcon = GetEditorIcon(editorTheme, "File");
 	}
 
 	private bool EnsureResourcesFolderExists()
@@ -445,6 +449,8 @@ public sealed class {{CLASS_NAME}}
 		ShutdownFolderBindingFilesystemLifecycle();
 		DisconnectProjectSettingsSignalIntegration();
 		DisconnectNamespaceRefactorDialogSignals();
+		ResetPendingContextNoteState();
+		ResetNoteDialogTransientStateForTeardown();
 		DisconnectDockSignals();
 		_namespaceRefactorHost = null;
 

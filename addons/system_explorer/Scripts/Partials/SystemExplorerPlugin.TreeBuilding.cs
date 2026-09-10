@@ -64,13 +64,15 @@ public partial class SystemExplorerPlugin
 
 		foreach (KeyValuePair<string, List<string>> system in _systems)
 		{
+			bool systemHasNote = HasSystemNotePresence(system.Key);
 			TreeItem systemItem = _tree.CreateItem(root);
 			systemItem.SetText(
 				0,
 				GetLockableItemDisplayName(
 					$"system::{system.Key}",
 					system.Key,
-					IsSystemLocked(system.Key)
+					IsSystemLocked(system.Key),
+					systemHasNote
 				)
 			);
 			systemItem.SetIcon(0, _systemIcon);
@@ -80,6 +82,7 @@ public partial class SystemExplorerPlugin
 
 			Dictionary<string, TreeItem> folders = new();
 			Dictionary<string, bool> lockedFolders = GetLockedFoldersForSystem(system.Value);
+			HashSet<string> notedFolders = GetNotedFolderPathsForSystem(system.Key);
 
 			foreach (string entry in system.Value.Where(entry => entry.StartsWith("folder::")))
 			{
@@ -88,7 +91,8 @@ public partial class SystemExplorerPlugin
 					folders,
 					system.Key,
 					GetFolderPathFromFolderEntry(entry),
-					lockedFolders
+					lockedFolders,
+					notedFolders
 				);
 			}
 
@@ -97,7 +101,14 @@ public partial class SystemExplorerPlugin
 				string folderPath = GetFolderPathFromEntry(entry);
 				TreeItem parent = string.IsNullOrWhiteSpace(folderPath)
 					? systemItem
-					: CreateFolderPath(systemItem, folders, system.Key, folderPath, lockedFolders);
+					: CreateFolderPath(
+						systemItem,
+						folders,
+						system.Key,
+						folderPath,
+						lockedFolders,
+						notedFolders
+					);
 
 				if (IsSceneEntry(entry))
 				{
@@ -145,11 +156,22 @@ public partial class SystemExplorerPlugin
 		return GetLockableItemDisplayName(metadata, displayName, IsEntryLocked(entry));
 	}
 
-	private string GetLockableItemDisplayName(string metadata, string displayName, bool isLocked)
+	private string GetLockableItemDisplayName(
+		string metadata,
+		string displayName,
+		bool isLocked,
+		bool hasNote = false
+	)
 	{
-		return isLocked && ShouldShowLockIconForMetadata(metadata)
-			? $"{displayName}  \U0001F512" //Lock Icon
-			: displayName;
+		string result = displayName;
+
+		if (hasNote)
+			result += "  \U0001F4DD"; // Note Icon
+
+		if (isLocked && ShouldShowLockIconForMetadata(metadata))
+			result += "  \U0001F512"; // Lock Icon
+
+		return result;
 	}
 
 	private bool ShouldShowLockIconForMetadata(string metadata)
@@ -197,26 +219,36 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(metadata))
 			return;
 
-		if (!TryGetLockableItemDisplayState(metadata, out string displayName, out bool isLocked))
+		if (
+			!TryGetLockableItemDisplayState(
+				metadata,
+				out string displayName,
+				out bool isLocked,
+				out bool hasNote
+			)
+		)
 			return;
 
-		item.SetText(0, GetLockableItemDisplayName(metadata, displayName, isLocked));
+		item.SetText(0, GetLockableItemDisplayName(metadata, displayName, isLocked, hasNote));
 	}
 
 	private bool TryGetLockableItemDisplayState(
 		string metadata,
 		out string displayName,
-		out bool isLocked
+		out bool isLocked,
+		out bool hasNote
 	)
 	{
 		displayName = "";
 		isLocked = false;
+		hasNote = false;
 
 		if (metadata.StartsWith("system::"))
 		{
 			string systemName = GetSystemNameFromMetadata(metadata);
 			displayName = systemName;
 			isLocked = IsSystemLocked(systemName);
+			hasNote = HasNotePresenceForMetadata(metadata);
 			return !string.IsNullOrWhiteSpace(displayName);
 		}
 
@@ -225,6 +257,7 @@ public partial class SystemExplorerPlugin
 			string folderPath = GetFolderPathFromMetadata(metadata);
 			displayName = folderPath.GetFile();
 			isLocked = IsFolderLocked(metadata);
+			hasNote = HasNotePresenceForMetadata(metadata);
 			return !string.IsNullOrWhiteSpace(displayName);
 		}
 
@@ -436,7 +469,8 @@ public partial class SystemExplorerPlugin
 		Dictionary<string, TreeItem> folders,
 		string systemName,
 		string folderPath,
-		Dictionary<string, bool> lockedFolders = null
+		Dictionary<string, bool> lockedFolders = null,
+		HashSet<string> notedFolders = null
 	)
 	{
 		string[] parts = folderPath.Split("/", System.StringSplitOptions.RemoveEmptyEntries);
@@ -455,12 +489,14 @@ public partial class SystemExplorerPlugin
 					lockedFolders != null
 					&& lockedFolders.TryGetValue(currentPath, out bool locked)
 					&& locked;
+				bool hasNote = notedFolders != null && notedFolders.Contains(currentPath);
 				folderItem.SetText(
 					0,
 					GetLockableItemDisplayName(
 						$"folder::{systemName}::{currentPath}",
 						part,
-						isLocked
+						isLocked,
+						hasNote
 					)
 				);
 				folderItem.SetIcon(0, _folderIcon);

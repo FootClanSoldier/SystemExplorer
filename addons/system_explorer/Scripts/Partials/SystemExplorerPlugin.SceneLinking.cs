@@ -403,7 +403,7 @@ public partial class SystemExplorerPlugin
 
 			foreach (string entry in currentEntries)
 			{
-				if (entry.StartsWith("folder::") || IsSceneEntry(entry))
+				if (!IsScriptOrSceneEntry(entry) || IsSceneEntry(entry))
 				{
 					updatedEntries.Add(entry);
 					continue;
@@ -569,7 +569,7 @@ public partial class SystemExplorerPlugin
 
 			foreach (string entry in entries)
 			{
-				if (entry.StartsWith("folder::") || IsSceneEntry(entry))
+				if (!IsScriptOrSceneEntry(entry) || IsSceneEntry(entry))
 					continue;
 
 				string currentScriptPath = NormalizeScriptPathForSync(

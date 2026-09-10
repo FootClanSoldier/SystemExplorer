@@ -1973,7 +1973,10 @@ public partial class SystemExplorerPlugin
 
 			foreach (string entry in system.Value)
 			{
-				if (entry.StartsWith("folder::") || IsSystemLockEntry(entry))
+				if (
+					entry.StartsWith("folder::", StringComparison.Ordinal)
+					|| IsSystemMetadataEntry(entry)
+				)
 				{
 					serializedEntries.Add(entry);
 					continue;

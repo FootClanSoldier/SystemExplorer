@@ -142,18 +142,8 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 
 	private static string CreateProcessLogPath()
 	{
-		string localApplicationData = Environment.GetFolderPath(
-			Environment.SpecialFolder.LocalApplicationData
-		);
-		if (string.IsNullOrWhiteSpace(localApplicationData))
-			throw new IOException("The LocalApplicationData diagnostics root could not be resolved.");
-
-		string absoluteDirectory = Path.Combine(
-			localApplicationData,
-			"SystemExplorer",
-			"Diagnostics",
-			"GodotPlugin"
-		);
+		string absoluteDirectory =
+			SystemExplorerDiagnosticLogPathResolver.ResolveDiagnosticDirectory();
 		using Process process = Process.GetCurrentProcess();
 		DateTime processStartTime = process.StartTime;
 		string fileName =

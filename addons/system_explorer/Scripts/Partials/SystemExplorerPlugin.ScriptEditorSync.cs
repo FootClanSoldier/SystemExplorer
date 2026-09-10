@@ -799,7 +799,7 @@ public partial class SystemExplorerPlugin
 			if (!string.Equals(entry, occurrence.Entry, StringComparison.Ordinal))
 				continue;
 
-			if (IsSceneEntry(entry))
+			if (!IsScriptOrSceneEntry(entry) || IsSceneEntry(entry))
 				return false;
 
 			string currentScriptPath = NormalizeScriptPathForSync(GetScriptPathFromEntry(entry));

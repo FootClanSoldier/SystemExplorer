@@ -715,21 +715,6 @@ public partial class SystemExplorerPlugin
 		return metadata.StartsWith("folder::") || IsScriptOrSceneMetadata(metadata);
 	}
 
-	private static bool IsSystemLockEntry(string entry)
-	{
-		return entry == SystemLockEntry;
-	}
-
-	private static bool IsTreeContentEntry(string entry)
-	{
-		return !IsSystemLockEntry(entry);
-	}
-
-	private static bool IsScriptOrSceneEntry(string entry)
-	{
-		return IsTreeContentEntry(entry) && !entry.StartsWith("folder::");
-	}
-
 	private static bool IsScriptOrSceneMetadata(string metadata)
 	{
 		return metadata.StartsWith("script::") || metadata.StartsWith("sceneLink::");
@@ -755,7 +740,7 @@ public partial class SystemExplorerPlugin
 		{
 			string entry = entries[i];
 
-			if (entry.StartsWith("folder::"))
+			if (!IsScriptOrSceneEntry(entry))
 				continue;
 
 			if (GetFolderPathFromEntry(entry) == targetFolderPath)
@@ -764,7 +749,7 @@ public partial class SystemExplorerPlugin
 
 		if (!string.IsNullOrWhiteSpace(targetFolderPath))
 		{
-			int folderIndex = entries.IndexOf($"folder::{targetFolderPath}");
+			int folderIndex = FindEntryIndex(entries, BuildFolderEntry(targetFolderPath));
 
 			if (folderIndex >= 0)
 				return folderIndex + 1;

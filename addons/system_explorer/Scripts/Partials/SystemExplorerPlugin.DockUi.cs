@@ -188,6 +188,7 @@ public partial class SystemExplorerPlugin
 		CreateNamespaceRefactorDialogs();
 		CreateTreeOperationDialog();
 		CreateTreeShortcutConflictDialog();
+		CreateNoteDialogUi();
 
 
 		_codeServiceInstallResultDialog = new AcceptDialog
@@ -247,6 +248,7 @@ public partial class SystemExplorerPlugin
 		_dock.AddChild(_createScriptDialog);
 		_dock.AddChild(_namespaceRefactorDialog);
 		_dock.AddChild(_namespaceRefactorIncompleteWriteReportDialog);
+		_dock.AddChild(_noteDialog);
 		_dock.AddChild(_codeServiceInstallResultDialog);
 		_dock.AddChild(_csharpierInstallResultDialog);
 		_dock.AddChild(_csharpierNotInstalledDialog);
@@ -453,6 +455,7 @@ public partial class SystemExplorerPlugin
 		connected &= TryConnectPluginSignal(_csharpierNotInstalledDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCSharpierInstallConfirmedSignal), nameof(_csharpierNotInstalledDialog));
 		connected &= TryConnectPluginSignal(_firstRunWelcomeNote, Control.SignalName.Resized, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
 		connected &= TryConnectPluginSignal(_firstRunWelcomeNote, CanvasItem.SignalName.VisibilityChanged, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
+		connected &= ConnectNoteDialogSignals();
 
 		if (!connected)
 			return false;
@@ -505,6 +508,7 @@ public partial class SystemExplorerPlugin
 		DisconnectPluginSignal(_csharpierNotInstalledDialog, AcceptDialog.SignalName.Confirmed, nameof(OnCSharpierInstallConfirmedSignal), nameof(_csharpierNotInstalledDialog));
 		DisconnectPluginSignal(_firstRunWelcomeNote, Control.SignalName.Resized, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
 		DisconnectPluginSignal(_firstRunWelcomeNote, CanvasItem.SignalName.VisibilityChanged, nameof(UpdateFirstRunWelcomeNoteHorizontalMargins), nameof(_firstRunWelcomeNote));
+		DisconnectNoteDialogSignals();
 	}
 
 	private void UpdateFirstRunWelcomeNoteHorizontalMargins()
@@ -724,6 +728,7 @@ public partial class SystemExplorerPlugin
 		_missingScriptDialog = null;
 		_missingSceneDialog = null;
 		_treeOperationDialog = null;
+		ClearNoteDialogControlReferences();
 		_isRenameInputWarningPopupPending = false;
 		_isAddFolderInputWarningPopupPending = false;
 		_isAddSystemInputWarningPopupPending = false;

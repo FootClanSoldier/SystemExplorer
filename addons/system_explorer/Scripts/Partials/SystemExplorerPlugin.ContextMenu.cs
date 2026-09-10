@@ -20,12 +20,26 @@ public partial class SystemExplorerPlugin
 	private const int ContextBindFolder = 12;
 	private const int ContextUnbindFolder = 13;
 	private const int ContextInstallCodeIntelligence = 14;
+	private const int ContextNote = 15;
 	private const string BeautifyUnavailableTooltip = "Beautify is busy.";
 	private const string RefactorNamespaceBeautifyRunningTooltip = "Beautify is running.";
 	private const string QuickActionsNoScriptsTooltip = "No scripts found";
+	private const string NoteUnavailableTooltip =
+		"Note metadata could not be read. See System Explorer diagnostics.";
+
+	private enum PendingContextNoteState
+	{
+		NotApplicable,
+		Missing,
+		Exists,
+		Unavailable,
+	}
 
 	private Texture2D _contextHiddenSubmenuIcon;
 	private bool _pendingQuickActionsNoScriptsFound;
+	private string _pendingNoteMetadata = "";
+	private PendingContextNoteState _pendingContextNoteState =
+		PendingContextNoteState.NotApplicable;
 	#endregion
 
 	#region Context Menu
@@ -73,6 +87,7 @@ public partial class SystemExplorerPlugin
 		_pendingBeautifyScriptMetadata = metadata;
 		_pendingFolderBindingMetadata = metadata.StartsWith("folder::") ? metadata : "";
 
+		ResolvePendingContextNoteState(metadata);
 		BuildContextMenuForMetadata(metadata);
 
 		_contextMenu.Position = DisplayServer.MouseGetPosition();
@@ -241,6 +256,15 @@ public partial class SystemExplorerPlugin
 				AddContextMenuIconItem("Bind To Folder", ContextBindFolder, _contextFolderIcon);
 			}
 
+			AddPendingContextNoteItem();
+			_contextMenu.AddSeparator();
+		}
+		else if (isSystem)
+		{
+			if (canShowNewAndAdd || canShowQuickActions)
+				_contextMenu.AddSeparator();
+
+			AddPendingContextNoteItem();
 			_contextMenu.AddSeparator();
 		}
 		else
@@ -288,6 +312,81 @@ public partial class SystemExplorerPlugin
 				_contextShowInFileSystemIcon
 			);
 		}
+	}
+
+	private void ResolvePendingContextNoteState(string metadata)
+	{
+		ResetPendingContextNoteState();
+
+		bool supportsNotes =
+			metadata.StartsWith("system::", StringComparison.Ordinal)
+			|| metadata.StartsWith("folder::", StringComparison.Ordinal);
+
+		if (!supportsNotes)
+			return;
+
+		_pendingNoteMetadata = metadata;
+
+		if (
+			TryReadNoteForMetadata(
+				metadata,
+				out bool exists,
+				out _,
+				out string failureDetail
+			)
+		)
+		{
+			_pendingContextNoteState = exists
+				? PendingContextNoteState.Exists
+				: PendingContextNoteState.Missing;
+			return;
+		}
+
+		_pendingContextNoteState = PendingContextNoteState.Unavailable;
+		DebugLogger.LogOperation("Note context status read failed", failureDetail ?? "");
+	}
+
+	private void ResetPendingContextNoteState()
+	{
+		_pendingNoteMetadata = "";
+		_pendingContextNoteState = PendingContextNoteState.NotApplicable;
+	}
+
+	private void AddPendingContextNoteItem()
+	{
+		switch (_pendingContextNoteState)
+		{
+			case PendingContextNoteState.Missing:
+				AddContextMenuIconItem("Add Note", ContextNote, _contextNoteIcon);
+				break;
+
+			case PendingContextNoteState.Exists:
+				AddContextMenuIconItem("View Note", ContextNote, _contextNoteIcon);
+				ModulatePendingContextNotePresence();
+				break;
+
+			case PendingContextNoteState.Unavailable:
+				AddContextMenuIconItem("Note Unavailable", ContextNote, _contextNoteIcon);
+				SetContextMenuItemDisabled(ContextNote, true);
+				SetContextMenuItemTooltip(ContextNote, NoteUnavailableTooltip);
+				break;
+		}
+	}
+
+	private void ModulatePendingContextNotePresence()
+	{
+		int index = _contextMenu.GetItemIndex(ContextNote);
+
+		if (index >= 0 && _contextNoteIcon != null)
+			_contextMenu.SetItemIconModulate(index, _systemColor);
+	}
+
+	private void SetContextMenuItemTooltip(int id, string tooltip)
+	{
+		int index = _contextMenu.GetItemIndex(id);
+
+		if (index >= 0)
+			_contextMenu.SetItemTooltip(index, tooltip ?? "");
 	}
 
 	private void AddContextSubmenuItem(string label, PopupMenu submenu, bool useReversedIcons)
@@ -629,6 +728,10 @@ public partial class SystemExplorerPlugin
 					return;
 
 				StartCodeServiceInstallation();
+				break;
+
+			case ContextNote:
+				OpenPendingNoteDialog();
 				break;
 
 			case ContextRefactorNamespace:
