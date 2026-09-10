@@ -48,7 +48,7 @@
   </p>
 
   <p align="center">
-      <em>1.6 continues the perfectly reasonable plan of turning Godot into a lightweight C# IDE. With autocomplete, refactoring, better editor tooling, and naturally blackjack.</em>
+      <em>1.6 continues the perfectly reasonable plan of turning Godot into a lightweight C# IDE. <br/> With autocomplete, refactoring, better editor tooling, and naturally blackjack.</em>
   </p>
 
   <br>
