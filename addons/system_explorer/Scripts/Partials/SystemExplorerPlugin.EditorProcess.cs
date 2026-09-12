@@ -14,6 +14,44 @@ public partial class SystemExplorerPlugin
 			ClearPendingPersistentTreeStateSave();
 		}
 
+		try
+		{
+			ProcessPendingNoteDialogOpen();
+		}
+		catch (System.Exception exception)
+		{
+			ClearPendingNoteDialogOpenState();
+
+			try
+			{
+				DebugLogger.LogOperation(
+					"Note process open failed unexpectedly",
+					$"Exception='{exception}'"
+				);
+			}
+			catch
+			{
+			}
+		}
+
+		try
+		{
+			ProcessActiveNoteDialogWindowObservation();
+		}
+		catch (System.Exception exception)
+		{
+			try
+			{
+				FaultNoteMinimizedRestoreObservation(
+					"Note window observation failed unexpectedly",
+					$"Exception='{exception}'"
+				);
+			}
+			catch
+			{
+			}
+		}
+
 		bool shouldReapplyBusyCursor = false;
 
 		try
@@ -38,7 +76,10 @@ public partial class SystemExplorerPlugin
 	private void RefreshEditorPluginProcessingState(bool busyCursorNeedsProcessing)
 	{
 		TrySetEditorPluginProcessing(
-			busyCursorNeedsProcessing || HasPendingPersistentTreeStateProcessWork()
+			busyCursorNeedsProcessing
+			|| HasPendingPersistentTreeStateProcessWork()
+			|| HasPendingNoteDialogOpenProcessWork()
+			|| HasActiveNoteDialogWindowObservationProcessWork()
 		);
 	}
 

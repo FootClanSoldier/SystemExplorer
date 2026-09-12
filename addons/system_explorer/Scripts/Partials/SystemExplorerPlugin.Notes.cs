@@ -56,6 +56,193 @@ public partial class SystemExplorerPlugin
 		return false;
 	}
 
+	private bool IsNoteTargetRemovedByStructure(
+		string noteMetadata,
+		string removedMetadata
+	)
+	{
+		if (
+			!TryResolveNoteTargetFromMetadata(noteMetadata, out NoteTarget noteTarget, out _)
+			|| !TryResolveNoteTargetFromMetadata(
+				removedMetadata,
+				out NoteTarget removedTarget,
+				out _
+			)
+			|| !IsCanonicalNoteTargetMetadata(noteMetadata, noteTarget)
+			|| !IsCanonicalNoteTargetMetadata(removedMetadata, removedTarget)
+		)
+		{
+			return false;
+		}
+
+		if (!removedTarget.IsFolder)
+		{
+			return string.Equals(
+				noteTarget.SystemName,
+				removedTarget.SystemName,
+				StringComparison.Ordinal
+			);
+		}
+
+		if (
+			!noteTarget.IsFolder
+			|| !string.Equals(
+				noteTarget.SystemName,
+				removedTarget.SystemName,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return false;
+		}
+
+		return string.Equals(
+				noteTarget.FolderPath,
+				removedTarget.FolderPath,
+				StringComparison.Ordinal
+			)
+			|| noteTarget.FolderPath.StartsWith(
+				removedTarget.FolderPath + "/",
+				StringComparison.Ordinal
+			);
+	}
+
+	private bool TryGetRenamedNoteMetadata(
+		string noteMetadata,
+		string oldStructureMetadata,
+		string newStructureMetadata,
+		out string renamedNoteMetadata
+	)
+	{
+		renamedNoteMetadata = "";
+
+		if (
+			!TryResolveNoteTargetFromMetadata(noteMetadata, out NoteTarget noteTarget, out _)
+			|| !TryResolveNoteTargetFromMetadata(
+				oldStructureMetadata,
+				out NoteTarget oldStructureTarget,
+				out _
+			)
+			|| !TryResolveNoteTargetFromMetadata(
+				newStructureMetadata,
+				out NoteTarget newStructureTarget,
+				out _
+			)
+			|| !IsCanonicalNoteTargetMetadata(noteMetadata, noteTarget)
+			|| !IsCanonicalNoteTargetMetadata(oldStructureMetadata, oldStructureTarget)
+			|| !IsCanonicalNoteTargetMetadata(newStructureMetadata, newStructureTarget)
+			|| oldStructureTarget.IsFolder != newStructureTarget.IsFolder
+			|| string.Equals(
+				oldStructureMetadata,
+				newStructureMetadata,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return false;
+		}
+
+		NoteTarget renamedTarget;
+
+		if (!oldStructureTarget.IsFolder)
+		{
+			if (
+				!string.Equals(
+					noteTarget.SystemName,
+					oldStructureTarget.SystemName,
+					StringComparison.Ordinal
+				)
+			)
+			{
+				return false;
+			}
+
+			renamedTarget = noteTarget.IsFolder
+				? new NoteTarget(newStructureTarget.SystemName, noteTarget.FolderPath)
+				: new NoteTarget(newStructureTarget.SystemName);
+		}
+		else
+		{
+			if (
+				!noteTarget.IsFolder
+				|| !string.Equals(
+					oldStructureTarget.SystemName,
+					newStructureTarget.SystemName,
+					StringComparison.Ordinal
+				)
+				|| !string.Equals(
+					noteTarget.SystemName,
+					oldStructureTarget.SystemName,
+					StringComparison.Ordinal
+				)
+			)
+			{
+				return false;
+			}
+
+			string oldFolderPath = oldStructureTarget.FolderPath;
+			string noteFolderPath = noteTarget.FolderPath;
+			bool isExactFolder = string.Equals(
+				noteFolderPath,
+				oldFolderPath,
+				StringComparison.Ordinal
+			);
+
+			if (
+				!isExactFolder
+				&& !noteFolderPath.StartsWith(
+					oldFolderPath + "/",
+					StringComparison.Ordinal
+				)
+			)
+			{
+				return false;
+			}
+
+			string renamedFolderPath = isExactFolder
+				? newStructureTarget.FolderPath
+				: newStructureTarget.FolderPath + noteFolderPath.Substring(oldFolderPath.Length);
+
+			renamedTarget = new NoteTarget(
+				newStructureTarget.SystemName,
+				renamedFolderPath
+			);
+		}
+
+		string candidateMetadata = renamedTarget.IsFolder
+			? $"folder::{renamedTarget.SystemName}::{renamedTarget.FolderPath}"
+			: $"system::{renamedTarget.SystemName}";
+
+		if (
+			!IsCanonicalNoteTargetMetadata(candidateMetadata, renamedTarget)
+			|| string.Equals(noteMetadata, candidateMetadata, StringComparison.Ordinal)
+		)
+		{
+			return false;
+		}
+
+		renamedNoteMetadata = candidateMetadata;
+		return true;
+	}
+
+	private static bool IsCanonicalNoteTargetMetadata(string metadata, NoteTarget target)
+	{
+		if (
+			target == null
+			|| ContainsReservedSystemNameSeparator(target.SystemName)
+			|| (target.IsFolder && ContainsReservedVirtualFolderSeparator(target.FolderPath))
+		)
+		{
+			return false;
+		}
+
+		string canonicalMetadata = target.IsFolder
+			? $"folder::{target.SystemName}::{target.FolderPath}"
+			: $"system::{target.SystemName}";
+
+		return string.Equals(metadata, canonicalMetadata, StringComparison.Ordinal);
+	}
+
 	private bool TryGetAbsoluteNotesDirectoryPath(
 		out string absoluteNotesPath,
 		out string failureDetail
@@ -124,9 +311,38 @@ public partial class SystemExplorerPlugin
 		return noteStore.TryReadNote(target, out exists, out text, out failureDetail);
 	}
 
+	private bool TryReadNoteForMetadataWithViewState(
+		string metadata,
+		out bool exists,
+		out string text,
+		out NoteViewState viewState,
+		out string failureDetail
+	)
+	{
+		exists = false;
+		text = "";
+		viewState = null;
+		failureDetail = "";
+
+		if (!TryResolveNoteTargetFromMetadata(metadata, out NoteTarget target, out failureDetail))
+			return false;
+
+		if (!TryGetNoteStore(out NoteStore noteStore, out failureDetail))
+			return false;
+
+		return noteStore.TryReadNoteWithViewState(
+			target,
+			out exists,
+			out text,
+			out viewState,
+			out failureDetail
+		);
+	}
+
 	private bool TrySaveNoteForMetadata(
 		string metadata,
 		string text,
+		NoteViewState viewState,
 		out string failureDetail
 	)
 	{
@@ -138,7 +354,7 @@ public partial class SystemExplorerPlugin
 		if (!TryGetNoteStore(out NoteStore noteStore, out failureDetail))
 			return false;
 
-		return noteStore.TrySaveNote(target, text, out failureDetail);
+		return noteStore.TrySaveNote(target, text, viewState, out failureDetail);
 	}
 
 	private bool TryDeleteNoteForMetadata(

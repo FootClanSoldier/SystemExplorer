@@ -10,6 +10,9 @@ internal sealed class NoteSystemDocument
 	internal string Note { get; set; } = "";
 	internal Dictionary<string, string> Folders { get; } =
 		new(StringComparer.Ordinal);
+	internal NoteViewState SystemViewState { get; set; }
+	internal Dictionary<string, NoteViewState> FolderViewStates { get; } =
+		new(StringComparer.Ordinal);
 
 	internal NoteSystemDocument(string systemName)
 	{

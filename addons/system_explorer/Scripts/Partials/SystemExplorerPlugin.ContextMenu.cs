@@ -26,6 +26,8 @@ public partial class SystemExplorerPlugin
 	private const string QuickActionsNoScriptsTooltip = "No scripts found";
 	private const string NoteUnavailableTooltip =
 		"Note metadata could not be read. See System Explorer diagnostics.";
+	private const string NoteAlreadyOpenTooltip =
+		"Close the current Note before opening another.";
 
 	private enum PendingContextNoteState
 	{
@@ -358,11 +360,13 @@ public partial class SystemExplorerPlugin
 		{
 			case PendingContextNoteState.Missing:
 				AddContextMenuIconItem("Add Note", ContextNote, _contextNoteIcon);
+				ApplyActiveNoteSessionContextMenuState();
 				break;
 
 			case PendingContextNoteState.Exists:
 				AddContextMenuIconItem("View Note", ContextNote, _contextNoteIcon);
 				ModulatePendingContextNotePresence();
+				ApplyActiveNoteSessionContextMenuState();
 				break;
 
 			case PendingContextNoteState.Unavailable:
@@ -371,6 +375,15 @@ public partial class SystemExplorerPlugin
 				SetContextMenuItemTooltip(ContextNote, NoteUnavailableTooltip);
 				break;
 		}
+	}
+
+	private void ApplyActiveNoteSessionContextMenuState()
+	{
+		if (!IsNoteDialogSessionActive())
+			return;
+
+		SetContextMenuItemDisabled(ContextNote, true);
+		SetContextMenuItemTooltip(ContextNote, NoteAlreadyOpenTooltip);
 	}
 
 	private void ModulatePendingContextNotePresence()
@@ -731,7 +744,7 @@ public partial class SystemExplorerPlugin
 				break;
 
 			case ContextNote:
-				OpenPendingNoteDialog();
+				QueuePendingNoteDialogOpen();
 				break;
 
 			case ContextRefactorNamespace:

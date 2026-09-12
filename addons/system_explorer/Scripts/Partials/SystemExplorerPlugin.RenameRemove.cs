@@ -741,6 +741,9 @@ public partial class SystemExplorerPlugin
 				return;
 			}
 
+			if (removesNoteStructure)
+				DiscardNoteSessionForRemovedStructure(removeMetadata);
+
 			BuildTree(keepCurrentExpansionState: true);
 			RestoreTreeSelectionAfterRemove(
 				removeSelectionState,
@@ -950,6 +953,7 @@ public partial class SystemExplorerPlugin
 			)
 		)
 		{
+			DiscardNoteSessionForRemovedStructure(removeMetadata);
 			ApplyPhysicalRemoveNoteCleanup(removeMetadata);
 		}
 
@@ -2916,6 +2920,25 @@ public partial class SystemExplorerPlugin
 				$"{_pendingRenameMetadata} -> {newName}"
 			);
 			return;
+		}
+
+		if (!renameHandledPersistence)
+		{
+			if (itemType == RenameConflictItemType.System)
+			{
+				RetargetNoteSessionForRenamedStructure(
+					$"system::{oldSystemName}",
+					$"system::{newName}"
+				);
+			}
+			else if (itemType == RenameConflictItemType.Folder)
+			{
+				string systemName = GetSystemNameFromMetadata(oldFolderMetadata);
+				RetargetNoteSessionForRenamedStructure(
+					oldFolderMetadata,
+					$"folder::{systemName}::{newFolderPath}"
+				);
+			}
 		}
 
 		if (itemType == RenameConflictItemType.System)

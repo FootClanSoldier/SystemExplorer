@@ -68,10 +68,14 @@ internal sealed class NoteLifecycleStore
 		NoteSystemDocument migratedDocument = new(newSystemName)
 		{
 			Note = oldDocument.Note,
+			SystemViewState = oldDocument.SystemViewState,
 		};
 
 		foreach (KeyValuePair<string, string> folder in oldDocument.Folders)
 			migratedDocument.Folders.Add(folder.Key, folder.Value);
+
+		foreach (KeyValuePair<string, NoteViewState> folderViewState in oldDocument.FolderViewStates)
+			migratedDocument.FolderViewStates.Add(folderViewState.Key, folderViewState.Value);
 
 		if (!TrySerializeDocument(migratedDocument, "serialize-system-rename", out byte[] migratedBytes, out failureDetail))
 			return false;
@@ -171,6 +175,7 @@ internal sealed class NoteLifecycleStore
 		NoteSystemDocument migratedDocument = new(systemName)
 		{
 			Note = document.Note,
+			SystemViewState = document.SystemViewState,
 		};
 
 		foreach (KeyValuePair<string, string> folder in document.Folders)
@@ -179,12 +184,22 @@ internal sealed class NoteLifecycleStore
 				migratedDocument.Folders.Add(folder.Key, folder.Value);
 		}
 
+		foreach (KeyValuePair<string, NoteViewState> folderViewState in document.FolderViewStates)
+		{
+			if (!sourceSet.Contains(folderViewState.Key))
+				migratedDocument.FolderViewStates.Add(folderViewState.Key, folderViewState.Value);
+		}
+
 		foreach (string sourceKey in sourceKeys)
 		{
+			string destinationKey = destinationBySource[sourceKey];
 			migratedDocument.Folders.Add(
-				destinationBySource[sourceKey],
+				destinationKey,
 				document.Folders[sourceKey]
 			);
+
+			if (document.FolderViewStates.TryGetValue(sourceKey, out NoteViewState sourceViewState))
+				migratedDocument.FolderViewStates.Add(destinationKey, sourceViewState);
 		}
 
 		if (!TrySerializeDocument(migratedDocument, "serialize-folder-rename", out byte[] migratedBytes, out failureDetail))
@@ -283,12 +298,19 @@ internal sealed class NoteLifecycleStore
 		NoteSystemDocument remainingDocument = new(systemName)
 		{
 			Note = document.Note,
+			SystemViewState = document.SystemViewState,
 		};
 
 		foreach (KeyValuePair<string, string> folder in document.Folders)
 		{
 			if (!removeSet.Contains(folder.Key))
 				remainingDocument.Folders.Add(folder.Key, folder.Value);
+		}
+
+		foreach (KeyValuePair<string, NoteViewState> folderViewState in document.FolderViewStates)
+		{
+			if (!removeSet.Contains(folderViewState.Key))
+				remainingDocument.FolderViewStates.Add(folderViewState.Key, folderViewState.Value);
 		}
 
 		NoteLifecycleMutation appliedMutation = new(new[] { snapshot });

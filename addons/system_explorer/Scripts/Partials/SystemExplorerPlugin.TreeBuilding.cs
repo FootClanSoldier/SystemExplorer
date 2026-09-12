@@ -169,7 +169,7 @@ public partial class SystemExplorerPlugin
 			result += "  \U0001F4DD"; // Note Icon
 
 		if (isLocked && ShouldShowLockIconForMetadata(metadata))
-			result += "  \U0001F512"; // Lock Icon
+			result += hasNote ? "\U0001F512" : "  \U0001F512"; // Lock Icon
 
 		return result;
 	}

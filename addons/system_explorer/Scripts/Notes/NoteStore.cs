@@ -19,8 +19,26 @@ internal sealed class NoteStore
 		out string failureDetail
 	)
 	{
+		return TryReadNoteWithViewState(
+			target,
+			out exists,
+			out text,
+			out _,
+			out failureDetail
+		);
+	}
+
+	internal bool TryReadNoteWithViewState(
+		NoteTarget target,
+		out bool exists,
+		out string text,
+		out NoteViewState viewState,
+		out string failureDetail
+	)
+	{
 		exists = false;
 		text = "";
+		viewState = null;
 		failureDetail = "";
 
 		if (!TryValidateTarget(target, out failureDetail))
@@ -46,6 +64,7 @@ internal sealed class NoteStore
 			if (!document.Folders.TryGetValue(target.FolderPath, out string folderText))
 				return true;
 
+			document.FolderViewStates.TryGetValue(target.FolderPath, out viewState);
 			exists = true;
 			text = folderText;
 			return true;
@@ -56,12 +75,14 @@ internal sealed class NoteStore
 
 		exists = true;
 		text = document.Note;
+		viewState = document.SystemViewState;
 		return true;
 	}
 
 	internal bool TrySaveNote(
 		NoteTarget target,
 		string text,
+		NoteViewState viewState,
 		out string failureDetail
 	)
 	{
@@ -77,6 +98,16 @@ internal sealed class NoteStore
 				out _,
 				out failureDetail
 			);
+		}
+
+		if (viewState == null)
+		{
+			failureDetail = NotePersistenceFailure.BuildFailureDetail(
+				target.SystemName,
+				"target-validation",
+				"Detail='Non-whitespace Note save requires a view-state.'"
+			);
+			return false;
 		}
 
 		if (
@@ -95,9 +126,15 @@ internal sealed class NoteStore
 			document = new NoteSystemDocument(target.SystemName);
 
 		if (target.IsFolder)
+		{
 			document.Folders[target.FolderPath] = text;
+			document.FolderViewStates[target.FolderPath] = viewState;
+		}
 		else
+		{
 			document.Note = text;
+			document.SystemViewState = viewState;
+		}
 
 		byte[] expectedContent;
 
@@ -153,6 +190,8 @@ internal sealed class NoteStore
 		{
 			if (!document.Folders.Remove(target.FolderPath))
 				return true;
+
+			document.FolderViewStates.Remove(target.FolderPath);
 		}
 		else
 		{
@@ -160,6 +199,7 @@ internal sealed class NoteStore
 				return true;
 
 			document.Note = "";
+			document.SystemViewState = null;
 		}
 
 		deleted = true;
