@@ -44,6 +44,16 @@ internal sealed class AutocompletePluginHost
 
 	internal bool EnsureLifecycleCurrent() => _editorBinding.EnsureLifecycleCurrent();
 
+	internal bool TrySuppressTypedOpeningParenthesisAutoClose()
+	{
+		return _editorBinding.TrySuppressTypedOpeningParenthesisAutoClose();
+	}
+
+	internal void RestoreTypedOpeningParenthesisAutoCloseSuppression()
+	{
+		_editorBinding.RestoreTypedOpeningParenthesisAutoCloseSuppression();
+	}
+
 	internal void HandleScriptChanged()
 	{
 		_completionCoordinator.InvalidatePendingValidations();

@@ -337,10 +337,15 @@ public partial class SystemExplorerPlugin
 
 	private void OnAutocompleteGuiInput(InputEvent inputEvent)
 	{
+		AutocompletePluginHost host = _autocompleteHost;
+		host?.RestoreTypedOpeningParenthesisAutoCloseSuppression();
+
+		if (host != null && IsAutocompleteTypedOpeningParenthesisInput(inputEvent))
+			host.TrySuppressTypedOpeningParenthesisAutoClose();
+
 		if (!IsAutocompleteImportConfirmationEvent(inputEvent))
 			return;
 
-		AutocompletePluginHost host = _autocompleteHost;
 		if (host == null)
 			return;
 
@@ -372,6 +377,13 @@ public partial class SystemExplorerPlugin
 			selection.Authority
 		);
 		TryStartAutocompleteImportResolveFlight(intent);
+	}
+
+	private static bool IsAutocompleteTypedOpeningParenthesisInput(InputEvent inputEvent)
+	{
+		return inputEvent is InputEventKey keyEvent
+			&& keyEvent.Pressed
+			&& keyEvent.Unicode == (uint)'(';
 	}
 
 	private static bool IsAutocompleteImportConfirmationEvent(InputEvent inputEvent)
@@ -1981,8 +1993,10 @@ public partial class SystemExplorerPlugin
 
 	private void OnAutocompleteTextChanged()
 	{
-		ClearAutocompleteAutomaticNativeCoalescingRequest();
 		AutocompletePluginHost host = _autocompleteHost;
+		host?.RestoreTypedOpeningParenthesisAutoCloseSuppression();
+
+		ClearAutocompleteAutomaticNativeCoalescingRequest();
 		if (host == null)
 			return;
 

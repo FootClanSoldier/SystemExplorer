@@ -27,6 +27,9 @@ internal sealed class AutocompleteEditorBinding
 
 	private ScriptEditor _scriptEditor;
 	private CodeEdit _codeEdit;
+	private CodeEdit _parenthesisAutoCloseSuppressedCodeEdit;
+	private ulong _parenthesisAutoCloseSuppressedCodeEditInstanceId;
+	private bool _parenthesisAutoClosePreviousEnabled;
 
 	internal AutocompleteEditorBinding(
 		Func<ScriptEditor> scriptEditorProvider,
@@ -214,6 +217,61 @@ internal sealed class AutocompleteEditorBinding
 		return true;
 	}
 
+	internal bool TrySuppressTypedOpeningParenthesisAutoClose()
+	{
+		RestoreTypedOpeningParenthesisAutoCloseSuppression();
+
+		if (!TryGetActiveCodeEdit(out CodeEdit codeEdit, out _))
+			return false;
+
+		try
+		{
+			if (!codeEdit.Editable || !codeEdit.AutoBraceCompletionEnabled)
+				return false;
+
+			int caretCount = codeEdit.GetCaretCount();
+			for (int caretIndex = 0; caretIndex < caretCount; caretIndex++)
+			{
+				if (codeEdit.HasSelection(caretIndex))
+					return false;
+			}
+
+			_parenthesisAutoCloseSuppressedCodeEdit = codeEdit;
+			_parenthesisAutoCloseSuppressedCodeEditInstanceId = codeEdit.GetInstanceId();
+			_parenthesisAutoClosePreviousEnabled = codeEdit.AutoBraceCompletionEnabled;
+			codeEdit.AutoBraceCompletionEnabled = false;
+			return true;
+		}
+		catch
+		{
+			RestoreTypedOpeningParenthesisAutoCloseSuppression();
+			return false;
+		}
+	}
+
+	internal void RestoreTypedOpeningParenthesisAutoCloseSuppression()
+	{
+		CodeEdit codeEdit = _parenthesisAutoCloseSuppressedCodeEdit;
+		ulong instanceId = _parenthesisAutoCloseSuppressedCodeEditInstanceId;
+		bool previousEnabled = _parenthesisAutoClosePreviousEnabled;
+
+		_parenthesisAutoCloseSuppressedCodeEdit = null;
+		_parenthesisAutoCloseSuppressedCodeEditInstanceId = 0;
+		_parenthesisAutoClosePreviousEnabled = false;
+
+		try
+		{
+			if (!IsValidGodotObject(codeEdit) || codeEdit.GetInstanceId() != instanceId)
+				return;
+
+			codeEdit.AutoBraceCompletionEnabled = previousEnabled;
+		}
+		catch
+		{
+			// Best-effort editor cleanup only. No diagnostic dependency is warranted here.
+		}
+	}
+
 	internal void Shutdown()
 	{
 		DisconnectCodeEdit(cancelCompletion: true);
@@ -225,6 +283,7 @@ internal sealed class AutocompleteEditorBinding
 
 	private void DisconnectCodeEdit(bool cancelCompletion)
 	{
+		RestoreTypedOpeningParenthesisAutoCloseSuppression();
 		_invalidateCompletionState();
 
 		CodeEdit codeEdit = _codeEdit;
