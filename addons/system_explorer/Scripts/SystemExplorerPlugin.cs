@@ -22,6 +22,8 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private const string SystemLockEntry = "systemLock::locked";
 	private const string NotePresenceEntryMarker = "||note";
 	private const string SystemNotePresenceEntry = "systemNote::present";
+	private const string TreeNoteMarker = "\U0001F4DD";
+	private const float InlineTreeNoteHorizontalHitPadding = 2.0f;
 	private const float ClickOpenDragThreshold = 6.0f;
 	private const float RightIconClickablePadding = 12.0f;
 	private static readonly Color DragDropTargetHighlightColor = new(1.0f, 1.0f, 1.0f, 0.16f);
@@ -130,6 +132,8 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _draggedSourceSystemName = "";
 	private string _draggedSourceFolderPath = "";
 	private TreeItem _dragDropHighlightedItem;
+	private string _pendingInlineTreeNoteClickMetadata = "";
+	private Vector2 _inlineTreeNotePressPosition = Vector2.Zero;
 	private bool _leftMousePressedOnSelectedScript;
 	private Vector2 _leftMousePressPosition;
 	private string _leftMousePressedMetadata = "";
@@ -140,6 +144,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private string _pendingMissingScenePath = "";
 	private string _selectedScriptEntryFromFilter = "";
 	private string _hoveredTreeItemMetadata = "";
+	private bool _treeHoverPresentationSuppressedForFocusedNote;
 	private bool _isFilteringScripts;
 	private bool _ignoreNextScriptFilterReleaseOpen;
 	private bool _isRenameInputWarningPopupPending;
@@ -449,6 +454,7 @@ public sealed class {{CLASS_NAME}}
 		ShutdownFolderBindingFilesystemLifecycle();
 		DisconnectProjectSettingsSignalIntegration();
 		DisconnectNamespaceRefactorDialogSignals();
+		ClearInlineTreeNotePressState();
 		ResetPendingContextNoteState();
 		ResetNoteDialogTransientStateForTeardown();
 		DisconnectDockSignals();

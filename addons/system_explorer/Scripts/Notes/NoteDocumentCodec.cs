@@ -359,7 +359,7 @@ internal static class NoteDocumentCodec
 			if (document.SystemViewState == null)
 				writer.WriteNullValue();
 			else
-				WriteCaretState(writer, document.SystemViewState);
+				WriteTargetViewState(writer, document.SystemViewState);
 
 			writer.WritePropertyName("folders");
 			writer.WriteStartObject();
@@ -370,7 +370,7 @@ internal static class NoteDocumentCodec
 			foreach (string folderPath in folderViewStatePaths)
 			{
 				writer.WritePropertyName(folderPath);
-				WriteCaretState(writer, document.FolderViewStates[folderPath]);
+				WriteTargetViewState(writer, document.FolderViewStates[folderPath]);
 			}
 
 			writer.WriteEndObject();
@@ -423,7 +423,7 @@ internal static class NoteDocumentCodec
 					}
 
 					if (
-						!TryReadCaretState(
+						!TryReadTargetViewState(
 							systemName,
 							property.Value,
 							"view_state.system",
@@ -474,7 +474,7 @@ internal static class NoteDocumentCodec
 						}
 
 						if (
-							!TryReadCaretState(
+							!TryReadTargetViewState(
 								systemName,
 								folderProperty.Value,
 								$"view_state.folders[{NotePersistenceFailure.FormatForDetail(folderProperty.Name)}]",
@@ -513,7 +513,7 @@ internal static class NoteDocumentCodec
 		return true;
 	}
 
-	private static bool TryReadCaretState(
+	private static bool TryReadTargetViewState(
 		string systemName,
 		JsonElement element,
 		string stateName,
@@ -536,8 +536,10 @@ internal static class NoteDocumentCodec
 
 		bool sawCaretLine = false;
 		bool sawCaretColumn = false;
+		bool sawScrollVertical = false;
 		int caretLine = 0;
 		int caretColumn = 0;
+		double? scrollVertical = null;
 
 		foreach (JsonProperty property in element.EnumerateObject())
 		{
@@ -545,7 +547,7 @@ internal static class NoteDocumentCodec
 			{
 				case "caret_line":
 					if (sawCaretLine)
-						return FailDuplicateCaretStateProperty(systemName, stateName, property.Name, out failureDetail);
+						return FailDuplicateTargetViewStateProperty(systemName, stateName, property.Name, out failureDetail);
 
 					sawCaretLine = true;
 					if (
@@ -565,7 +567,7 @@ internal static class NoteDocumentCodec
 
 				case "caret_column":
 					if (sawCaretColumn)
-						return FailDuplicateCaretStateProperty(systemName, stateName, property.Name, out failureDetail);
+						return FailDuplicateTargetViewStateProperty(systemName, stateName, property.Name, out failureDetail);
 
 					sawCaretColumn = true;
 					if (
@@ -583,11 +585,34 @@ internal static class NoteDocumentCodec
 					}
 					break;
 
+				case "scroll_vertical":
+					if (sawScrollVertical)
+						return FailDuplicateTargetViewStateProperty(systemName, stateName, property.Name, out failureDetail);
+
+					sawScrollVertical = true;
+					if (
+						property.Value.ValueKind != JsonValueKind.Number
+						|| !property.Value.TryGetDouble(out double parsedScrollVertical)
+						|| !double.IsFinite(parsedScrollVertical)
+						|| parsedScrollVertical < 0.0
+					)
+					{
+						failureDetail = NotePersistenceFailure.BuildFailureDetail(
+							systemName,
+							"validate",
+							$"Detail='{stateName}.scroll_vertical must be a finite non-negative number.'"
+						);
+						return false;
+					}
+
+					scrollVertical = parsedScrollVertical;
+					break;
+
 				default:
 					failureDetail = NotePersistenceFailure.BuildFailureDetail(
 						systemName,
 						"validate",
-						$"Detail='Unsupported caret-state property {NotePersistenceFailure.FormatForDetail(property.Name)} in {stateName}.'"
+						$"Detail='Unsupported target view-state property {NotePersistenceFailure.FormatForDetail(property.Name)} in {stateName}.'"
 					);
 					return false;
 			}
@@ -603,7 +628,7 @@ internal static class NoteDocumentCodec
 			return false;
 		}
 
-		viewState = new NoteViewState(caretLine, caretColumn);
+		viewState = new NoteViewState(caretLine, caretColumn, scrollVertical);
 		return true;
 	}
 
@@ -628,7 +653,7 @@ internal static class NoteDocumentCodec
 		}
 	}
 
-	private static void WriteCaretState(Utf8JsonWriter writer, NoteViewState viewState)
+	private static void WriteTargetViewState(Utf8JsonWriter writer, NoteViewState viewState)
 	{
 		if (viewState == null)
 			throw new ArgumentNullException(nameof(viewState));
@@ -636,6 +661,10 @@ internal static class NoteDocumentCodec
 		writer.WriteStartObject();
 		writer.WriteNumber("caret_line", viewState.CaretLine);
 		writer.WriteNumber("caret_column", viewState.CaretColumn);
+
+		if (viewState.ScrollVertical.HasValue)
+			writer.WriteNumber("scroll_vertical", viewState.ScrollVertical.Value);
+
 		writer.WriteEndObject();
 	}
 
@@ -667,7 +696,7 @@ internal static class NoteDocumentCodec
 		return false;
 	}
 
-	private static bool FailDuplicateCaretStateProperty(
+	private static bool FailDuplicateTargetViewStateProperty(
 		string systemName,
 		string stateName,
 		string propertyName,
@@ -677,7 +706,7 @@ internal static class NoteDocumentCodec
 		failureDetail = NotePersistenceFailure.BuildFailureDetail(
 			systemName,
 			"validate",
-			$"Detail='Duplicate caret-state property {NotePersistenceFailure.FormatForDetail(propertyName)} in {stateName}.'"
+			$"Detail='Duplicate target view-state property {NotePersistenceFailure.FormatForDetail(propertyName)} in {stateName}.'"
 		);
 		return false;
 	}

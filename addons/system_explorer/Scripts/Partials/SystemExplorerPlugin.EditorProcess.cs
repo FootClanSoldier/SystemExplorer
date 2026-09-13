@@ -36,6 +36,26 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
+			ProcessPendingPersistedNoteScrollFinalRestore();
+		}
+		catch (System.Exception exception)
+		{
+			ClearPendingPersistedNoteScrollFinalRestore();
+
+			try
+			{
+				DebugLogger.LogOperation(
+					"Note post-layout scroll restore failed unexpectedly",
+					$"Exception='{exception}'"
+				);
+			}
+			catch
+			{
+			}
+		}
+
+		try
+		{
 			ProcessActiveNoteDialogWindowObservation();
 		}
 		catch (System.Exception exception)
@@ -79,6 +99,7 @@ public partial class SystemExplorerPlugin
 			busyCursorNeedsProcessing
 			|| HasPendingPersistentTreeStateProcessWork()
 			|| HasPendingNoteDialogOpenProcessWork()
+			|| HasPendingPersistedNoteScrollFinalRestoreProcessWork()
 			|| HasActiveNoteDialogWindowObservationProcessWork()
 		);
 	}

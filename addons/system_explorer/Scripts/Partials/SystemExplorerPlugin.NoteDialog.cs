@@ -30,8 +30,13 @@ public partial class SystemExplorerPlugin
 	private bool _hasLastNonMinimizedNoteDialogMode;
 	private bool _noteMinimizedRestoreObservationFaulted;
 	private bool _noteBackgroundRestoreGeometryUnavailable;
+	private bool _noteInitialBackgroundRestoreObservationPending;
 	private bool _noteCloseSaveRecoveryQueued;
 	private long _noteDialogSessionEpoch;
+	private bool _notePostLayoutScrollRestorePending;
+	private long _notePostLayoutScrollRestoreSessionEpoch;
+	private string _notePostLayoutScrollRestoreManagedAssemblyGeneration = "";
+	private double _notePostLayoutScrollRestoreVertical;
 	private Button _noteMinimizedRestoreButton;
 	private HBoxContainer _noteMinimizedRestoreStatusBar;
 	private Control _noteMinimizedRestoreBaseEditor;
@@ -327,7 +332,9 @@ public partial class SystemExplorerPlugin
 
 	private void ClearNoteDialogControlReferences()
 	{
+		ResetTreeHoverPresentationSuppression();
 		ClearPendingNoteDialogOpenState();
+		ClearPendingPersistedNoteScrollFinalRestore();
 		ClearNoteMinimizedRestoreSessionState();
 		_noteCloseSaveRecoveryQueued = false;
 		_activeNoteMetadata = "";
@@ -366,6 +373,11 @@ public partial class SystemExplorerPlugin
 		return !string.IsNullOrWhiteSpace(_activeNoteMetadata);
 	}
 
+	private bool HasPendingPersistedNoteScrollFinalRestoreProcessWork()
+	{
+		return _notePostLayoutScrollRestorePending;
+	}
+
 	private bool HasActiveNoteDialogWindowObservationProcessWork()
 	{
 		return IsNoteDialogSessionActive()
@@ -381,12 +393,16 @@ public partial class SystemExplorerPlugin
 			|| _noteMinimizedRestoreObservationFaulted
 		)
 		{
+			if (!IsNoteDialogSessionActive())
+				SetTreeHoverPresentationSuppressedForFocusedNote(false);
+
 			HideNoteMinimizedRestoreButton();
 			return;
 		}
 
 		if (!IsValidGodotObject(_noteDialog))
 		{
+			SetTreeHoverPresentationSuppressedForFocusedNote(false);
 			FaultNoteMinimizedRestoreObservation(
 				"Note window observation stopped because the active dialog is unavailable",
 				""
@@ -396,6 +412,7 @@ public partial class SystemExplorerPlugin
 
 		if (!TryReadNoteDialogMode(out Window.ModeEnum currentMode))
 		{
+			SetTreeHoverPresentationSuppressedForFocusedNote(false);
 			FaultNoteMinimizedRestoreObservation();
 			return;
 		}
@@ -410,12 +427,23 @@ public partial class SystemExplorerPlugin
 
 			if (!TryReadNoteDialogHasFocus(out bool hasFocus))
 			{
+				SetTreeHoverPresentationSuppressedForFocusedNote(false);
 				FaultNoteMinimizedRestoreObservation();
 				return;
 			}
 
+			SetTreeHoverPresentationSuppressedForFocusedNote(hasFocus);
+
 			if (hasFocus)
 			{
+				_noteInitialBackgroundRestoreObservationPending = false;
+				HideNoteMinimizedRestoreButton();
+				return;
+			}
+
+			if (_noteInitialBackgroundRestoreObservationPending)
+			{
+				_noteInitialBackgroundRestoreObservationPending = false;
 				HideNoteMinimizedRestoreButton();
 				return;
 			}
@@ -435,31 +463,78 @@ public partial class SystemExplorerPlugin
 
 		if (currentMode == Window.ModeEnum.Minimized)
 		{
+			SetTreeHoverPresentationSuppressedForFocusedNote(false);
+			_noteInitialBackgroundRestoreObservationPending = false;
 			ShowNoteMinimizedRestoreButtonForCurrentScriptEditor();
 			return;
 		}
 
+		SetTreeHoverPresentationSuppressedForFocusedNote(false);
+		_noteInitialBackgroundRestoreObservationPending = false;
 		HideNoteMinimizedRestoreButton();
 	}
 
-	private void QueuePendingNoteDialogOpen()
+	private bool CanInteractWithInlineTreeNoteTarget(string metadata)
 	{
-		if (IsNoteDialogSessionActive() || _noteDialogOpenQueued)
-			return;
+		if (_noteDialogOpenQueued)
+			return false;
 
-		string metadata = _pendingNoteMetadata;
 		if (
-			string.IsNullOrWhiteSpace(metadata)
-			|| (_pendingContextNoteState != PendingContextNoteState.Missing
-				&& _pendingContextNoteState != PendingContextNoteState.Exists)
+			!TryResolveNoteTargetFromMetadata(metadata, out NoteTarget target, out _)
+			|| !IsCanonicalNoteTargetMetadata(metadata, target)
 		)
 		{
-			return;
+			return false;
+		}
+
+		return !IsNoteDialogSessionActive()
+			|| string.Equals(_activeNoteMetadata, metadata, StringComparison.Ordinal);
+	}
+
+	private bool TryActivateInlineTreeNoteTarget(string metadata)
+	{
+		if (!CanInteractWithInlineTreeNoteTarget(metadata))
+			return false;
+
+		if (IsNoteDialogSessionActive())
+		{
+			RestoreOrFocusActiveNoteDialog();
+			return true;
+		}
+
+		return TryQueueNoteDialogOpen(metadata);
+	}
+
+	private bool TryQueueNoteDialogOpen(string metadata)
+	{
+		if (IsNoteDialogSessionActive() || _noteDialogOpenQueued)
+			return false;
+
+		if (
+			!TryResolveNoteTargetFromMetadata(metadata, out NoteTarget target, out _)
+			|| !IsCanonicalNoteTargetMetadata(metadata, target)
+		)
+		{
+			return false;
 		}
 
 		_pendingNoteDialogOpenMetadata = metadata;
 		_noteDialogOpenQueued = true;
 		RefreshEditorPluginProcessingState();
+		return true;
+	}
+
+	private void QueuePendingNoteDialogOpen()
+	{
+		if (
+			_pendingContextNoteState != PendingContextNoteState.Missing
+			&& _pendingContextNoteState != PendingContextNoteState.Exists
+		)
+		{
+			return;
+		}
+
+		TryQueueNoteDialogOpen(_pendingNoteMetadata);
 	}
 
 	private bool HasPendingNoteDialogOpenProcessWork()
@@ -632,6 +707,8 @@ public partial class SystemExplorerPlugin
 		_noteTextEdit.Text = exists ? text : "";
 
 		bool isEmbeddedSubwindow = IsNoteDialogEmbeddedSubwindow();
+		_noteInitialBackgroundRestoreObservationPending = !isEmbeddedSubwindow;
+
 		bool openedWithPreconfiguredMaximizedMode =
 			PrepareOpenedNoteDialogWindowStateForOpen(
 				editorSettings,
@@ -649,7 +726,8 @@ public partial class SystemExplorerPlugin
 			openedWithPreconfiguredMaximizedMode
 		);
 		_noteTextEdit.GrabFocus(true);
-		RestoreNoteCaretState(viewState);
+		RestoreNoteViewState(viewState);
+		QueuePersistedNoteScrollRestoreAfterPopup(viewState);
 	}
 
 	private NoteEditorSettings ReadNoteEditorSettingsForOpen()
@@ -1574,17 +1652,29 @@ public partial class SystemExplorerPlugin
 		_hasLastNonMinimizedNoteDialogMode = false;
 		_noteMinimizedRestoreObservationFaulted = false;
 		_noteBackgroundRestoreGeometryUnavailable = false;
+		_noteInitialBackgroundRestoreObservationPending = false;
 	}
 
 	private void RestoreOrFocusActiveNoteDialog()
 	{
-		if (
-			!IsNoteDialogSessionActive()
-			|| !IsValidGodotObject(_noteDialog)
-			|| _openedNoteDialogEmbeddedSubwindow
-		)
+		if (!IsNoteDialogSessionActive() || !IsValidGodotObject(_noteDialog))
 		{
 			HideNoteMinimizedRestoreButton();
+			return;
+		}
+
+		if (_openedNoteDialogEmbeddedSubwindow)
+		{
+			HideNoteMinimizedRestoreButton();
+
+			try
+			{
+				_noteDialog.GrabFocus();
+			}
+			catch
+			{
+			}
+
 			return;
 		}
 
@@ -1718,7 +1808,7 @@ public partial class SystemExplorerPlugin
 		_openedNoteDialogEmbeddedSubwindow = false;
 	}
 
-	private void RestoreNoteCaretState(NoteViewState viewState)
+	private void RestoreNoteViewState(NoteViewState viewState)
 	{
 		if (!IsValidGodotObject(_noteTextEdit))
 			return;
@@ -1735,8 +1825,143 @@ public partial class SystemExplorerPlugin
 
 		_noteTextEdit.RemoveSecondaryCarets();
 		_noteTextEdit.Deselect();
-		_noteTextEdit.SetCaretLine(caretLine, true);
-		_noteTextEdit.SetCaretColumn(caretColumn, true);
+
+		double? persistedScrollVertical = viewState?.ScrollVertical;
+		bool adjustViewport = !persistedScrollVertical.HasValue;
+		_noteTextEdit.SetCaretLine(caretLine, adjustViewport);
+		_noteTextEdit.SetCaretColumn(caretColumn, adjustViewport);
+
+		if (persistedScrollVertical.HasValue)
+			_noteTextEdit.ScrollVertical = persistedScrollVertical.Value;
+	}
+
+	private void QueuePersistedNoteScrollRestoreAfterPopup(NoteViewState viewState)
+	{
+		double? persistedScrollVertical = viewState?.ScrollVertical;
+
+		if (!persistedScrollVertical.HasValue)
+			return;
+
+		long scheduledNoteSessionEpoch = _noteDialogSessionEpoch;
+		string scheduledManagedAssemblyGeneration = ManagedAssemblyGeneration;
+		double scrollVertical = persistedScrollVertical.Value;
+
+		CallDeferred(
+			nameof(RestorePersistedNoteScrollAfterPopupDeferred),
+			scheduledNoteSessionEpoch,
+			scheduledManagedAssemblyGeneration,
+			scrollVertical
+		);
+	}
+
+	private void RestorePersistedNoteScrollAfterPopupDeferred(
+		long scheduledNoteSessionEpoch,
+		string scheduledManagedAssemblyGeneration,
+		double scrollVertical
+	)
+	{
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (scheduledNoteSessionEpoch != _noteDialogSessionEpoch)
+			return;
+
+		if (
+			!GodotObject.IsInstanceValid(this)
+			|| !IsInsideTree()
+			|| !IsNoteDialogSessionActive()
+			|| !IsValidGodotObject(_noteDialog)
+			|| !IsValidGodotObject(_noteTextEdit)
+			|| !_noteDialog.Visible
+		)
+		{
+			return;
+		}
+
+		if (!double.IsFinite(scrollVertical) || scrollVertical < 0.0)
+			return;
+
+		_noteTextEdit.ScrollVertical = scrollVertical;
+		ArmPersistedNoteScrollFinalRestoreForNextProcessFrame(
+			scheduledNoteSessionEpoch,
+			scheduledManagedAssemblyGeneration,
+			scrollVertical
+		);
+	}
+
+	private void ArmPersistedNoteScrollFinalRestoreForNextProcessFrame(
+		long scheduledNoteSessionEpoch,
+		string scheduledManagedAssemblyGeneration,
+		double scrollVertical
+	)
+	{
+		_notePostLayoutScrollRestorePending = true;
+		_notePostLayoutScrollRestoreSessionEpoch = scheduledNoteSessionEpoch;
+		_notePostLayoutScrollRestoreManagedAssemblyGeneration =
+			scheduledManagedAssemblyGeneration;
+		_notePostLayoutScrollRestoreVertical = scrollVertical;
+
+		RefreshEditorPluginProcessingState();
+	}
+
+	private void ProcessPendingPersistedNoteScrollFinalRestore()
+	{
+		if (!_notePostLayoutScrollRestorePending)
+			return;
+
+		long scheduledNoteSessionEpoch = _notePostLayoutScrollRestoreSessionEpoch;
+		string scheduledManagedAssemblyGeneration =
+			_notePostLayoutScrollRestoreManagedAssemblyGeneration;
+		double scrollVertical = _notePostLayoutScrollRestoreVertical;
+
+		ClearPendingPersistedNoteScrollFinalRestore();
+
+		if (
+			!string.Equals(
+				scheduledManagedAssemblyGeneration,
+				ManagedAssemblyGeneration,
+				StringComparison.Ordinal
+			)
+		)
+		{
+			return;
+		}
+
+		if (scheduledNoteSessionEpoch != _noteDialogSessionEpoch)
+			return;
+
+		if (
+			!GodotObject.IsInstanceValid(this)
+			|| !IsInsideTree()
+			|| !IsNoteDialogSessionActive()
+			|| !IsValidGodotObject(_noteDialog)
+			|| !IsValidGodotObject(_noteTextEdit)
+			|| !_noteDialog.Visible
+		)
+		{
+			return;
+		}
+
+		if (!double.IsFinite(scrollVertical) || scrollVertical < 0.0)
+			return;
+
+		_noteTextEdit.ScrollVertical = scrollVertical;
+	}
+
+	private void ClearPendingPersistedNoteScrollFinalRestore()
+	{
+		_notePostLayoutScrollRestorePending = false;
+		_notePostLayoutScrollRestoreSessionEpoch = 0;
+		_notePostLayoutScrollRestoreManagedAssemblyGeneration = "";
+		_notePostLayoutScrollRestoreVertical = 0.0;
 	}
 
 	private static string BuildNoteDialogTitle(string metadata)
@@ -1864,7 +2089,8 @@ public partial class SystemExplorerPlugin
 		string exactText = _noteTextEdit.Text;
 		int caretLine = Math.Max(0, _noteTextEdit.GetCaretLine());
 		int caretColumn = Math.Max(0, _noteTextEdit.GetCaretColumn());
-		NoteViewState viewState = new(caretLine, caretColumn);
+		double scrollVertical = NormalizeNoteScrollVertical(_noteTextEdit.ScrollVertical);
+		NoteViewState viewState = new(caretLine, caretColumn, scrollVertical);
 
 		if (
 			!TrySaveNoteForMetadata(
@@ -1919,6 +2145,14 @@ public partial class SystemExplorerPlugin
 
 		CloseNoteDialogAfterSuccessfulMutation();
 		return true;
+	}
+
+	private static double NormalizeNoteScrollVertical(double scrollVertical)
+	{
+		if (!double.IsFinite(scrollVertical) || scrollVertical < 0.0)
+			return 0.0;
+
+		return scrollVertical;
 	}
 
 	private void QueueNoteDialogFailedCloseSaveRecovery()
@@ -2087,7 +2321,9 @@ public partial class SystemExplorerPlugin
 
 	private void ClearActiveNoteState()
 	{
+		ResetTreeHoverPresentationSuppression();
 		ClearNoteMinimizedRestoreSessionState();
+		ClearPendingPersistedNoteScrollFinalRestore();
 		_noteCloseSaveRecoveryQueued = false;
 		_activeNoteMetadata = "";
 		_noteSaveSuppressedRemovedTargetMetadata = "";

@@ -527,6 +527,7 @@ public partial class SystemExplorerPlugin
 		ResetCodeServiceDocumentSynchronizationAfterManagedAssemblyReload();
 		ResetCodeServiceManagedStateForOperationLifecycleShutdown("Managed Assembly Reload");
 		CancelPendingScriptRenameEditorRestore();
+		ClearInlineTreeNotePressState();
 		ResetPendingContextNoteState();
 		ResetNoteDialogTransientStateAfterManagedAssemblyReload();
 		ResetTreeOperationDialogQueuedStateAfterManagedAssemblyReload();

@@ -166,7 +166,7 @@ public partial class SystemExplorerPlugin
 		string result = displayName;
 
 		if (hasNote)
-			result += "  \U0001F4DD"; // Note Icon
+			result += "  " + TreeNoteMarker;
 
 		if (isLocked && ShouldShowLockIconForMetadata(metadata))
 			result += hasNote ? "\U0001F512" : "  \U0001F512"; // Lock Icon
