@@ -65,6 +65,10 @@ public partial class SystemExplorerPlugin
 		"system_explorer/refactor_namespace";
 	private const string RefactorNamespaceEditorShortcutDisplayName =
 		"Refactor Namespace";
+	private const string OpenSelectedItemEditorShortcutPath =
+		"system_explorer/open_selected_item";
+	private const string OpenSelectedItemEditorShortcutDisplayName =
+		"Open Selected Item";
 
 	private string _editorShortcutsRegisteredGeneration = "";
 
@@ -201,6 +205,9 @@ public partial class SystemExplorerPlugin
 			bool refactorNamespaceExists = editorSettings.HasShortcut(
 				RefactorNamespaceEditorShortcutPath
 			);
+			bool openSelectedItemExists = editorSettings.HasShortcut(
+				OpenSelectedItemEditorShortcutPath
+			);
 
 			if (
 				string.Equals(
@@ -218,6 +225,7 @@ public partial class SystemExplorerPlugin
 				&& addExistingScriptsExists
 				&& addExistingScenesExists
 				&& refactorNamespaceExists
+				&& openSelectedItemExists
 			)
 			{
 				bool beautifyDisplayNameReady = EnsureEditorShortcutDisplayName(
@@ -270,6 +278,11 @@ public partial class SystemExplorerPlugin
 					RefactorNamespaceEditorShortcutPath,
 					RefactorNamespaceEditorShortcutDisplayName
 				);
+				bool openSelectedItemDisplayNameReady = EnsureEditorShortcutDisplayName(
+					editorSettings,
+					OpenSelectedItemEditorShortcutPath,
+					OpenSelectedItemEditorShortcutDisplayName
+				);
 
 				if (
 					beautifyDisplayNameReady
@@ -282,6 +295,7 @@ public partial class SystemExplorerPlugin
 					&& addExistingScriptsDisplayNameReady
 					&& addExistingScenesDisplayNameReady
 					&& refactorNamespaceDisplayNameReady
+					&& openSelectedItemDisplayNameReady
 				)
 				{
 					return true;
@@ -289,7 +303,7 @@ public partial class SystemExplorerPlugin
 
 				DebugLogger.LogOperation(
 					"Editor shortcut display-name verification failed",
-					$"Beautify={beautifyDisplayNameReady}, NewScript={newScriptDisplayNameReady}, RemoveSelectedItem={removeDisplayNameReady}, ToggleTreeScriptEditorFocus={toggleFocusDisplayNameReady}, CollapseTree={collapseTreeDisplayNameReady}, RenameSelectedItem={renameSelectedItemDisplayNameReady}, NewFolder={newFolderDisplayNameReady}, AddExistingScripts={addExistingScriptsDisplayNameReady}, AddExistingScenes={addExistingScenesDisplayNameReady}, RefactorNamespace={refactorNamespaceDisplayNameReady}"
+					$"Beautify={beautifyDisplayNameReady}, NewScript={newScriptDisplayNameReady}, RemoveSelectedItem={removeDisplayNameReady}, ToggleTreeScriptEditorFocus={toggleFocusDisplayNameReady}, CollapseTree={collapseTreeDisplayNameReady}, RenameSelectedItem={renameSelectedItemDisplayNameReady}, NewFolder={newFolderDisplayNameReady}, AddExistingScripts={addExistingScriptsDisplayNameReady}, AddExistingScenes={addExistingScenesDisplayNameReady}, RefactorNamespace={refactorNamespaceDisplayNameReady}, OpenSelectedItem={openSelectedItemDisplayNameReady}"
 				);
 				return false;
 			}
@@ -384,6 +398,14 @@ public partial class SystemExplorerPlugin
 				)
 			);
 
+			editorSettings.AddShortcut(
+				OpenSelectedItemEditorShortcutPath,
+				CreateEditorKeyShortcut(
+					OpenSelectedItemEditorShortcutDisplayName,
+					Key.Enter
+				)
+			);
+
 			beautifyExists = editorSettings.HasShortcut(BeautifyEditorShortcutPath);
 			newScriptExists = editorSettings.HasShortcut(NewScriptEditorShortcutPath);
 			removeExists = editorSettings.HasShortcut(RemoveSelectedItemEditorShortcutPath);
@@ -408,6 +430,9 @@ public partial class SystemExplorerPlugin
 			refactorNamespaceExists = editorSettings.HasShortcut(
 				RefactorNamespaceEditorShortcutPath
 			);
+			openSelectedItemExists = editorSettings.HasShortcut(
+				OpenSelectedItemEditorShortcutPath
+			);
 
 			if (
 				!beautifyExists
@@ -420,11 +445,12 @@ public partial class SystemExplorerPlugin
 				|| !addExistingScriptsExists
 				|| !addExistingScenesExists
 				|| !refactorNamespaceExists
+				|| !openSelectedItemExists
 			)
 			{
 				DebugLogger.LogOperation(
 					"Editor shortcut registration incomplete",
-					$"Beautify={beautifyExists}, NewScript={newScriptExists}, RemoveSelectedItem={removeExists}, ToggleTreeScriptEditorFocus={toggleFocusExists}, CollapseTree={collapseTreeExists}, RenameSelectedItem={renameSelectedItemExists}, NewFolder={newFolderExists}, AddExistingScripts={addExistingScriptsExists}, AddExistingScenes={addExistingScenesExists}, RefactorNamespace={refactorNamespaceExists}"
+					$"Beautify={beautifyExists}, NewScript={newScriptExists}, RemoveSelectedItem={removeExists}, ToggleTreeScriptEditorFocus={toggleFocusExists}, CollapseTree={collapseTreeExists}, RenameSelectedItem={renameSelectedItemExists}, NewFolder={newFolderExists}, AddExistingScripts={addExistingScriptsExists}, AddExistingScenes={addExistingScenesExists}, RefactorNamespace={refactorNamespaceExists}, OpenSelectedItem={openSelectedItemExists}"
 				);
 				return false;
 			}
@@ -479,6 +505,11 @@ public partial class SystemExplorerPlugin
 				RefactorNamespaceEditorShortcutPath,
 				RefactorNamespaceEditorShortcutDisplayName
 			);
+			bool openSelectedItemDisplayNameRegistered = EnsureEditorShortcutDisplayName(
+				editorSettings,
+				OpenSelectedItemEditorShortcutPath,
+				OpenSelectedItemEditorShortcutDisplayName
+			);
 
 			if (
 				!beautifyDisplayNameRegistered
@@ -491,11 +522,12 @@ public partial class SystemExplorerPlugin
 				|| !addExistingScriptsDisplayNameRegistered
 				|| !addExistingScenesDisplayNameRegistered
 				|| !refactorNamespaceDisplayNameRegistered
+				|| !openSelectedItemDisplayNameRegistered
 			)
 			{
 				DebugLogger.LogOperation(
 					"Editor shortcut display-name registration incomplete",
-					$"Beautify={beautifyDisplayNameRegistered}, NewScript={newScriptDisplayNameRegistered}, RemoveSelectedItem={removeDisplayNameRegistered}, ToggleTreeScriptEditorFocus={toggleFocusDisplayNameRegistered}, CollapseTree={collapseTreeDisplayNameRegistered}, RenameSelectedItem={renameSelectedItemDisplayNameRegistered}, NewFolder={newFolderDisplayNameRegistered}, AddExistingScripts={addExistingScriptsDisplayNameRegistered}, AddExistingScenes={addExistingScenesDisplayNameRegistered}, RefactorNamespace={refactorNamespaceDisplayNameRegistered}"
+					$"Beautify={beautifyDisplayNameRegistered}, NewScript={newScriptDisplayNameRegistered}, RemoveSelectedItem={removeDisplayNameRegistered}, ToggleTreeScriptEditorFocus={toggleFocusDisplayNameRegistered}, CollapseTree={collapseTreeDisplayNameRegistered}, RenameSelectedItem={renameSelectedItemDisplayNameRegistered}, NewFolder={newFolderDisplayNameRegistered}, AddExistingScripts={addExistingScriptsDisplayNameRegistered}, AddExistingScenes={addExistingScenesDisplayNameRegistered}, RefactorNamespace={refactorNamespaceDisplayNameRegistered}, OpenSelectedItem={openSelectedItemDisplayNameRegistered}"
 				);
 				return false;
 			}

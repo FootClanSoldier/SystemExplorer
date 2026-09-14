@@ -266,8 +266,8 @@ public partial class SystemExplorerPlugin
 			if (canShowNewAndAdd || canShowQuickActions)
 				_contextMenu.AddSeparator();
 
-			AddPendingContextNoteItem();
-			_contextMenu.AddSeparator();
+			if (AddPendingContextNoteItem())
+				_contextMenu.AddSeparator();
 		}
 		else
 		{
@@ -354,26 +354,26 @@ public partial class SystemExplorerPlugin
 		_pendingContextNoteState = PendingContextNoteState.NotApplicable;
 	}
 
-	private void AddPendingContextNoteItem()
+	private bool AddPendingContextNoteItem()
 	{
 		switch (_pendingContextNoteState)
 		{
 			case PendingContextNoteState.Missing:
 				AddContextMenuIconItem("Add Note", ContextNote, _contextNoteIcon);
 				ApplyActiveNoteSessionContextMenuState();
-				break;
+				return true;
 
 			case PendingContextNoteState.Exists:
-				AddContextMenuIconItem("View Note", ContextNote, _contextNoteIcon);
-				ModulatePendingContextNotePresence();
-				ApplyActiveNoteSessionContextMenuState();
-				break;
+				return false;
 
 			case PendingContextNoteState.Unavailable:
 				AddContextMenuIconItem("Note Unavailable", ContextNote, _contextNoteIcon);
 				SetContextMenuItemDisabled(ContextNote, true);
 				SetContextMenuItemTooltip(ContextNote, NoteUnavailableTooltip);
-				break;
+				return true;
+
+			default:
+				return false;
 		}
 	}
 
@@ -384,14 +384,6 @@ public partial class SystemExplorerPlugin
 
 		SetContextMenuItemDisabled(ContextNote, true);
 		SetContextMenuItemTooltip(ContextNote, NoteAlreadyOpenTooltip);
-	}
-
-	private void ModulatePendingContextNotePresence()
-	{
-		int index = _contextMenu.GetItemIndex(ContextNote);
-
-		if (index >= 0 && _contextNoteIcon != null)
-			_contextMenu.SetItemIconModulate(index, _systemColor);
 	}
 
 	private void SetContextMenuItemTooltip(int id, string tooltip)

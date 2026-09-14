@@ -18,6 +18,7 @@ public partial class SystemExplorerPlugin
 		AddExistingScripts,
 		AddExistingScenes,
 		RefactorNamespace,
+		OpenSelectedItem,
 	}
 
 	private enum TreeShortcutInputRoute
@@ -83,6 +84,11 @@ public partial class SystemExplorerPlugin
 			TreeShortcutCommandId.RefactorNamespace,
 			RefactorNamespaceEditorShortcutPath,
 			RefactorNamespaceEditorShortcutDisplayName
+		),
+		new(
+			TreeShortcutCommandId.OpenSelectedItem,
+			OpenSelectedItemEditorShortcutPath,
+			OpenSelectedItemEditorShortcutDisplayName
 		),
 	};
 
@@ -311,6 +317,8 @@ public partial class SystemExplorerPlugin
 					&& TryOpenAddExistingScenesDialogForSelectedItem(),
 				TreeShortcutCommandId.RefactorNamespace =>
 					TryOpenNamespaceRefactorDialogForSelectedItem(),
+				TreeShortcutCommandId.OpenSelectedItem =>
+					TryOpenSelectedItemFromShortcut(),
 				_ => false,
 			};
 		}
@@ -322,6 +330,54 @@ public partial class SystemExplorerPlugin
 			);
 			return false;
 		}
+	}
+
+	private bool TryOpenSelectedItemFromShortcut()
+	{
+		if (
+			_isFilteringScripts
+			|| !IsValidGodotObject(_tree)
+			|| !_tree.IsInsideTree()
+		)
+		{
+			return false;
+		}
+
+		TreeItem selectedItem = _tree.GetSelected();
+		if (selectedItem == null)
+			return false;
+
+		string metadata = selectedItem.GetMetadata(0).AsString();
+		if (
+			!TryResolveNoteTargetFromMetadata(metadata, out var target, out _)
+			|| !IsCanonicalNoteTargetMetadata(metadata, target)
+		)
+		{
+			return false;
+		}
+
+		if (IsNoteDialogSessionActive())
+			return TryActivateTreeNoteTarget(metadata);
+
+		if (
+			!TryReadNoteForMetadata(
+				metadata,
+				out bool exists,
+				out _,
+				out string failureDetail
+			)
+		)
+		{
+			DebugLogger.LogOperation(
+				"Open Selected Item shortcut Note status read failed",
+				failureDetail ?? ""
+			);
+			return false;
+		}
+
+		return exists
+			? TryActivateTreeNoteTarget(metadata)
+			: TryQueueNoteDialogOpen(metadata);
 	}
 
 	private void ShowTreeShortcutConflictDialog(

@@ -88,7 +88,7 @@ public partial class SystemExplorerPlugin
 				{
 					bool noteSessionWasActive = IsNoteDialogSessionActive();
 					if (
-						TryActivateInlineTreeNoteTarget(pressMetadata)
+						TryActivateTreeNoteTarget(pressMetadata)
 						&& !noteSessionWasActive
 					)
 					{
@@ -269,7 +269,7 @@ public partial class SystemExplorerPlugin
 		if (
 			!TryResolveNoteTargetFromMetadata(hitMetadata, out var noteTarget, out _)
 			|| !IsCanonicalNoteTargetMetadata(hitMetadata, noteTarget)
-			|| !CanInteractWithInlineTreeNoteTarget(hitMetadata)
+			|| !CanActivateTreeNoteTarget(hitMetadata)
 			|| !HasNotePresenceForMetadata(hitMetadata)
 			|| !TryGetInlineTreeNoteMarkerRect(hitItem, out Rect2 noteMarkerRect)
 			|| !noteMarkerRect.HasPoint(mousePosition)

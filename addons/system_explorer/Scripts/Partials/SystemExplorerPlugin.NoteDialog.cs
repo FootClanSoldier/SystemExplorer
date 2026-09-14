@@ -113,6 +113,7 @@ public partial class SystemExplorerPlugin
 		_noteTextEdit.AddThemeStyleboxOverride("focus", new StyleBoxEmpty());
 
 		_noteDialog.AddChild(_noteTextEdit);
+		CreateNoteSearchUi();
 	}
 
 	private static bool TryCreateNoteDialogPanelStyle(
@@ -284,12 +285,14 @@ public partial class SystemExplorerPlugin
 			nameof(OnNoteDialogSizeChangedSignal),
 			nameof(_noteDialog)
 		);
+		connected &= ConnectNoteSearchSignals();
 
 		return connected;
 	}
 
 	private void DisconnectNoteDialogSignals()
 	{
+		DisconnectNoteSearchSignals();
 		DisconnectPluginSignal(
 			_noteTextEdit,
 			Control.SignalName.GuiInput,
@@ -327,11 +330,14 @@ public partial class SystemExplorerPlugin
 				_noteDialog,
 				Viewport.SignalName.SizeChanged,
 				nameof(OnNoteDialogSizeChangedSignal)
-			);
+			)
+			&& VerifyNoteSearchSignals();
 	}
 
 	private void ClearNoteDialogControlReferences()
 	{
+		ResetNoteSearchStateForSessionEnd();
+		ClearNoteSearchControlReferences();
 		ResetTreeHoverPresentationSuppression();
 		ClearPendingNoteDialogOpenState();
 		ClearPendingPersistedNoteScrollFinalRestore();
@@ -474,7 +480,7 @@ public partial class SystemExplorerPlugin
 		HideNoteMinimizedRestoreButton();
 	}
 
-	private bool CanInteractWithInlineTreeNoteTarget(string metadata)
+	private bool CanActivateTreeNoteTarget(string metadata)
 	{
 		if (_noteDialogOpenQueued)
 			return false;
@@ -491,9 +497,9 @@ public partial class SystemExplorerPlugin
 			|| string.Equals(_activeNoteMetadata, metadata, StringComparison.Ordinal);
 	}
 
-	private bool TryActivateInlineTreeNoteTarget(string metadata)
+	private bool TryActivateTreeNoteTarget(string metadata)
 	{
-		if (!CanInteractWithInlineTreeNoteTarget(metadata))
+		if (!CanActivateTreeNoteTarget(metadata))
 			return false;
 
 		if (IsNoteDialogSessionActive())
@@ -526,13 +532,8 @@ public partial class SystemExplorerPlugin
 
 	private void QueuePendingNoteDialogOpen()
 	{
-		if (
-			_pendingContextNoteState != PendingContextNoteState.Missing
-			&& _pendingContextNoteState != PendingContextNoteState.Exists
-		)
-		{
+		if (_pendingContextNoteState != PendingContextNoteState.Missing)
 			return;
-		}
 
 		TryQueueNoteDialogOpen(_pendingNoteMetadata);
 	}
@@ -2224,7 +2225,7 @@ public partial class SystemExplorerPlugin
 
 		try
 		{
-			_noteTextEdit.GrabFocus(true);
+			RestoreNoteEditingFocusAfterFailedCloseSave();
 		}
 		catch
 		{
@@ -2321,6 +2322,7 @@ public partial class SystemExplorerPlugin
 
 	private void ClearActiveNoteState()
 	{
+		ResetNoteSearchStateForSessionEnd();
 		ResetTreeHoverPresentationSuppression();
 		ClearNoteMinimizedRestoreSessionState();
 		ClearPendingPersistedNoteScrollFinalRestore();
