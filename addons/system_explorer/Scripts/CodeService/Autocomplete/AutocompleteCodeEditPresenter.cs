@@ -7,7 +7,18 @@ namespace SystemExplorer.CodeService.Autocomplete;
 
 internal sealed class AutocompleteCodeEditPresenter
 {
+	private const int VisualNamespaceMinimumGapColumns = 6;
 	private const string VisualRightPadding = "  ";
+
+	private readonly struct NativeDisplayLayout
+	{
+		internal NativeDisplayLayout(int namespaceRightEdgeColumn)
+		{
+			NamespaceRightEdgeColumn = namespaceRightEdgeColumn;
+		}
+
+		internal int NamespaceRightEdgeColumn { get; }
+	}
 
 	internal bool TryPublish(CodeEdit codeEdit, IReadOnlyList<AutocompleteCompletionItem> items, out string detail)
 	{
@@ -19,9 +30,9 @@ internal sealed class AutocompleteCodeEditPresenter
 		for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
 		{
 			AutocompleteCompletionItem item = items[itemIndex];
-			if (item == null || !item.HasValidCommitContract)
+			if (item == null || !item.HasValidCommitContract || !item.HasValidNamespaceContract)
 			{
-				detail = "Completion item violates the managed commit contract; native publication was rejected.";
+				detail = "Completion item violates the managed commit/namespace contract; native publication was rejected.";
 				return false;
 			}
 			if (item.RequiresImport && string.IsNullOrEmpty(item.DisplayText))
@@ -36,16 +47,19 @@ internal sealed class AutocompleteCodeEditPresenter
 			}
 		}
 
+		NativeDisplayLayout displayLayout = BuildNativeDisplayLayout(items);
+
 		for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
 		{
 			AutocompleteCompletionItem item = items[itemIndex];
 			if (!item.RequiresImport)
 			{
 				// Preserve the ordinary native publication path exactly. Godot remains
-				// the confirmation authority for ordinary completion items.
+				// confirmation authority except for the narrow direct/direct namespace
+				// collision rows identified synchronously at commit time.
 				codeEdit.AddCodeCompletionOption(
 					item.Kind,
-					GetNativeDisplayText(item),
+					GetNativeDisplayText(item, displayLayout),
 					item.InsertText,
 					location: nativeLocations[itemIndex]);
 				continue;
@@ -56,24 +70,28 @@ internal sealed class AutocompleteCodeEditPresenter
 			// lives exclusively in CodeEdit's in-memory option value/default_value.
 			codeEdit.AddCodeCompletionOption(
 				item.Kind,
-				GetNativeDisplayText(item),
+				GetNativeDisplayText(item, displayLayout),
 				item.DisplayText,
 				value: (Variant)item.CompletionHandle.Value.ToString("D"),
 				location: nativeLocations[itemIndex]);
 		}
 
 		codeEdit.UpdateCodeCompletionOptions(true);
-		TryApplyPreselectBestEffort(codeEdit, items);
+		TryApplyPreselectBestEffort(codeEdit, items, displayLayout);
 		return true;
 	}
 
-	internal bool TryGetSelectedImportCompletion(
+	internal bool TryGetSelectedManagedCommitCompletion(
 		CodeEdit codeEdit,
 		AutocompleteCompletionSession session,
 		out AutocompleteCompletionItem selectedItem,
+		out AutocompleteManagedCommitShape commitShape,
+		out bool selectedManagedCommitIdentified,
 		out string detail)
 	{
 		selectedItem = null;
+		commitShape = default;
+		selectedManagedCommitIdentified = false;
 		detail = "";
 		if (!IsValidGodotObject(codeEdit) || session == null)
 		{
@@ -83,6 +101,7 @@ internal sealed class AutocompleteCodeEditPresenter
 
 		try
 		{
+			NativeDisplayLayout displayLayout = BuildNativeDisplayLayout(session.PublishedItems);
 			int selectedIndex = codeEdit.GetCodeCompletionSelectedIndex();
 			if (selectedIndex < 0)
 			{
@@ -92,48 +111,29 @@ internal sealed class AutocompleteCodeEditPresenter
 
 			var nativeOption = codeEdit.GetCodeCompletionOption(selectedIndex);
 			Variant nativeDefaultValue = nativeOption["default_value"];
-			if (nativeDefaultValue.VariantType != Variant.Type.String
-				|| !TryParseCanonicalNonEmptyGuid(nativeDefaultValue.AsString(), out Guid handle))
+			if (nativeDefaultValue.VariantType == Variant.Type.String
+				&& TryParseCanonicalNonEmptyGuid(nativeDefaultValue.AsString(), out Guid handle))
 			{
-				detail = "Selected native option is not a managed import completion.";
-				return false;
+				return TryIdentifySelectedImportCompletion(
+					nativeOption,
+					nativeDefaultValue.AsString(),
+					handle,
+					session,
+					displayLayout,
+					out selectedItem,
+					out commitShape,
+					out selectedManagedCommitIdentified,
+					out detail);
 			}
 
-			AutocompleteCompletionItem match = null;
-			int matchCount = 0;
-			foreach (AutocompleteCompletionItem item in session.PublishedItems)
-			{
-				if (item?.CompletionHandle != handle)
-					continue;
-				match = item;
-				matchCount++;
-				if (matchCount > 1)
-					break;
-			}
-			if (matchCount != 1 || match == null || !match.HasValidCommitContract
-				|| !match.RequiresImport || match.InsertText != null || !match.CompletionHandle.HasValue)
-			{
-				detail = "Selected import handle did not map to exactly one managed import item.";
-				return false;
-			}
-
-			Variant nativeKind = nativeOption["kind"];
-			Variant nativeDisplayText = nativeOption["display_text"];
-			Variant nativeInsertText = nativeOption["insert_text"];
-			if (nativeKind.VariantType != Variant.Type.Int
-				|| nativeDisplayText.VariantType != Variant.Type.String
-				|| nativeInsertText.VariantType != Variant.Type.String
-				|| nativeKind.AsInt64() != (long)match.Kind
-				|| !string.Equals(nativeDisplayText.AsString(), GetNativeDisplayText(match), StringComparison.Ordinal)
-				|| !string.Equals(nativeInsertText.AsString(), match.DisplayText, StringComparison.Ordinal)
-				|| !string.Equals(nativeDefaultValue.AsString(), match.CompletionHandle.Value.ToString("D"), StringComparison.Ordinal))
-			{
-				detail = "Selected native import option no longer exactly matches its managed item.";
-				return false;
-			}
-
-			selectedItem = match;
-			return true;
+			return TryIdentifySelectedDirectCollisionCompletion(
+				nativeOption,
+				session,
+				displayLayout,
+				out selectedItem,
+				out commitShape,
+				out selectedManagedCommitIdentified,
+				out detail);
 		}
 		catch (Exception exception)
 		{
@@ -142,9 +142,201 @@ internal sealed class AutocompleteCodeEditPresenter
 		}
 	}
 
-	private static string GetNativeDisplayText(AutocompleteCompletionItem item) => (item?.DisplayText ?? "") + VisualRightPadding;
+	private static bool TryIdentifySelectedImportCompletion(
+		Godot.Collections.Dictionary nativeOption,
+		string nativeHandleText,
+		Guid handle,
+		AutocompleteCompletionSession session,
+		NativeDisplayLayout displayLayout,
+		out AutocompleteCompletionItem selectedItem,
+		out AutocompleteManagedCommitShape commitShape,
+		out bool selectedManagedCommitIdentified,
+		out string detail)
+	{
+		selectedItem = null;
+		commitShape = default;
+		selectedManagedCommitIdentified = false;
+		detail = "";
 
-	private static void TryApplyPreselectBestEffort(CodeEdit codeEdit, IReadOnlyList<AutocompleteCompletionItem> items)
+		AutocompleteCompletionItem match = null;
+		int matchCount = 0;
+		foreach (AutocompleteCompletionItem item in session.PublishedItems)
+		{
+			if (item?.CompletionHandle != handle)
+				continue;
+			match = item;
+			matchCount++;
+			if (matchCount > 1)
+				break;
+		}
+		if (matchCount != 1 || match == null || !match.HasValidCommitContract || !match.HasValidNamespaceContract
+			|| !match.RequiresImport || match.InsertText != null || !match.CompletionHandle.HasValue)
+		{
+			detail = "Selected import handle did not map to exactly one managed import item.";
+			return false;
+		}
+
+		Variant nativeKind = nativeOption["kind"];
+		Variant nativeDisplayText = nativeOption["display_text"];
+		Variant nativeInsertText = nativeOption["insert_text"];
+		if (nativeKind.VariantType != Variant.Type.Int
+			|| nativeDisplayText.VariantType != Variant.Type.String
+			|| nativeInsertText.VariantType != Variant.Type.String
+			|| nativeKind.AsInt64() != (long)match.Kind
+			|| !string.Equals(nativeDisplayText.AsString(), GetNativeDisplayText(match, displayLayout), StringComparison.Ordinal)
+			|| !string.Equals(nativeInsertText.AsString(), match.DisplayText, StringComparison.Ordinal)
+			|| !string.Equals(nativeHandleText, match.CompletionHandle.Value.ToString("D"), StringComparison.Ordinal))
+		{
+			detail = "Selected native import option no longer exactly matches its managed item.";
+			return false;
+		}
+
+		selectedItem = match;
+		commitShape = HasDirectNamespaceDistinctSameLabelPeer(match, session.PublishedItems)
+			? AutocompleteManagedCommitShape.QualifiedName
+			: AutocompleteManagedCommitShape.ImportWithUsing;
+		selectedManagedCommitIdentified = true;
+		return true;
+	}
+
+	private static bool TryIdentifySelectedDirectCollisionCompletion(
+		Godot.Collections.Dictionary nativeOption,
+		AutocompleteCompletionSession session,
+		NativeDisplayLayout displayLayout,
+		out AutocompleteCompletionItem selectedItem,
+		out AutocompleteManagedCommitShape commitShape,
+		out bool selectedManagedCommitIdentified,
+		out string detail)
+	{
+		selectedItem = null;
+		commitShape = default;
+		selectedManagedCommitIdentified = false;
+		detail = "";
+
+		Variant nativeKind = nativeOption["kind"];
+		Variant nativeDisplayText = nativeOption["display_text"];
+		Variant nativeInsertText = nativeOption["insert_text"];
+		if (nativeKind.VariantType != Variant.Type.Int
+			|| nativeDisplayText.VariantType != Variant.Type.String
+			|| nativeInsertText.VariantType != Variant.Type.String)
+		{
+			detail = "Selected native option is not an exact managed ordinary collision candidate.";
+			return false;
+		}
+
+		AutocompleteCompletionItem match = null;
+		int matchCount = 0;
+		foreach (AutocompleteCompletionItem item in session.PublishedItems)
+		{
+			if (item == null
+				|| item.RequiresImport
+				|| (item.Kind != CodeEdit.CodeCompletionKind.Class && item.Kind != CodeEdit.CodeCompletionKind.Enum)
+				|| !item.HasValidCommitContract
+				|| !item.HasValidNamespaceContract
+				|| item.NamespaceDisambiguation == null
+				|| item.ContainingNamespace == null
+				|| nativeKind.AsInt64() != (long)item.Kind
+				|| !string.Equals(nativeDisplayText.AsString(), GetNativeDisplayText(item, displayLayout), StringComparison.Ordinal)
+				|| !string.Equals(nativeInsertText.AsString(), item.InsertText, StringComparison.Ordinal)
+				|| !HasDirectNamespaceDistinctSameLabelPeer(item, session.PublishedItems))
+			{
+				continue;
+			}
+
+			match = item;
+			matchCount++;
+			if (matchCount > 1)
+				break;
+		}
+
+		if (matchCount != 1 || match == null)
+		{
+			selectedManagedCommitIdentified = matchCount > 1;
+			detail = matchCount > 1
+				? "Selected native ordinary collision option matched multiple managed items."
+				: "Selected native option is not a managed direct namespace collision requiring interception.";
+			return false;
+		}
+
+		selectedItem = match;
+		commitShape = AutocompleteManagedCommitShape.QualifiedName;
+		selectedManagedCommitIdentified = true;
+		return true;
+	}
+
+	private static bool HasDirectNamespaceDistinctSameLabelPeer(
+		AutocompleteCompletionItem selected,
+		IReadOnlyList<AutocompleteCompletionItem> publishedItems)
+	{
+		if (selected == null
+			|| publishedItems == null
+			|| !selected.HasValidCommitContract
+			|| !selected.HasValidNamespaceContract
+			|| selected.ContainingNamespace == null)
+		{
+			return false;
+		}
+
+		foreach (AutocompleteCompletionItem peer in publishedItems)
+		{
+			if (ReferenceEquals(peer, selected)
+				|| peer == null
+				|| !peer.HasValidCommitContract
+				|| !peer.HasValidNamespaceContract
+				|| peer.RequiresImport
+				|| peer.NamespaceDisambiguation == null
+				|| peer.ContainingNamespace == null
+				|| !string.Equals(peer.DisplayText, selected.DisplayText, StringComparison.Ordinal)
+				|| string.Equals(peer.ContainingNamespace, selected.ContainingNamespace, StringComparison.Ordinal))
+			{
+				continue;
+			}
+
+			return true;
+		}
+		return false;
+	}
+
+	private static NativeDisplayLayout BuildNativeDisplayLayout(IReadOnlyList<AutocompleteCompletionItem> items)
+	{
+		int naturalContentWidth = 0;
+		int widestRequiredNamespaceRowWidth = 0;
+
+		foreach (AutocompleteCompletionItem item in items)
+		{
+			string displayText = item?.DisplayText ?? "";
+			naturalContentWidth = Math.Max(naturalContentWidth, displayText.Length);
+
+			if (item?.NamespaceDisambiguation is string namespaceDisambiguation)
+			{
+				int requiredWidth = displayText.Length
+					+ VisualNamespaceMinimumGapColumns
+					+ namespaceDisambiguation.Length;
+				widestRequiredNamespaceRowWidth = Math.Max(widestRequiredNamespaceRowWidth, requiredWidth);
+			}
+		}
+
+		return new NativeDisplayLayout(Math.Max(naturalContentWidth, widestRequiredNamespaceRowWidth));
+	}
+
+	private static string GetNativeDisplayText(AutocompleteCompletionItem item, NativeDisplayLayout displayLayout)
+	{
+		string displayText = item?.DisplayText ?? "";
+		if (item?.NamespaceDisambiguation is string namespaceDisambiguation)
+		{
+			int requiredGap = displayLayout.NamespaceRightEdgeColumn
+				- displayText.Length
+				- namespaceDisambiguation.Length;
+			int gapColumns = Math.Max(VisualNamespaceMinimumGapColumns, requiredGap);
+			displayText += new string(' ', gapColumns) + namespaceDisambiguation;
+		}
+		return displayText + VisualRightPadding;
+	}
+
+	private static void TryApplyPreselectBestEffort(
+		CodeEdit codeEdit,
+		IReadOnlyList<AutocompleteCompletionItem> items,
+		NativeDisplayLayout displayLayout)
 	{
 		bool hasPreselectedItem = false;
 		foreach (AutocompleteCompletionItem item in items)
@@ -159,7 +351,7 @@ internal sealed class AutocompleteCodeEditPresenter
 			foreach (AutocompleteCompletionItem item in items)
 			{
 				if (item?.Preselect != true || !item.HasValidCommitContract) continue;
-				string expectedDisplayText = GetNativeDisplayText(item);
+				string expectedDisplayText = GetNativeDisplayText(item, displayLayout);
 				string expectedInsertText = item.RequiresImport ? item.DisplayText : item.InsertText;
 				string expectedHandle = item.RequiresImport ? item.CompletionHandle.Value.ToString("D") : null;
 				int matchingIndex = -1;

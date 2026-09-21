@@ -2,6 +2,7 @@
 using Godot;
 using System;
 using System.Collections.Generic;
+using SystemExplorer.CodeService.Autocomplete.Hint;
 using SystemExplorer.CodeService.Autocomplete.Styling;
 using SystemExplorer.CodeService.Completion;
 
@@ -11,7 +12,9 @@ internal sealed class AutocompletePluginHost
 {
 	private readonly AutocompleteEditorBinding _editorBinding;
 	private readonly AutocompleteCompletionCoordinator _completionCoordinator;
+	private readonly AutocompleteHintController _hintController;
 	private readonly AutocompleteCodeEditThemeController _themeController;
+	private readonly AutocompleteLocalImportCommitApplier _localImportCommitApplier;
 	private readonly AutocompleteResolvedEditApplier _resolvedEditApplier;
 
 	internal AutocompletePluginHost(
@@ -22,11 +25,17 @@ internal sealed class AutocompletePluginHost
 		string textChangedMethodName,
 		string completionRequestedMethodName,
 		string guiInputMethodName,
-		Action editorBindingInvalidated)
+		Action editorBindingInvalidated,
+		Action hintProcessWorkChanged)
 	{
 		var prefixExtractor = new AutocompletePrefixExtractor();
 		var presenter = new AutocompleteCodeEditPresenter();
 		_completionCoordinator = new AutocompleteCompletionCoordinator(prefixExtractor, presenter);
+		_hintController = new AutocompleteHintController(
+			prefixExtractor,
+			hintProcessWorkChanged ?? throw new ArgumentNullException(nameof(hintProcessWorkChanged))
+		);
+		_localImportCommitApplier = new AutocompleteLocalImportCommitApplier();
 		_resolvedEditApplier = new AutocompleteResolvedEditApplier();
 
 		var themeDefinition = new AutocompleteThemeDefinition { CompletionExistingColor = Colors.Transparent };
@@ -37,7 +46,7 @@ internal sealed class AutocompletePluginHost
 			scriptEditorProvider, connectPluginSignal, disconnectPluginSignal,
 			scriptChangedMethodName, textChangedMethodName, completionRequestedMethodName,
 			guiInputMethodName,
-			_completionCoordinator.InvalidatePendingValidations,
+			InvalidateCompletionStateForEditorBinding,
 			editorBindingInvalidated,
 			_themeController);
 	}
@@ -54,9 +63,15 @@ internal sealed class AutocompletePluginHost
 		_editorBinding.RestoreTypedOpeningParenthesisAutoCloseSuppression();
 	}
 
+	internal void ObserveHintGuiInput(InputEvent inputEvent)
+	{
+		_hintController.ObserveGuiInput(inputEvent);
+	}
+
 	internal void HandleScriptChanged()
 	{
 		_completionCoordinator.InvalidatePendingValidations();
+		_hintController.Reset();
 		_editorBinding.RefreshCodeEditBinding();
 	}
 
@@ -68,14 +83,28 @@ internal sealed class AutocompletePluginHost
 			_editorBinding.RefreshCodeEditBinding();
 			return false;
 		}
-		return _completionCoordinator.TryCaptureCompletionRequest(codeEdit, scriptPath, true, out request);
+		bool captured = _completionCoordinator.TryCaptureCompletionRequest(
+			codeEdit,
+			scriptPath,
+			true,
+			out request
+		);
+		SynchronizeHintTracking(codeEdit, scriptPath);
+		return captured;
 	}
 
 	internal bool TryCaptureAutomaticCompletionRequest(out AutocompleteRequestContext request)
 	{
 		request = null;
 		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath)) return false;
-		return _completionCoordinator.TryCaptureCompletionRequest(codeEdit, scriptPath, false, out request);
+		bool captured = _completionCoordinator.TryCaptureCompletionRequest(
+			codeEdit,
+			scriptPath,
+			false,
+			out request
+		);
+		SynchronizeHintTracking(codeEdit, scriptPath);
+		return captured;
 	}
 
 	internal bool IsCompletionRequestCurrent(AutocompleteRequestContext request)
@@ -87,11 +116,13 @@ internal sealed class AutocompletePluginHost
 	internal bool TryRestorePublishedCompletionForRequest(AutocompleteRequestContext request)
 	{
 		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath)) return false;
-		return _completionCoordinator.TryRestorePublishedCompletionForRequest(
+		bool restored = _completionCoordinator.TryRestorePublishedCompletionForRequest(
 			codeEdit,
 			scriptPath,
 			request
 		);
+		SynchronizeHintTracking(codeEdit, scriptPath);
+		return restored;
 	}
 
 	internal bool TryPublishCompletionResult(
@@ -106,45 +137,114 @@ internal sealed class AutocompletePluginHost
 			detail = "Active CodeEdit is unavailable before publication.";
 			return false;
 		}
-		return _completionCoordinator.TryPublishCompletionResult(codeEdit, scriptPath, request, items, authority, out detail);
+		bool published = _completionCoordinator.TryPublishCompletionResult(
+			codeEdit,
+			scriptPath,
+			request,
+			items,
+			authority,
+			out detail
+		);
+		SynchronizeHintTracking(codeEdit, scriptPath);
+		return published;
 	}
 
-	internal bool TryInterceptSelectedImportCommit(out AutocompleteImportCommitSelection selection, out string detail)
+	internal bool TryInterceptSelectedManagedCommit(out AutocompleteManagedCommitSelection selection, out string detail)
 	{
 		selection = null;
 		detail = "";
 		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath))
 		{
-			detail = "Active CodeEdit is unavailable for import commit interception.";
+			detail = "Active CodeEdit is unavailable for managed commit interception.";
 			return false;
 		}
-		if (!_completionCoordinator.TryGetSelectedImportCompletion(
-			codeEdit, scriptPath, out AutocompleteCompletionItem item,
-			out AutocompleteCompletionAuthority authority, out long requestGeneration, out detail))
-			return false;
 
-		// Once an exact managed import item has been identified the native placeholder
-		// must never be allowed to commit. Accept the input event synchronously before
-		// returning from gui_input, then retire the native/managed popup state.
-		try
+		bool captured = _completionCoordinator.TryGetSelectedManagedCommitCompletion(
+			codeEdit,
+			scriptPath,
+			out AutocompleteCompletionItem item,
+			out AutocompleteCompletionAuthority authority,
+			out long requestGeneration,
+			out AutocompletePrefixCapture commitCapture,
+			out AutocompleteManagedCommitShape commitShape,
+			out bool selectedManagedCommitIdentified,
+			out detail);
+		if (!captured)
 		{
-			codeEdit.AcceptEvent();
-		}
-		catch (Exception exception)
-		{
-			detail = "Could not accept the native import confirmation event: " + ToSingleLine(exception.Message);
-			try { codeEdit.CancelCodeCompletion(); } catch { }
-			_completionCoordinator.RetireAfterImportCommitInterception(codeEdit);
+			if (!selectedManagedCommitIdentified)
+				return false;
+
+			// The native option was conclusively identified as one of our managed commit
+			// rows, but its commit-time editor anchor already drifted. Swallow confirmation
+			// and retire the popup so neither an import placeholder nor an ambiguous plain
+			// direct label can commit after authority changed.
+			SuppressNativeManagedCommitBestEffort(codeEdit, ref detail);
+			_completionCoordinator.RetireAfterManagedCommitInterception(codeEdit);
+			_hintController.Retire();
 			return true;
 		}
 
-		selection = new AutocompleteImportCommitSelection(
-			codeEdit.GetInstanceId(), scriptPath ?? "", requestGeneration, item, authority);
-		_completionCoordinator.RetireAfterImportCommitInterception(codeEdit);
+		// Once an exact managed commit row has been identified its native confirmation
+		// must never be allowed to race the plugin-owned mutation. Accept synchronously
+		// before returning from gui_input, then retire native and managed popup state.
+		if (!SuppressNativeManagedCommitBestEffort(codeEdit, ref detail))
+		{
+			_completionCoordinator.RetireAfterManagedCommitInterception(codeEdit);
+			_hintController.Retire();
+			return true;
+		}
+
+		selection = new AutocompleteManagedCommitSelection(
+			codeEdit.GetInstanceId(),
+			scriptPath ?? "",
+			requestGeneration,
+			item,
+			authority,
+			commitCapture,
+			commitShape);
+		_completionCoordinator.RetireAfterManagedCommitInterception(codeEdit);
+		_hintController.Retire();
 		return true;
 	}
 
-	internal bool TryValidateImportCommitEditor(
+	private static bool SuppressNativeManagedCommitBestEffort(CodeEdit codeEdit, ref string detail)
+	{
+		try
+		{
+			codeEdit.AcceptEvent();
+			return true;
+		}
+		catch
+		{
+			detail = "NativeCommitSuppressionFailed";
+			try { codeEdit.CancelCodeCompletion(); } catch { }
+			return false;
+		}
+	}
+
+	internal AutocompleteLocalImportCommitApplyResult ApplyLocalManagedCommit(
+		ulong codeEditInstanceId,
+		string scriptPath,
+		AutocompleteCompletionItem item,
+		AutocompletePrefixCapture commitCapture,
+		AutocompleteManagedCommitShape commitShape)
+	{
+		if (!TryValidateManagedCommitEditor(codeEditInstanceId, scriptPath, out CodeEdit codeEdit, out _))
+		{
+			return AutocompleteLocalImportCommitApplyResult.FailedClosed("EditorBindingChanged");
+		}
+
+		AutocompleteLocalImportCommitApplyResult result = _localImportCommitApplier.TryApply(
+			codeEdit,
+			item,
+			commitCapture,
+			commitShape);
+		if (result.Outcome == AutocompleteLocalImportCommitOutcome.Applied)
+			_completionCoordinator.SuppressAutomaticRequestForNextTextChanged();
+		return result;
+	}
+
+	internal bool TryValidateManagedCommitEditor(
 		ulong codeEditInstanceId,
 		string scriptPath,
 		out CodeEdit codeEdit,
@@ -162,8 +262,8 @@ internal sealed class AutocompletePluginHost
 		try
 		{
 			if (!current.Editable) { detail = "Current CodeEdit is not editable."; return false; }
-			if (current.GetCaretCount() != 1) { detail = "Import commit requires exactly one caret."; return false; }
-			if (current.HasSelection(0)) { detail = "Import commit requires no active selection."; return false; }
+			if (current.GetCaretCount() != 1) { detail = "Managed commit requires exactly one caret."; return false; }
+			if (current.HasSelection(0)) { detail = "Managed commit requires no active selection."; return false; }
 		}
 		catch (Exception exception)
 		{
@@ -179,7 +279,7 @@ internal sealed class AutocompletePluginHost
 		string scriptPath,
 		CodeServiceCompletionTextEdit edit)
 	{
-		if (!TryValidateImportCommitEditor(codeEditInstanceId, scriptPath, out CodeEdit codeEdit, out string detail))
+		if (!TryValidateManagedCommitEditor(codeEditInstanceId, scriptPath, out CodeEdit codeEdit, out string detail))
 			return new AutocompleteResolvedEditApplyResult(false, false, detail);
 
 		AutocompleteResolvedEditApplyResult result = _resolvedEditApplier.TryApply(codeEdit, edit);
@@ -198,12 +298,60 @@ internal sealed class AutocompletePluginHost
 		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath)) return false;
 		if (!_completionCoordinator.IsValidationCurrent(generation)) return false;
 		suppressAutomaticRequest = _completionCoordinator.ValidateAfterTextChanged(codeEdit, scriptPath, generation);
+		SynchronizeHintTracking(codeEdit, scriptPath);
 		return _completionCoordinator.IsValidationCurrent(generation);
 	}
 
-	internal void InvalidatePendingValidations() => _completionCoordinator.InvalidatePendingValidations();
-	internal void ResetTransientState() { _completionCoordinator.Reset(); _editorBinding.Shutdown(); }
-	internal void Shutdown() { _completionCoordinator.InvalidatePendingValidations(); _editorBinding.Shutdown(); _themeController.Reset(); }
+	internal bool HasHintProcessWork => _hintController.HasProcessWork;
+
+	internal void ProcessHintFrame(double delta)
+	{
+		if (!_editorBinding.TryGetActiveCodeEdit(out CodeEdit codeEdit, out string scriptPath)
+			|| !_completionCoordinator.HasPublishedSessionForScript(scriptPath))
+		{
+			_hintController.Retire();
+			return;
+		}
+
+		_hintController.ProcessFrame(codeEdit, delta);
+	}
+
+	internal void ResetHintPresentation() => _hintController.Reset();
+
+	internal void InvalidatePendingValidations()
+	{
+		_completionCoordinator.InvalidatePendingValidations();
+		_hintController.Retire();
+	}
+
+	internal void ResetTransientState()
+	{
+		_hintController.Reset();
+		_completionCoordinator.Reset();
+		_editorBinding.Shutdown();
+	}
+
+	internal void Shutdown()
+	{
+		_hintController.Shutdown();
+		_completionCoordinator.InvalidatePendingValidations();
+		_editorBinding.Shutdown();
+		_themeController.Reset();
+	}
+
+	private void SynchronizeHintTracking(CodeEdit codeEdit, string scriptPath)
+	{
+		if (_completionCoordinator.HasPublishedSessionForScript(scriptPath))
+			_hintController.Activate(codeEdit);
+		else
+			_hintController.Retire();
+	}
+
+	private void InvalidateCompletionStateForEditorBinding()
+	{
+		_completionCoordinator.InvalidatePendingValidations();
+		_hintController.Reset();
+	}
 	private static string ToSingleLine(string value) => (value ?? "").Replace('\r', ' ').Replace('\n', ' ');
 }
 #endif

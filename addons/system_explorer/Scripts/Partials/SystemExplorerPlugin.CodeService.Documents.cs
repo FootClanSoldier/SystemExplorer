@@ -14,6 +14,7 @@ public partial class SystemExplorerPlugin
 	private const double CodeServiceDocumentQuietWindowSeconds = 0.2;
 	private const int CodeServiceDocumentMaximumBindingRetryAttempts = 3;
 	private const int CodeServiceDocumentMaximumQuietRetryAttempts = 3;
+	private const int CodeServiceDocumentMaximumWorkspaceReobservationAttempts = 3;
 
 	private CodeServiceDocumentSynchronizationCoordinator _codeServiceDocumentSynchronizationCoordinator;
 	private CodeServiceDocumentEditorBinding _codeServiceDocumentEditorBinding;
@@ -31,6 +32,8 @@ public partial class SystemExplorerPlugin
 	private bool _codeServiceDocumentCatchUpDeferredQueued;
 	private bool _codeServiceDocumentQuietBoundaryPending;
 	private bool _codeServiceDocumentFlightRetirementPending;
+	private bool _codeServiceDocumentWorkspaceReobservationPending;
+	private int _codeServiceDocumentWorkspaceReobservationAttempts;
 
 	private bool _codeServiceDocumentHasPendingWorkspaceReadyIntent;
 	private string _codeServiceDocumentPendingWorkspaceSessionId = "";
@@ -478,6 +481,10 @@ public partial class SystemExplorerPlugin
 			EnsureCodeServiceDocumentQuietTimerArmed();
 			return;
 		}
+
+		if (_codeServiceDocumentWorkspaceReobservationPending)
+			StartCodeServiceDocumentWorkspaceReobservation();
+
 		if (!TryRefreshCodeServiceOpenDocumentInventory("Quiet Boundary"))
 			return;
 
@@ -1063,7 +1070,32 @@ public partial class SystemExplorerPlugin
 			return;
 
 		if (outcome is CodeServiceDocumentOutcome.Success or CodeServiceDocumentOutcome.AlreadyCurrent)
+		{
+			_codeServiceDocumentWorkspaceReobservationAttempts = 0;
+			_codeServiceDocumentWorkspaceReobservationPending = false;
 			TryResumePendingAutocompleteCompletionAfterDocumentSynchronization();
+		}
+
+		if (outcome == CodeServiceDocumentOutcome.DocumentNotInWorkspace)
+		{
+			if (_codeServiceDocumentWorkspaceReobservationAttempts >= CodeServiceDocumentMaximumWorkspaceReobservationAttempts)
+			{
+				_codeServiceDocumentWorkspaceReobservationPending = false;
+				TryLogEditorOperation(
+					"CodeService Document Workspace Reobservation Suspended",
+					$"Attempts='{_codeServiceDocumentWorkspaceReobservationAttempts}', MaximumAttempts='{CodeServiceDocumentMaximumWorkspaceReobservationAttempts}', SessionId='{currentSession.SessionId}', ServicePid='{currentSession.ServiceProcessIdentity.ProcessId}'"
+				);
+				return;
+			}
+
+			_codeServiceDocumentWorkspaceReobservationPending = true;
+			TryLogEditorOperation(
+				"CodeService Document Workspace Reobservation Scheduled",
+				$"Attempt='{_codeServiceDocumentWorkspaceReobservationAttempts + 1}', MaximumAttempts='{CodeServiceDocumentMaximumWorkspaceReobservationAttempts}', SessionId='{currentSession.SessionId}', ServicePid='{currentSession.ServiceProcessIdentity.ProcessId}'"
+			);
+			RequestCodeServiceDocumentQuietBoundary();
+			return;
+		}
 
 		if (outcome is CodeServiceDocumentOutcome.RoslynUnavailable
 			or CodeServiceDocumentOutcome.Unavailable)
@@ -1157,6 +1189,39 @@ public partial class SystemExplorerPlugin
 		RestartCodeServiceDocumentQuietTimer();
 	}
 
+	private void StartCodeServiceDocumentWorkspaceReobservation()
+	{
+		_codeServiceDocumentWorkspaceReobservationPending = false;
+		CodeServiceClientCoordinator clientCoordinator = _codeServiceClientCoordinator;
+		if (clientCoordinator == null
+			|| !clientCoordinator.TryGetReadySessionInfo(out CodeServiceClientSessionInfo currentSession)
+			|| !MatchesPendingCodeServiceDocumentWorkspaceSession(currentSession)
+			|| string.IsNullOrWhiteSpace(_codeServiceDocumentPendingWorkspaceProjectRoot))
+		{
+			return;
+		}
+
+		if (_codeServiceDocumentWorkspaceReobservationAttempts >= CodeServiceDocumentMaximumWorkspaceReobservationAttempts)
+		{
+			TryLogEditorOperation(
+				"CodeService Document Workspace Reobservation Suspended",
+				$"Attempts='{_codeServiceDocumentWorkspaceReobservationAttempts}', MaximumAttempts='{CodeServiceDocumentMaximumWorkspaceReobservationAttempts}', SessionId='{currentSession.SessionId}', ServicePid='{currentSession.ServiceProcessIdentity.ProcessId}'"
+			);
+			return;
+		}
+
+		_codeServiceDocumentWorkspaceReobservationAttempts++;
+		TryLogEditorOperation(
+			"CodeService Document Workspace Reobservation Started",
+			$"Attempt='{_codeServiceDocumentWorkspaceReobservationAttempts}', MaximumAttempts='{CodeServiceDocumentMaximumWorkspaceReobservationAttempts}', SessionId='{currentSession.SessionId}', ServicePid='{currentSession.ServiceProcessIdentity.ProcessId}', ProjectRoot='{_codeServiceDocumentPendingWorkspaceProjectRoot}'"
+		);
+		_codeServiceWorkspaceReadyObservationTask = clientCoordinator.ObserveWorkspaceReadyAsync(
+			currentSession,
+			_codeServiceDocumentPendingWorkspaceProjectRoot,
+			"DocumentNotInWorkspace Recovery"
+		);
+	}
+
 	private void QueueCodeServiceDocumentBindingRetry()
 	{
 		if (_codeServiceDocumentBindingRetryQueued)
@@ -1248,8 +1313,10 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
+		_codeServiceDocumentWorkspaceReobservationPending = false;
 		if (logicalSessionChanged)
 		{
+			_codeServiceDocumentWorkspaceReobservationAttempts = 0;
 			CancelAutocompleteImportResolveForLogicalSessionChange(currentSession);
 			_codeServiceDocumentUnavailableLoggedSessionId = "";
 			_codeServiceDocumentUnavailableLoggedServicePid = 0;
@@ -1317,6 +1384,8 @@ public partial class SystemExplorerPlugin
 		_codeServiceDocumentCatchUpDeferredQueued = false;
 		_codeServiceDocumentQuietBoundaryPending = false;
 		_codeServiceDocumentFlightRetirementPending = false;
+		_codeServiceDocumentWorkspaceReobservationPending = false;
+		_codeServiceDocumentWorkspaceReobservationAttempts = 0;
 
 		Timer timer = _codeServiceDocumentQuietTimer;
 		if (IsValidGodotObject(timer))

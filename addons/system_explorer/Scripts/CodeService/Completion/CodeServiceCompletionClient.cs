@@ -578,6 +578,8 @@ internal sealed class CodeServiceCompletionClient
 			int preselectCount = 0;
 			int semanticOriginCount = 0;
 			int inheritanceDepthCount = 0;
+			int containingNamespaceCount = 0;
+			int namespaceDisambiguationCount = 0;
 			int requiresImportCount = 0;
 			int completionHandleCount = 0;
 			int? kind = null;
@@ -588,6 +590,8 @@ internal sealed class CodeServiceCompletionClient
 			bool preselect = false;
 			CodeServiceCompletionSemanticOrigin semanticOrigin = CodeServiceCompletionSemanticOrigin.Unknown;
 			int? inheritanceDepth = null;
+			string containingNamespace = null;
+			string namespaceDisambiguation = null;
 			bool requiresImport = false;
 			Guid? completionHandle = null;
 
@@ -658,6 +662,20 @@ internal sealed class CodeServiceCompletionClient
 							return false;
 						}
 						break;
+					case "containingNamespace":
+						if (++containingNamespaceCount != 1 || !TryReadNullableString(property.Value, out containingNamespace))
+						{
+							detail = "Completion item containingNamespace is invalid.";
+							return false;
+						}
+						break;
+					case "namespaceDisambiguation":
+						if (++namespaceDisambiguationCount != 1 || !TryReadNullableString(property.Value, out namespaceDisambiguation))
+						{
+							detail = "Completion item namespaceDisambiguation is invalid.";
+							return false;
+						}
+						break;
 					case "requiresImport":
 						if (++requiresImportCount != 1
 							|| (property.Value.ValueKind != JsonValueKind.True && property.Value.ValueKind != JsonValueKind.False))
@@ -698,9 +716,10 @@ internal sealed class CodeServiceCompletionClient
 
 			if (kindCount != 1 || displayTextCount != 1 || insertTextCount != 1 || filterTextCount != 1
 				|| sortTextCount != 1 || preselectCount != 1 || semanticOriginCount != 1
-				|| inheritanceDepthCount != 1 || requiresImportCount != 1 || completionHandleCount != 1)
+				|| inheritanceDepthCount != 1 || containingNamespaceCount != 1
+				|| namespaceDisambiguationCount != 1 || requiresImportCount != 1 || completionHandleCount != 1)
 			{
-				detail = "Completion item omitted one or more required schema-v5 properties.";
+				detail = "Completion item omitted one or more required schema-v6 properties.";
 				return false;
 			}
 			if (!IsSemanticMetadataConsistent(semanticOrigin, inheritanceDepth))
@@ -711,10 +730,16 @@ internal sealed class CodeServiceCompletionClient
 
 			var parsedItem = new CodeServiceCompletionItem(
 				kind, displayText, insertText, filterText, sortText, preselect,
-				semanticOrigin, inheritanceDepth, requiresImport, completionHandle);
+				semanticOrigin, inheritanceDepth, containingNamespace, namespaceDisambiguation,
+				requiresImport, completionHandle);
 			if (!parsedItem.HasValidCommitContract)
 			{
-				detail = "Completion item violates the schema-v5 commit contract.";
+				detail = "Completion item violates the schema-v6 commit contract.";
+				return false;
+			}
+			if (!parsedItem.HasValidNamespaceContract)
+			{
+				detail = "Completion item containingNamespace and namespaceDisambiguation are inconsistent.";
 				return false;
 			}
 
@@ -739,9 +764,30 @@ internal sealed class CodeServiceCompletionClient
 				detail = "Completion item sortText exceeds the local UTF-8 bound.";
 				return false;
 			}
+			int containingNamespaceBytes = 0;
+			if (containingNamespace != null
+				&& (containingNamespace.Length == 0
+					|| !TryGetBoundedUtf8ByteCount(
+						containingNamespace,
+						CodeServiceCompletionLimits.MaxContainingNamespaceUtf8Bytes,
+						out containingNamespaceBytes)))
+			{
+				detail = "Completion item containingNamespace is empty or exceeds the local UTF-8 bound.";
+				return false;
+			}
+			if (namespaceDisambiguation != null
+				&& (namespaceDisambiguation.Length == 0
+					|| !TryGetBoundedUtf8ByteCount(
+						namespaceDisambiguation,
+						CodeServiceCompletionLimits.MaxContainingNamespaceUtf8Bytes,
+						out _)))
+			{
+				detail = "Completion item namespaceDisambiguation is empty or exceeds the local UTF-8 bound.";
+				return false;
+			}
 
 			int itemBytes;
-			try { itemBytes = checked(displayTextBytes + insertTextBytes + filterTextBytes + sortTextBytes); }
+			try { itemBytes = checked(displayTextBytes + insertTextBytes + filterTextBytes + sortTextBytes + containingNamespaceBytes); }
 			catch (OverflowException)
 			{
 				detail = "Completion item UTF-8 accounting overflowed.";

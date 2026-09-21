@@ -116,28 +116,76 @@ internal sealed class AutocompleteCompletionCoordinator
 		return true;
 	}
 
-	internal bool TryGetSelectedImportCompletion(
+	internal bool HasPublishedSessionForScript(string scriptPath)
+	{
+		AutocompleteCompletionSession session = _session;
+		return session != null
+			&& string.Equals(session.ScriptPath, scriptPath ?? "", StringComparison.Ordinal);
+	}
+
+	internal bool TryGetSelectedManagedCommitCompletion(
 		CodeEdit codeEdit,
 		string scriptPath,
 		out AutocompleteCompletionItem selectedItem,
 		out AutocompleteCompletionAuthority authority,
 		out long requestGeneration,
+		out AutocompletePrefixCapture commitCapture,
+		out AutocompleteManagedCommitShape commitShape,
+		out bool selectedManagedCommitIdentified,
 		out string detail)
 	{
-		selectedItem = null; authority = null; requestGeneration = 0; detail = "";
+		selectedItem = null;
+		authority = null;
+		requestGeneration = 0;
+		commitCapture = default;
+		commitShape = default;
+		selectedManagedCommitIdentified = false;
+		detail = "";
+
 		AutocompleteCompletionSession session = _session;
 		if (session == null || !string.Equals(session.ScriptPath, scriptPath ?? "", StringComparison.Ordinal))
 		{
 			detail = "No current managed completion session exists for this script.";
 			return false;
 		}
-		if (!_presenter.TryGetSelectedImportCompletion(codeEdit, session, out selectedItem, out detail)) return false;
+		if (!_presenter.TryGetSelectedManagedCommitCompletion(
+			codeEdit,
+			session,
+			out selectedItem,
+			out commitShape,
+			out selectedManagedCommitIdentified,
+			out detail))
+		{
+			return false;
+		}
+
+		selectedManagedCommitIdentified = true;
+		if (!_prefixExtractor.TryExtract(codeEdit, out commitCapture))
+		{
+			detail = "CommitAnchorChanged";
+			return false;
+		}
+		if (!session.CanRemainOpen(
+			scriptPath,
+			commitCapture.Line,
+			commitCapture.PrefixStartColumn,
+			commitCapture.Prefix))
+		{
+			detail = "CommitAnchorChanged";
+			return false;
+		}
+		if (!(selectedItem.FilterText ?? "").StartsWith(commitCapture.Prefix ?? "", StringComparison.OrdinalIgnoreCase))
+		{
+			detail = "CommitAnchorChanged";
+			return false;
+		}
+
 		authority = session.Authority;
 		requestGeneration = session.RequestGeneration;
 		return true;
 	}
 
-	internal void RetireAfterImportCommitInterception(CodeEdit codeEdit)
+	internal void RetireAfterManagedCommitInterception(CodeEdit codeEdit)
 	{
 		_validationGeneration++;
 		_requestGeneration++;
@@ -147,9 +195,9 @@ internal sealed class AutocompleteCompletionCoordinator
 
 	internal void SuppressAutomaticRequestForNextTextChanged()
 	{
-		// Import commit retires its published session before resolve. Preserve only the
-		// ordinary-commit behavior we still need: the resolved edit's own deferred
-		// TextChanged must not immediately create a fresh automatic completion request.
+		// Managed commit interception retires its published session before the local/resolve decision.
+		// Preserve only the ordinary-commit behavior we still need: a plugin-owned
+		// source edit's deferred TextChanged must not reopen autocomplete immediately.
 		_suppressAutomaticRequestOnNextTextChanged = true;
 	}
 

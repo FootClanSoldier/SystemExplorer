@@ -37,16 +37,18 @@ public partial class SystemExplorerPlugin
 		bool WasCanceled,
 		long DurationMilliseconds);
 
-	private sealed record AutocompleteImportCommitIntent(
+	private sealed record AutocompleteManagedCommitIntent(
 		string ManagedGeneration,
 		ulong CodeEditInstanceId,
 		string ScriptPath,
 		long RequestGeneration,
 		AutocompleteCompletionItem Item,
-		AutocompleteCompletionAuthority Authority);
+		AutocompleteCompletionAuthority Authority,
+		AutocompletePrefixCapture CommitCapture,
+		AutocompleteManagedCommitShape CommitShape);
 
 	private sealed record AutocompleteCompletedImportResolveFlight(
-		AutocompleteImportCommitIntent Intent,
+		AutocompleteManagedCommitIntent Intent,
 		CodeServiceCompletionResolveResult Result,
 		bool WasCanceled,
 		long DurationMilliseconds);
@@ -67,7 +69,7 @@ public partial class SystemExplorerPlugin
 
 	private Task<CodeServiceCompletionResolveResult> _autocompleteImportResolveFlight;
 	private CancellationTokenSource _autocompleteImportResolveCancellation;
-	private AutocompleteImportCommitIntent _autocompleteImportResolveIntent;
+	private AutocompleteManagedCommitIntent _autocompleteImportResolveIntent;
 	private Task _autocompleteImportResolveObservationTask;
 	private AutocompleteCompletedImportResolveFlight _autocompleteCompletedImportResolveFlight;
 
@@ -89,8 +91,25 @@ public partial class SystemExplorerPlugin
 			nameof(OnAutocompleteTextChanged),
 			nameof(OnAutocompleteCodeCompletionRequested),
 			nameof(OnAutocompleteGuiInput),
-			CancelAutocompleteImportResolveForEditorRebind
+			CancelAutocompleteImportResolveForEditorRebind,
+			RefreshEditorPluginProcessingState
 		);
+	}
+
+
+	private bool HasAutocompleteHintProcessWork()
+	{
+		return _autocompleteHost?.HasHintProcessWork == true;
+	}
+
+	private void ProcessAutocompleteHintFrame(double delta)
+	{
+		_autocompleteHost?.ProcessHintFrame(delta);
+	}
+
+	private void ResetAutocompleteHintPresentationAfterProcessFailure()
+	{
+		_autocompleteHost?.ResetHintPresentation();
 	}
 
 	private bool TryEnsureAutocompleteHost(out AutocompletePluginHost host)
@@ -338,45 +357,108 @@ public partial class SystemExplorerPlugin
 	private void OnAutocompleteGuiInput(InputEvent inputEvent)
 	{
 		AutocompletePluginHost host = _autocompleteHost;
+		host?.ObserveHintGuiInput(inputEvent);
 		host?.RestoreTypedOpeningParenthesisAutoCloseSuppression();
 
 		if (host != null && IsAutocompleteTypedOpeningParenthesisInput(inputEvent))
 			host.TrySuppressTypedOpeningParenthesisAutoClose();
 
-		if (!IsAutocompleteImportConfirmationEvent(inputEvent))
+		if (!IsAutocompleteManagedCommitConfirmationEvent(inputEvent))
 			return;
 
 		if (host == null)
 			return;
 
-		bool intercepted = host.TryInterceptSelectedImportCommit(
-			out AutocompleteImportCommitSelection selection,
+		bool intercepted = host.TryInterceptSelectedManagedCommit(
+			out AutocompleteManagedCommitSelection selection,
 			out string interceptionDetail
 		);
 		if (!intercepted)
 			return;
 
-		// The exact managed import option has already been accepted at the Control
-		// boundary and its native popup canceled. From this point onward every
-		// failure is fail-closed and can never fall through to placeholder insertion.
+		// The exact managed row has already been accepted at the Control boundary and
+		// its native popup canceled. From this point every failure is fail-closed and
+		// can never fall through to placeholder or ambiguous plain-label insertion.
 		if (selection == null)
 		{
+			string discardReason = string.IsNullOrEmpty(interceptionDetail)
+				? "InterceptionFailedClosed"
+				: interceptionDetail;
 			TryLogEditorOperation(
-				"CodeService Completion Resolve Discarded",
-				$"Reason='{BoundAutocompleteCompletionDetail(interceptionDetail)}'"
+				"CodeService Completion Local Managed Commit Discarded",
+				$"Reason='{BoundAutocompleteCompletionDetail(discardReason)}'"
 			);
 			return;
 		}
 
-		var intent = new AutocompleteImportCommitIntent(
+		var intent = new AutocompleteManagedCommitIntent(
 			ManagedAssemblyGeneration,
 			selection.CodeEditInstanceId,
 			selection.ScriptPath,
 			selection.RequestGeneration,
 			selection.Item,
-			selection.Authority
+			selection.Authority,
+			selection.CommitCapture,
+			selection.CommitShape
 		);
-		TryStartAutocompleteImportResolveFlight(intent);
+
+		// Both import and direct-collision local mutations require the exact original
+		// Service/document/session authority. This is an in-memory validation only.
+		if (!TryValidateAutocompleteManagedCommitState(intent, out _))
+		{
+			TryLogEditorOperation(
+				"CodeService Completion Local Managed Commit Discarded",
+				BuildAutocompleteLocalManagedCommitMetadata(intent)
+					+ ", Reason='CommitAuthorityChanged'"
+			);
+			return;
+		}
+
+		AutocompleteLocalImportCommitApplyResult localResult = host.ApplyLocalManagedCommit(
+			intent.CodeEditInstanceId,
+			intent.ScriptPath,
+			intent.Item,
+			intent.CommitCapture,
+			intent.CommitShape
+		);
+		switch (localResult.Outcome)
+		{
+			case AutocompleteLocalImportCommitOutcome.Applied:
+				TryLogEditorOperation(
+					"CodeService Completion Local Managed Commit Applied",
+					BuildAutocompleteLocalManagedCommitMetadata(intent)
+						+ $", AddedUsingDirective='{ToLowerBoolean(localResult.AddedUsingDirective)}', QualifiedNameReplacement='{ToLowerBoolean(localResult.QualifiedNameReplacement)}', CaretRestored='{ToLowerBoolean(localResult.CaretRestored)}'"
+				);
+				return;
+
+			case AutocompleteLocalImportCommitOutcome.NotEligible:
+				if (intent.Item.RequiresImport)
+				{
+					TryLogEditorOperation(
+						"CodeService Completion Local Managed Commit Fallback",
+						BuildAutocompleteLocalManagedCommitMetadata(intent)
+							+ $", Reason='{BoundAutocompleteCompletionDetail(localResult.Detail)}'"
+					);
+					TryStartAutocompleteImportResolveFlight(intent);
+					return;
+				}
+
+				TryLogEditorOperation(
+					"CodeService Completion Local Managed Commit Discarded",
+					BuildAutocompleteLocalManagedCommitMetadata(intent)
+						+ $", Reason='{BoundAutocompleteCompletionDetail(localResult.Detail)}'"
+				);
+				return;
+
+			case AutocompleteLocalImportCommitOutcome.FailedClosed:
+			default:
+				TryLogEditorOperation(
+					"CodeService Completion Local Managed Commit Discarded",
+					BuildAutocompleteLocalManagedCommitMetadata(intent)
+						+ $", Reason='{BoundAutocompleteCompletionDetail(localResult.Detail)}'"
+				);
+				return;
+		}
 	}
 
 	private static bool IsAutocompleteTypedOpeningParenthesisInput(InputEvent inputEvent)
@@ -386,7 +468,7 @@ public partial class SystemExplorerPlugin
 			&& keyEvent.Unicode == (uint)'(';
 	}
 
-	private static bool IsAutocompleteImportConfirmationEvent(InputEvent inputEvent)
+	private static bool IsAutocompleteManagedCommitConfirmationEvent(InputEvent inputEvent)
 	{
 		if (inputEvent is InputEventKey keyEvent)
 		{
@@ -401,7 +483,7 @@ public partial class SystemExplorerPlugin
 			&& mouseButton.DoubleClick;
 	}
 
-	private void TryStartAutocompleteImportResolveFlight(AutocompleteImportCommitIntent intent)
+	private void TryStartAutocompleteImportResolveFlight(AutocompleteManagedCommitIntent intent)
 	{
 		if (intent == null
 			|| intent.Item == null
@@ -413,7 +495,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!TryValidateAutocompleteImportCommitState(intent, out string preResolveDetail))
+		if (!TryValidateAutocompleteManagedCommitState(intent, out string preResolveDetail))
 		{
 			TryLogEditorOperation(
 				"CodeService Completion Resolve Discarded",
@@ -519,7 +601,7 @@ public partial class SystemExplorerPlugin
 	private async Task ObserveAutocompleteImportResolveFlightAsync(
 		Task<CodeServiceCompletionResolveResult> flight,
 		CancellationTokenSource flightCancellation,
-		AutocompleteImportCommitIntent intent,
+		AutocompleteManagedCommitIntent intent,
 		long startedTimestamp)
 	{
 		CodeServiceCompletionResolveResult result = default;
@@ -649,7 +731,7 @@ public partial class SystemExplorerPlugin
 
 	private void HandleAutocompleteImportResolveResult(AutocompleteCompletedImportResolveFlight completed)
 	{
-		AutocompleteImportCommitIntent intent = completed.Intent;
+		AutocompleteManagedCommitIntent intent = completed.Intent;
 		CodeServiceCompletionResolveResult result = completed.Result;
 		switch (result.Outcome)
 		{
@@ -697,7 +779,7 @@ public partial class SystemExplorerPlugin
 			return;
 		}
 
-		if (!TryValidateAutocompleteImportCommitState(intent, out string postResolveDetail))
+		if (!TryValidateAutocompleteManagedCommitState(intent, out string postResolveDetail))
 		{
 			TryLogEditorOperation(
 				"CodeService Completion Resolve Discarded",
@@ -744,14 +826,14 @@ public partial class SystemExplorerPlugin
 		}
 	}
 
-	private bool TryValidateAutocompleteImportCommitState(
-		AutocompleteImportCommitIntent intent,
+	private bool TryValidateAutocompleteManagedCommitState(
+		AutocompleteManagedCommitIntent intent,
 		out string detail)
 	{
 		detail = "";
 		if (intent == null || intent.Authority == null)
 		{
-			detail = "Import commit authority is unavailable.";
+			detail = "Managed commit authority is unavailable.";
 			return false;
 		}
 		if (!string.Equals(intent.ManagedGeneration, ManagedAssemblyGeneration, StringComparison.Ordinal))
@@ -762,7 +844,7 @@ public partial class SystemExplorerPlugin
 
 		AutocompletePluginHost host = _autocompleteHost;
 		if (host == null
-			|| !host.TryValidateImportCommitEditor(intent.CodeEditInstanceId, intent.ScriptPath, out _, out detail))
+			|| !host.TryValidateManagedCommitEditor(intent.CodeEditInstanceId, intent.ScriptPath, out _, out detail))
 			return false;
 
 		AutocompleteCompletionAuthority authority = intent.Authority;
@@ -856,7 +938,16 @@ public partial class SystemExplorerPlugin
 		try { cancellation?.Cancel(); } catch { }
 	}
 
-	private static string BuildAutocompleteImportResolveMetadata(AutocompleteImportCommitIntent intent)
+	private static string BuildAutocompleteLocalManagedCommitMetadata(AutocompleteManagedCommitIntent intent)
+	{
+		if (intent == null || intent.Authority == null || intent.Item == null)
+			return "";
+		return $"RequestGeneration='{intent.RequestGeneration}', ClientVersion='{intent.Authority.ClientVersion}', CommitShape='{intent.CommitShape}', RequiresImport='{ToLowerBoolean(intent.Item.RequiresImport)}'";
+	}
+
+	private static string ToLowerBoolean(bool value) => value ? "true" : "false";
+
+	private static string BuildAutocompleteImportResolveMetadata(AutocompleteManagedCommitIntent intent)
 	{
 		if (intent == null || intent.Authority == null)
 			return "";
@@ -1413,6 +1504,8 @@ public partial class SystemExplorerPlugin
 					item.Preselect,
 					item.SemanticOrigin,
 					item.InheritanceDepth,
+					item.ContainingNamespace,
+					item.NamespaceDisambiguation,
 					item.RequiresImport,
 					item.CompletionHandle
 				));

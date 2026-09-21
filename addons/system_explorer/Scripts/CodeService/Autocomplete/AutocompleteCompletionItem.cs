@@ -15,11 +15,17 @@ internal sealed record AutocompleteCompletionItem(
 	bool Preselect,
 	CodeServiceCompletionSemanticOrigin SemanticOrigin,
 	int? InheritanceDepth,
+	string? ContainingNamespace,
+	string? NamespaceDisambiguation,
 	bool RequiresImport,
 	Guid? CompletionHandle)
 {
 	internal bool HasValidCommitContract => RequiresImport
 		? InsertText == null && CompletionHandle.HasValue && CompletionHandle.Value != Guid.Empty
 		: !string.IsNullOrEmpty(InsertText) && !CompletionHandle.HasValue;
+
+	internal bool HasValidNamespaceContract => NamespaceDisambiguation == null
+		|| (ContainingNamespace != null
+			&& string.Equals(NamespaceDisambiguation, ContainingNamespace, StringComparison.Ordinal));
 }
 #endif

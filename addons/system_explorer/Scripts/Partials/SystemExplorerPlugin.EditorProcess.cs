@@ -72,6 +72,15 @@ public partial class SystemExplorerPlugin
 			}
 		}
 
+		try
+		{
+			ProcessAutocompleteHintFrame(delta);
+		}
+		catch
+		{
+			ResetAutocompleteHintPresentationAfterProcessFailure();
+		}
+
 		bool shouldReapplyBusyCursor = false;
 
 		try
@@ -101,6 +110,7 @@ public partial class SystemExplorerPlugin
 			|| HasPendingNoteDialogOpenProcessWork()
 			|| HasPendingPersistedNoteScrollFinalRestoreProcessWork()
 			|| HasActiveNoteDialogWindowObservationProcessWork()
+			|| HasAutocompleteHintProcessWork()
 		);
 	}
 
