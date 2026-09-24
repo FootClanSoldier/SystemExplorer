@@ -1,0 +1,10 @@
+Codicons attribution
+
+The Codicon SVG assets in this directory originate from Microsoft's vscode-codicons repository:
+https://github.com/microsoft/vscode-codicons
+
+The Codicon content is distributed under the Creative Commons Attribution 4.0 International license (CC BY 4.0) according to the upstream repository. See CODICONS_LICENSE.txt for the upstream license text.
+
+System Explorer distributes the SVG source files unchanged. At runtime, the autocomplete icon provider substitutes the SVG currentColor presentation value to match the active Godot editor theme; that transient rendering transformation is not written back to the SVG files.
+
+System Explorer is not affiliated with, sponsored by, or endorsed by Microsoft. Microsoft names and trademarks remain the property of their respective owners.

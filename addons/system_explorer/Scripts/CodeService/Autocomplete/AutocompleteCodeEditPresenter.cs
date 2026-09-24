@@ -2,6 +2,7 @@
 using Godot;
 using System;
 using System.Collections.Generic;
+using SystemExplorer.CodeService.Autocomplete.Styling;
 
 namespace SystemExplorer.CodeService.Autocomplete;
 
@@ -9,6 +10,8 @@ internal sealed class AutocompleteCodeEditPresenter
 {
 	private const int VisualNamespaceMinimumGapColumns = 6;
 	private const string VisualRightPadding = "  ";
+
+	private readonly AutocompleteCompletionIconProvider _iconProvider;
 
 	private readonly struct NativeDisplayLayout
 	{
@@ -18,6 +21,11 @@ internal sealed class AutocompleteCodeEditPresenter
 		}
 
 		internal int NamespaceRightEdgeColumn { get; }
+	}
+
+	internal AutocompleteCodeEditPresenter(AutocompleteCompletionIconProvider iconProvider)
+	{
+		_iconProvider = iconProvider ?? throw new ArgumentNullException(nameof(iconProvider));
 	}
 
 	internal bool TryPublish(CodeEdit codeEdit, IReadOnlyList<AutocompleteCompletionItem> items, out string detail)
@@ -52,6 +60,11 @@ internal sealed class AutocompleteCodeEditPresenter
 		for (int itemIndex = 0; itemIndex < items.Count; itemIndex++)
 		{
 			AutocompleteCompletionItem item = items[itemIndex];
+			Texture2D icon = _iconProvider.ResolveIcon(
+				codeEdit,
+				item.ServiceKind,
+				item.DisplayText,
+				item.ContainingNamespace);
 			if (!item.RequiresImport)
 			{
 				// Preserve the ordinary native publication path exactly. Godot remains
@@ -61,6 +74,7 @@ internal sealed class AutocompleteCodeEditPresenter
 					item.Kind,
 					GetNativeDisplayText(item, displayLayout),
 					item.InsertText,
+					icon: icon,
 					location: nativeLocations[itemIndex]);
 				continue;
 			}
@@ -72,6 +86,7 @@ internal sealed class AutocompleteCodeEditPresenter
 				item.Kind,
 				GetNativeDisplayText(item, displayLayout),
 				item.DisplayText,
+				icon: icon,
 				value: (Variant)item.CompletionHandle.Value.ToString("D"),
 				location: nativeLocations[itemIndex]);
 		}
@@ -79,6 +94,142 @@ internal sealed class AutocompleteCodeEditPresenter
 		codeEdit.UpdateCodeCompletionOptions(true);
 		TryApplyPreselectBestEffort(codeEdit, items, displayLayout);
 		return true;
+	}
+
+	internal bool TryGetSelectedPublishedCompletion(
+		CodeEdit codeEdit,
+		AutocompleteCompletionSession session,
+		out AutocompleteCompletionItem selectedItem,
+		out string detail)
+	{
+		selectedItem = null;
+		detail = "";
+		if (!IsValidGodotObject(codeEdit) || session == null)
+		{
+			detail = "Current native completion/session is unavailable.";
+			return false;
+		}
+
+		try
+		{
+			int selectedIndex = codeEdit.GetCodeCompletionSelectedIndex();
+			if (selectedIndex < 0)
+			{
+				detail = "Native completion is not active.";
+				return false;
+			}
+
+			var nativeOption = codeEdit.GetCodeCompletionOption(selectedIndex);
+			Variant nativeKind = nativeOption["kind"];
+			Variant nativeDisplayText = nativeOption["display_text"];
+			Variant nativeInsertText = nativeOption["insert_text"];
+			Variant nativeDefaultValue = nativeOption["default_value"];
+			if (nativeKind.VariantType != Variant.Type.Int
+				|| nativeDisplayText.VariantType != Variant.Type.String
+				|| nativeInsertText.VariantType != Variant.Type.String)
+			{
+				detail = "Selected native option does not expose the exact managed publication shape.";
+				return false;
+			}
+
+			NativeDisplayLayout displayLayout = BuildNativeDisplayLayout(session.PublishedItems);
+			string nativeHandleText = nativeDefaultValue.VariantType == Variant.Type.String
+				? nativeDefaultValue.AsString()
+				: null;
+			bool hasCanonicalHandle = TryParseCanonicalNonEmptyGuid(nativeHandleText, out Guid nativeHandle);
+
+			AutocompleteCompletionItem match = null;
+			int matchCount = 0;
+			foreach (AutocompleteCompletionItem item in session.PublishedItems)
+			{
+				if (item == null || !item.HasValidCommitContract || !item.HasValidNamespaceContract)
+					continue;
+
+				bool matches = item.RequiresImport
+					? MatchesSelectedPublishedImport(
+						item,
+						nativeKind,
+						nativeDisplayText,
+						nativeInsertText,
+						nativeHandleText,
+						hasCanonicalHandle,
+						nativeHandle,
+						displayLayout)
+					: MatchesSelectedPublishedOrdinary(
+						item,
+						nativeKind,
+						nativeDisplayText,
+						nativeInsertText,
+						displayLayout);
+				if (!matches)
+					continue;
+
+				match = item;
+				matchCount++;
+				if (matchCount > 1)
+					break;
+			}
+
+			if (matchCount != 1 || match == null)
+			{
+				detail = matchCount > 1
+					? "Selected native option matched multiple managed published items."
+					: "Selected native option did not exactly match a managed published item.";
+				return false;
+			}
+
+			selectedItem = match;
+			return true;
+		}
+		catch (Exception exception)
+		{
+			detail = "Selected native completion option could not be inspected: " + ToSingleLine(exception.Message);
+			return false;
+		}
+	}
+
+	private static bool MatchesSelectedPublishedOrdinary(
+		AutocompleteCompletionItem item,
+		Variant nativeKind,
+		Variant nativeDisplayText,
+		Variant nativeInsertText,
+		NativeDisplayLayout displayLayout)
+	{
+		return !item.RequiresImport
+			&& nativeKind.AsInt64() == (long)item.Kind
+			&& string.Equals(
+				nativeDisplayText.AsString(),
+				GetNativeDisplayText(item, displayLayout),
+				StringComparison.Ordinal)
+			&& string.Equals(nativeInsertText.AsString(), item.InsertText, StringComparison.Ordinal);
+	}
+
+	private static bool MatchesSelectedPublishedImport(
+		AutocompleteCompletionItem item,
+		Variant nativeKind,
+		Variant nativeDisplayText,
+		Variant nativeInsertText,
+		string nativeHandleText,
+		bool hasCanonicalHandle,
+		Guid nativeHandle,
+		NativeDisplayLayout displayLayout)
+	{
+		return item.RequiresImport
+			&& item.InsertText == null
+			&& item.CompletionHandle.HasValue
+			&& item.CompletionHandle.Value != Guid.Empty
+			&& hasCanonicalHandle
+			&& nativeHandle == item.CompletionHandle.Value
+			&& nativeKind.AsInt64() == (long)item.Kind
+			&& string.Equals(
+				nativeDisplayText.AsString(),
+				GetNativeDisplayText(item, displayLayout),
+				StringComparison.Ordinal)
+			&& string.Equals(nativeInsertText.AsString(), item.DisplayText, StringComparison.Ordinal)
+			&& string.Equals(
+				nativeHandleText,
+				item.CompletionHandle.Value.ToString("D"),
+				StringComparison.Ordinal);
 	}
 
 	internal bool TryGetSelectedManagedCommitCompletion(

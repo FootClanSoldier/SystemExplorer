@@ -25,11 +25,17 @@ internal sealed class AutocompletePluginHost
 		string textChangedMethodName,
 		string completionRequestedMethodName,
 		string guiInputMethodName,
+		string iconRootPath,
 		Action editorBindingInvalidated,
 		Action hintProcessWorkChanged)
 	{
 		var prefixExtractor = new AutocompletePrefixExtractor();
-		var presenter = new AutocompleteCodeEditPresenter();
+		var godotTypeIconProvider = new AutocompleteGodotTypeIconProvider(
+			() => EditorInterface.Singleton?.GetEditorTheme());
+		var iconProvider = new AutocompleteCompletionIconProvider(
+			iconRootPath,
+			godotTypeIconProvider);
+		var presenter = new AutocompleteCodeEditPresenter(iconProvider);
 		_completionCoordinator = new AutocompleteCompletionCoordinator(prefixExtractor, presenter);
 		_hintController = new AutocompleteHintController(
 			prefixExtractor,
@@ -52,16 +58,6 @@ internal sealed class AutocompletePluginHost
 	}
 
 	internal bool EnsureLifecycleCurrent() => _editorBinding.EnsureLifecycleCurrent();
-
-	internal bool TrySuppressTypedOpeningParenthesisAutoClose()
-	{
-		return _editorBinding.TrySuppressTypedOpeningParenthesisAutoClose();
-	}
-
-	internal void RestoreTypedOpeningParenthesisAutoCloseSuppression()
-	{
-		_editorBinding.RestoreTypedOpeningParenthesisAutoCloseSuppression();
-	}
 
 	internal void ObserveHintGuiInput(InputEvent inputEvent)
 	{
@@ -313,7 +309,25 @@ internal sealed class AutocompletePluginHost
 			return;
 		}
 
-		_hintController.ProcessFrame(codeEdit, delta);
+		AutocompleteHintContent hintContent = null;
+		if (_completionCoordinator.TryGetSelectedPublishedCompletion(
+			codeEdit,
+			scriptPath,
+			out AutocompleteCompletionItem selectedItem,
+			out long requestGeneration,
+			out _))
+		{
+			hintContent = new AutocompleteHintContent(
+				requestGeneration,
+				selectedItem.ServiceKind,
+				selectedItem.DisplayText,
+				selectedItem.ContainingNamespace,
+				selectedItem.ValueType,
+				selectedItem.MethodSignatureSet,
+				selectedItem.PropertyAccessorSet);
+		}
+
+		_hintController.ProcessFrame(codeEdit, hintContent, delta);
 	}
 
 	internal void ResetHintPresentation() => _hintController.Reset();

@@ -50,6 +50,34 @@ internal enum CodeServiceCompletionSemanticOrigin
 	FrameworkOrOther,
 }
 
+internal sealed record CodeServiceCompletionMethodSignatureSet(
+	int TotalCount,
+	IReadOnlyList<CodeServiceCompletionMethodSignature> Signatures);
+
+internal sealed record CodeServiceCompletionMethodSignature(
+	string DisplayText,
+	string? ReturnType,
+	IReadOnlyList<string> TypeParameters,
+	int ParameterCount,
+	IReadOnlyList<CodeServiceCompletionMethodParameter> Parameters);
+
+internal sealed record CodeServiceCompletionMethodParameter(
+	string DisplayText,
+	string Type,
+	string Name,
+	string? Modifier,
+	bool IsParams,
+	bool IsOptional);
+
+internal sealed record CodeServiceCompletionPropertyAccessorSet(
+	string PropertyAccessibility,
+	CodeServiceCompletionPropertyAccessor? Getter,
+	CodeServiceCompletionPropertyAccessor? Setter);
+
+internal sealed record CodeServiceCompletionPropertyAccessor(
+	string Kind,
+	string Accessibility);
+
 internal sealed record CodeServiceCompletionItem(
 	int? Kind,
 	string DisplayText,
@@ -60,6 +88,10 @@ internal sealed record CodeServiceCompletionItem(
 	CodeServiceCompletionSemanticOrigin SemanticOrigin,
 	int? InheritanceDepth,
 	string? ContainingNamespace,
+	string? ValueType,
+	string? ContainingType,
+	CodeServiceCompletionMethodSignatureSet? MethodSignatureSet,
+	CodeServiceCompletionPropertyAccessorSet? PropertyAccessorSet,
 	string? NamespaceDisambiguation,
 	bool RequiresImport,
 	Guid? CompletionHandle)

@@ -8,6 +8,7 @@ namespace SystemExplorer.CodeService.Autocomplete;
 
 internal sealed record AutocompleteCompletionItem(
 	CodeEdit.CodeCompletionKind Kind,
+	int? ServiceKind,
 	string DisplayText,
 	string? InsertText,
 	string FilterText,
@@ -16,6 +17,10 @@ internal sealed record AutocompleteCompletionItem(
 	CodeServiceCompletionSemanticOrigin SemanticOrigin,
 	int? InheritanceDepth,
 	string? ContainingNamespace,
+	string? ValueType,
+	string? ContainingType,
+	CodeServiceCompletionMethodSignatureSet? MethodSignatureSet,
+	CodeServiceCompletionPropertyAccessorSet? PropertyAccessorSet,
 	string? NamespaceDisambiguation,
 	bool RequiresImport,
 	Guid? CompletionHandle)

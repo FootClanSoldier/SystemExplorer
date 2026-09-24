@@ -123,6 +123,55 @@ internal sealed class AutocompleteCompletionCoordinator
 			&& string.Equals(session.ScriptPath, scriptPath ?? "", StringComparison.Ordinal);
 	}
 
+	internal bool TryGetSelectedPublishedCompletion(
+		CodeEdit codeEdit,
+		string scriptPath,
+		out AutocompleteCompletionItem selectedItem,
+		out long requestGeneration,
+		out string detail)
+	{
+		selectedItem = null;
+		requestGeneration = 0;
+		detail = "";
+
+		AutocompleteCompletionSession session = _session;
+		if (session == null || !string.Equals(session.ScriptPath, scriptPath ?? "", StringComparison.Ordinal))
+		{
+			detail = "No current managed completion session exists for this script.";
+			return false;
+		}
+		if (!_presenter.TryGetSelectedPublishedCompletion(codeEdit, session, out selectedItem, out detail))
+			return false;
+
+		if (!_prefixExtractor.TryExtract(codeEdit, out AutocompletePrefixCapture currentCapture))
+		{
+			selectedItem = null;
+			detail = "PresentationAnchorChanged";
+			return false;
+		}
+		if (!session.CanRemainOpen(
+			scriptPath,
+			currentCapture.Line,
+			currentCapture.PrefixStartColumn,
+			currentCapture.Prefix))
+		{
+			selectedItem = null;
+			detail = "PresentationAnchorChanged";
+			return false;
+		}
+		if (!(selectedItem.FilterText ?? "").StartsWith(
+			currentCapture.Prefix ?? "",
+			StringComparison.OrdinalIgnoreCase))
+		{
+			selectedItem = null;
+			detail = "PresentationAnchorChanged";
+			return false;
+		}
+
+		requestGeneration = session.RequestGeneration;
+		return true;
+	}
+
 	internal bool TryGetSelectedManagedCommitCompletion(
 		CodeEdit codeEdit,
 		string scriptPath,

@@ -91,6 +91,7 @@ public partial class SystemExplorerPlugin
 			nameof(OnAutocompleteTextChanged),
 			nameof(OnAutocompleteCodeCompletionRequested),
 			nameof(OnAutocompleteGuiInput),
+			PluginFolderPath + "/Icons",
 			CancelAutocompleteImportResolveForEditorRebind,
 			RefreshEditorPluginProcessingState
 		);
@@ -358,10 +359,6 @@ public partial class SystemExplorerPlugin
 	{
 		AutocompletePluginHost host = _autocompleteHost;
 		host?.ObserveHintGuiInput(inputEvent);
-		host?.RestoreTypedOpeningParenthesisAutoCloseSuppression();
-
-		if (host != null && IsAutocompleteTypedOpeningParenthesisInput(inputEvent))
-			host.TrySuppressTypedOpeningParenthesisAutoClose();
 
 		if (!IsAutocompleteManagedCommitConfirmationEvent(inputEvent))
 			return;
@@ -459,13 +456,6 @@ public partial class SystemExplorerPlugin
 				);
 				return;
 		}
-	}
-
-	private static bool IsAutocompleteTypedOpeningParenthesisInput(InputEvent inputEvent)
-	{
-		return inputEvent is InputEventKey keyEvent
-			&& keyEvent.Pressed
-			&& keyEvent.Unicode == (uint)'(';
 	}
 
 	private static bool IsAutocompleteManagedCommitConfirmationEvent(InputEvent inputEvent)
@@ -1497,6 +1487,7 @@ public partial class SystemExplorerPlugin
 					return;
 				mappedItems.Add(new AutocompleteCompletionItem(
 					AutocompleteCompletionKindMapper.Map(item.Kind),
+					item.Kind,
 					item.DisplayText,
 					item.InsertText,
 					item.FilterText,
@@ -1505,6 +1496,10 @@ public partial class SystemExplorerPlugin
 					item.SemanticOrigin,
 					item.InheritanceDepth,
 					item.ContainingNamespace,
+					item.ValueType,
+					item.ContainingType,
+					item.MethodSignatureSet,
+					item.PropertyAccessorSet,
 					item.NamespaceDisambiguation,
 					item.RequiresImport,
 					item.CompletionHandle
@@ -2087,8 +2082,6 @@ public partial class SystemExplorerPlugin
 	private void OnAutocompleteTextChanged()
 	{
 		AutocompletePluginHost host = _autocompleteHost;
-		host?.RestoreTypedOpeningParenthesisAutoCloseSuppression();
-
 		ClearAutocompleteAutomaticNativeCoalescingRequest();
 		if (host == null)
 			return;

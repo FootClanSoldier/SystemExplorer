@@ -4,30 +4,57 @@ using System;
 
 namespace SystemExplorer.CodeService.Autocomplete.Hint;
 
-internal readonly struct AutocompleteHintLayout
+internal readonly struct AutocompleteHintAnchorLayout
 {
-	internal AutocompleteHintLayout(
-		Vector2 hintWindowPosition,
+	internal AutocompleteHintAnchorLayout(
 		Rect2 completionBodyRect,
 		Rect2 completionScrollRect,
 		int lineOffset,
 		int optionCount,
-		int visibleLines)
+		int visibleLines,
+		float completionWindowLeft,
+		float completionWindowRight,
+		float selectedRowTopCodeEdit,
+		Vector2 codeEditSize,
+		Vector2 editorWindowSize,
+		Transform2D codeEditToWindow)
 	{
-		HintWindowPosition = hintWindowPosition;
 		CompletionBodyRect = completionBodyRect;
 		CompletionScrollRect = completionScrollRect;
 		LineOffset = lineOffset;
 		OptionCount = optionCount;
 		VisibleLines = visibleLines;
+		CompletionWindowLeft = completionWindowLeft;
+		CompletionWindowRight = completionWindowRight;
+		SelectedRowTopCodeEdit = selectedRowTopCodeEdit;
+		CodeEditSize = codeEditSize;
+		EditorWindowSize = editorWindowSize;
+		CodeEditToWindow = codeEditToWindow;
 	}
 
-	internal Vector2 HintWindowPosition { get; }
 	internal Rect2 CompletionBodyRect { get; }
 	internal Rect2 CompletionScrollRect { get; }
 	internal int LineOffset { get; }
 	internal int OptionCount { get; }
 	internal int VisibleLines { get; }
+	internal float CompletionWindowLeft { get; }
+	internal float CompletionWindowRight { get; }
+	internal float SelectedRowTopCodeEdit { get; }
+	internal Vector2 CodeEditSize { get; }
+	internal Vector2 EditorWindowSize { get; }
+	internal Transform2D CodeEditToWindow { get; }
+}
+
+internal readonly struct AutocompleteHintHorizontalPlacement
+{
+	internal AutocompleteHintHorizontalPlacement(float x, float width)
+	{
+		X = x;
+		Width = width;
+	}
+
+	internal float X { get; }
+	internal float Width { get; }
 }
 
 internal static class AutocompleteHintGeometry
@@ -44,20 +71,17 @@ internal static class AutocompleteHintGeometry
 	private const string ItemListThemeType = "ItemList";
 	private const string LineSpacingThemeKey = "line_spacing";
 
-	internal static bool TryGetHintLayout(
+	internal static bool TryGetHintAnchorLayout(
 		CodeEdit codeEdit,
 		int selectedIndex,
 		string currentPrefix,
-		Vector2 hintSize,
 		int? preservedLineOffset,
-		out AutocompleteHintLayout layout)
+		out AutocompleteHintAnchorLayout layout)
 	{
 		layout = default;
 		if (!IsValidGodotObject(codeEdit)
 			|| selectedIndex < 0
-			|| currentPrefix == null
-			|| !IsFinitePositive(hintSize.X)
-			|| !IsFinitePositive(hintSize.Y))
+			|| currentPrefix == null)
 		{
 			return false;
 		}
@@ -278,46 +302,8 @@ internal static class AutocompleteHintGeometry
 				completionWindowLeftPoint.X,
 				completionWindowRightPoint.X
 			);
-			float windowLeft = 0.0f;
-			float windowRight = editorWindowSize.X;
-			float rightCandidateX = completionWindowRight + HintGap;
-			float leftCandidateX = completionWindowLeft - HintGap - hintSize.X;
-
-			float hintX;
-			if (FitsHorizontally(rightCandidateX, hintSize.X, windowLeft, windowRight))
-			{
-				hintX = rightCandidateX;
-			}
-			else if (FitsHorizontally(leftCandidateX, hintSize.X, windowLeft, windowRight))
-			{
-				hintX = leftCandidateX;
-			}
-			else
-			{
-				float rightSpace = Math.Max(0.0f, windowRight - (completionWindowRight + HintGap));
-				float leftSpace = Math.Max(0.0f, (completionWindowLeft - HintGap) - windowLeft);
-				float preferredFallbackX = rightSpace >= leftSpace
-					? rightCandidateX
-					: leftCandidateX;
-				float maximumHintX = Math.Max(windowLeft, windowRight - hintSize.X);
-				hintX = Mathf.Clamp(preferredFallbackX, windowLeft, maximumHintX);
-			}
-
-			// Y remains selected-row-driven and is first clamped to the visible CodeEdit
-			// area. Only after that do we convert it to the Window coordinate space and
-			// apply a final defensive Window-edge clamp.
 			float selectedRowTop = completionPopupY + visibleSelectedRow * rowHeight;
-			float maximumCodeEditHintY = Math.Max(0.0f, editorSize.Y - hintSize.Y);
-			float codeEditHintY = Mathf.Clamp(selectedRowTop, 0.0f, maximumCodeEditHintY);
-			Vector2 hintWindowYPoint = codeEditToWindow * new Vector2(0.0f, codeEditHintY);
-			float maximumWindowHintY = Math.Max(0.0f, editorWindowSize.Y - hintSize.Y);
-			float hintY = Mathf.Clamp(hintWindowYPoint.Y, 0.0f, maximumWindowHintY);
-
-			// Keep the final horizontal safety boundary at the editor Window, never at
-			// CodeEdit. This remains defensive for windows narrower than the fixed hint.
-			float maximumWindowHintX = Math.Max(0.0f, editorWindowSize.X - hintSize.X);
-			hintX = Mathf.Clamp(hintX, 0.0f, maximumWindowHintX);
-			if (!IsFinite(hintX) || !IsFinite(hintY))
+			if (!IsFinite(selectedRowTop))
 				return false;
 
 			// These rects intentionally stay CodeEdit-local because GuiInput mouse
@@ -331,13 +317,18 @@ internal static class AutocompleteHintGeometry
 				new Vector2(scrollWidth, completionRowsHeight)
 			);
 
-			layout = new AutocompleteHintLayout(
-				new Vector2(hintX, hintY),
+			layout = new AutocompleteHintAnchorLayout(
 				completionBodyRect,
 				completionScrollRect,
 				lineOffset,
 				optionCount,
-				visibleLines
+				visibleLines,
+				completionWindowLeft,
+				completionWindowRight,
+				selectedRowTop,
+				editorSize,
+				editorWindowSize,
+				codeEditToWindow
 			);
 			return true;
 		}
@@ -347,15 +338,129 @@ internal static class AutocompleteHintGeometry
 		}
 	}
 
-	private static bool FitsHorizontally(
-		float candidateX,
-		float hintWidth,
-		float windowLeft,
-		float windowRight)
+	internal static bool TryGetHorizontalPlacement(
+		AutocompleteHintAnchorLayout anchorLayout,
+		float naturalOuterWidth,
+		float minimumWidth,
+		float maximumWidth,
+		out AutocompleteHintHorizontalPlacement placement)
 	{
-		return IsFinite(candidateX)
-			&& candidateX >= windowLeft
-			&& candidateX + hintWidth <= windowRight;
+		placement = default;
+		if (!IsFinitePositive(naturalOuterWidth)
+			|| !IsFinitePositive(minimumWidth)
+			|| !IsFinitePositive(maximumWidth)
+			|| maximumWidth < minimumWidth
+			|| !IsFinitePositive(anchorLayout.EditorWindowSize.X)
+			|| !IsFinite(anchorLayout.CompletionWindowLeft)
+			|| !IsFinite(anchorLayout.CompletionWindowRight))
+		{
+			return false;
+		}
+
+		float windowLeft = 0.0f;
+		float windowRight = anchorLayout.EditorWindowSize.X;
+		float windowBoundedMaximum = Math.Min(maximumWidth, windowRight - windowLeft);
+		if (!IsFinitePositive(windowBoundedMaximum))
+			return false;
+
+		float effectiveMinimum = Math.Min(minimumWidth, windowBoundedMaximum);
+		float preferredWidth = Mathf.Clamp(
+			naturalOuterWidth,
+			effectiveMinimum,
+			windowBoundedMaximum
+		);
+		if (!IsFinitePositive(preferredWidth))
+			return false;
+
+		float rightCandidateX = anchorLayout.CompletionWindowRight + HintGap;
+		float leftCandidateX = anchorLayout.CompletionWindowLeft - HintGap - preferredWidth;
+		float rightSpace = Math.Max(0.0f, windowRight - rightCandidateX);
+		float leftSpace = Math.Max(0.0f, (anchorLayout.CompletionWindowLeft - HintGap) - windowLeft);
+
+		if (rightSpace >= preferredWidth)
+		{
+			placement = new AutocompleteHintHorizontalPlacement(rightCandidateX, preferredWidth);
+			return true;
+		}
+
+		if (leftSpace >= preferredWidth)
+		{
+			placement = new AutocompleteHintHorizontalPlacement(leftCandidateX, preferredWidth);
+			return true;
+		}
+
+		bool preferRight = rightSpace >= leftSpace;
+		float preferredSideSpace = preferRight ? rightSpace : leftSpace;
+		if (preferredSideSpace >= minimumWidth)
+		{
+			float constrainedWidth = Math.Min(preferredWidth, preferredSideSpace);
+			float constrainedX = preferRight
+				? rightCandidateX
+				: anchorLayout.CompletionWindowLeft - HintGap - constrainedWidth;
+
+			placement = new AutocompleteHintHorizontalPlacement(
+				constrainedX,
+				constrainedWidth
+			);
+			return true;
+		}
+
+		// Extreme fail-soft fallback: retain a useful bounded width and clamp it into
+		// the editor Window. Overlap with the native popup is preferable to turning
+		// the hint into an unusably narrow sliver.
+		float fallbackX = preferRight ? rightCandidateX : leftCandidateX;
+		float maximumHintX = Math.Max(windowLeft, windowRight - preferredWidth);
+		fallbackX = Mathf.Clamp(fallbackX, windowLeft, maximumHintX);
+		if (!IsFinite(fallbackX))
+			return false;
+
+		placement = new AutocompleteHintHorizontalPlacement(fallbackX, preferredWidth);
+		return true;
+	}
+
+	internal static bool TryGetFinalHintLayout(
+		AutocompleteHintAnchorLayout anchorLayout,
+		AutocompleteHintHorizontalPlacement horizontalPlacement,
+		float measuredHeight,
+		out Vector2 hintWindowPosition,
+		out Vector2 hintSize)
+	{
+		hintWindowPosition = default;
+		hintSize = default;
+		if (!IsFinitePositive(horizontalPlacement.Width)
+			|| !IsFinite(horizontalPlacement.X)
+			|| !IsFinitePositive(measuredHeight)
+			|| !IsFinitePositive(anchorLayout.CodeEditSize.Y)
+			|| !IsFinitePositive(anchorLayout.EditorWindowSize.X)
+			|| !IsFinitePositive(anchorLayout.EditorWindowSize.Y)
+			|| !IsFinite(anchorLayout.SelectedRowTopCodeEdit))
+		{
+			return false;
+		}
+
+		float finalWidth = Math.Min(horizontalPlacement.Width, anchorLayout.EditorWindowSize.X);
+		float finalHeight = Math.Min(measuredHeight, anchorLayout.EditorWindowSize.Y);
+		if (!IsFinitePositive(finalWidth) || !IsFinitePositive(finalHeight))
+			return false;
+
+		float maximumCodeEditHintY = Math.Max(0.0f, anchorLayout.CodeEditSize.Y - finalHeight);
+		float codeEditHintY = Mathf.Clamp(
+			anchorLayout.SelectedRowTopCodeEdit,
+			0.0f,
+			maximumCodeEditHintY
+		);
+		Vector2 hintWindowYPoint = anchorLayout.CodeEditToWindow * new Vector2(0.0f, codeEditHintY);
+		float maximumWindowHintY = Math.Max(0.0f, anchorLayout.EditorWindowSize.Y - finalHeight);
+		float hintY = Mathf.Clamp(hintWindowYPoint.Y, 0.0f, maximumWindowHintY);
+
+		float maximumWindowHintX = Math.Max(0.0f, anchorLayout.EditorWindowSize.X - finalWidth);
+		float hintX = Mathf.Clamp(horizontalPlacement.X, 0.0f, maximumWindowHintX);
+		if (!IsFinite(hintX) || !IsFinite(hintY))
+			return false;
+
+		hintWindowPosition = new Vector2(hintX, hintY);
+		hintSize = new Vector2(finalWidth, finalHeight);
+		return true;
 	}
 
 	private static int SaturatingAdd(int left, int right)

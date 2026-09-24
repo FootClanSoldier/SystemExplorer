@@ -579,6 +579,10 @@ internal sealed class CodeServiceCompletionClient
 			int semanticOriginCount = 0;
 			int inheritanceDepthCount = 0;
 			int containingNamespaceCount = 0;
+			int valueTypeCount = 0;
+			int containingTypeCount = 0;
+			int methodSignatureSetCount = 0;
+			int propertyAccessorSetCount = 0;
 			int namespaceDisambiguationCount = 0;
 			int requiresImportCount = 0;
 			int completionHandleCount = 0;
@@ -591,9 +595,17 @@ internal sealed class CodeServiceCompletionClient
 			CodeServiceCompletionSemanticOrigin semanticOrigin = CodeServiceCompletionSemanticOrigin.Unknown;
 			int? inheritanceDepth = null;
 			string containingNamespace = null;
+			string valueType = null;
+			string containingType = null;
+			CodeServiceCompletionMethodSignatureSet methodSignatureSet = null;
+			CodeServiceCompletionPropertyAccessorSet propertyAccessorSet = null;
 			string namespaceDisambiguation = null;
 			bool requiresImport = false;
 			Guid? completionHandle = null;
+			int valueTypeBytes = 0;
+			int containingTypeBytes = 0;
+			int methodSignatureSetBytes = 0;
+			int propertyAccessorSetBytes = 0;
 
 			foreach (JsonProperty property in item.EnumerateObject())
 			{
@@ -638,13 +650,11 @@ internal sealed class CodeServiceCompletionClient
 						}
 						break;
 					case "preselect":
-						if (++preselectCount != 1
-							|| (property.Value.ValueKind != JsonValueKind.True && property.Value.ValueKind != JsonValueKind.False))
+						if (++preselectCount != 1 || !TryReadRequiredBoolean(property.Value, out preselect))
 						{
 							detail = "Completion item preselect is invalid.";
 							return false;
 						}
-						preselect = property.Value.GetBoolean();
 						break;
 					case "semanticOrigin":
 						if (++semanticOriginCount != 1 || property.Value.ValueKind != JsonValueKind.String
@@ -669,6 +679,52 @@ internal sealed class CodeServiceCompletionClient
 							return false;
 						}
 						break;
+					case "valueType":
+						if (++valueTypeCount != 1 || !TryReadNullableNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionValueTypeUtf8Bytes,
+							out valueType,
+							out valueTypeBytes))
+						{
+							detail = "Completion item valueType is invalid, empty, or exceeds the local UTF-8 bound.";
+							return false;
+						}
+						break;
+					case "containingType":
+						if (++containingTypeCount != 1 || !TryReadNullableNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionContainingTypeUtf8Bytes,
+							out containingType,
+							out containingTypeBytes))
+						{
+							detail = "Completion item containingType is invalid, empty, or exceeds the local UTF-8 bound.";
+							return false;
+						}
+						break;
+					case "methodSignatureSet":
+						if (++methodSignatureSetCount != 1 || !TryParseMethodSignatureSet(
+							property.Value,
+							out methodSignatureSet,
+							out methodSignatureSetBytes,
+							out detail))
+						{
+							if (string.IsNullOrEmpty(detail))
+								detail = "Completion item methodSignatureSet is invalid.";
+							return false;
+						}
+						break;
+					case "propertyAccessorSet":
+						if (++propertyAccessorSetCount != 1 || !TryParsePropertyAccessorSet(
+							property.Value,
+							out propertyAccessorSet,
+							out propertyAccessorSetBytes,
+							out detail))
+						{
+							if (string.IsNullOrEmpty(detail))
+								detail = "Completion item propertyAccessorSet is invalid.";
+							return false;
+						}
+						break;
 					case "namespaceDisambiguation":
 						if (++namespaceDisambiguationCount != 1 || !TryReadNullableString(property.Value, out namespaceDisambiguation))
 						{
@@ -677,13 +733,11 @@ internal sealed class CodeServiceCompletionClient
 						}
 						break;
 					case "requiresImport":
-						if (++requiresImportCount != 1
-							|| (property.Value.ValueKind != JsonValueKind.True && property.Value.ValueKind != JsonValueKind.False))
+						if (++requiresImportCount != 1 || !TryReadRequiredBoolean(property.Value, out requiresImport))
 						{
 							detail = "Completion item requiresImport is invalid.";
 							return false;
 						}
-						requiresImport = property.Value.GetBoolean();
 						break;
 					case "completionHandle":
 						if (++completionHandleCount != 1)
@@ -716,10 +770,12 @@ internal sealed class CodeServiceCompletionClient
 
 			if (kindCount != 1 || displayTextCount != 1 || insertTextCount != 1 || filterTextCount != 1
 				|| sortTextCount != 1 || preselectCount != 1 || semanticOriginCount != 1
-				|| inheritanceDepthCount != 1 || containingNamespaceCount != 1
-				|| namespaceDisambiguationCount != 1 || requiresImportCount != 1 || completionHandleCount != 1)
+				|| inheritanceDepthCount != 1 || containingNamespaceCount != 1 || valueTypeCount != 1
+				|| containingTypeCount != 1 || methodSignatureSetCount != 1 || propertyAccessorSetCount != 1
+				|| namespaceDisambiguationCount != 1
+				|| requiresImportCount != 1 || completionHandleCount != 1)
 			{
-				detail = "Completion item omitted one or more required schema-v6 properties.";
+				detail = "Completion item omitted one or more required schema-v8 properties.";
 				return false;
 			}
 			if (!IsSemanticMetadataConsistent(semanticOrigin, inheritanceDepth))
@@ -730,11 +786,11 @@ internal sealed class CodeServiceCompletionClient
 
 			var parsedItem = new CodeServiceCompletionItem(
 				kind, displayText, insertText, filterText, sortText, preselect,
-				semanticOrigin, inheritanceDepth, containingNamespace, namespaceDisambiguation,
-				requiresImport, completionHandle);
+				semanticOrigin, inheritanceDepth, containingNamespace, valueType, containingType,
+				methodSignatureSet, propertyAccessorSet, namespaceDisambiguation, requiresImport, completionHandle);
 			if (!parsedItem.HasValidCommitContract)
 			{
-				detail = "Completion item violates the schema-v6 commit contract.";
+				detail = "Completion item violates the schema-v8 commit contract.";
 				return false;
 			}
 			if (!parsedItem.HasValidNamespaceContract)
@@ -786,9 +842,16 @@ internal sealed class CodeServiceCompletionClient
 				return false;
 			}
 
-			int itemBytes;
-			try { itemBytes = checked(displayTextBytes + insertTextBytes + filterTextBytes + sortTextBytes + containingNamespaceBytes); }
-			catch (OverflowException)
+			int itemBytes = 0;
+			if (!TryAddChecked(ref itemBytes, displayTextBytes)
+				|| !TryAddChecked(ref itemBytes, insertTextBytes)
+				|| !TryAddChecked(ref itemBytes, filterTextBytes)
+				|| !TryAddChecked(ref itemBytes, sortTextBytes)
+				|| !TryAddChecked(ref itemBytes, containingNamespaceBytes)
+				|| !TryAddChecked(ref itemBytes, valueTypeBytes)
+				|| !TryAddChecked(ref itemBytes, containingTypeBytes)
+				|| !TryAddChecked(ref itemBytes, methodSignatureSetBytes)
+				|| !TryAddChecked(ref itemBytes, propertyAccessorSetBytes))
 			{
 				detail = "Completion item UTF-8 accounting overflowed.";
 				return false;
@@ -804,6 +867,647 @@ internal sealed class CodeServiceCompletionClient
 
 		items = parsed.AsReadOnly();
 		return true;
+	}
+
+	private static bool TryParsePropertyAccessorSet(
+		JsonElement element,
+		out CodeServiceCompletionPropertyAccessorSet propertyAccessorSet,
+		out int utf8Bytes,
+		out string detail)
+	{
+		propertyAccessorSet = null;
+		utf8Bytes = 0;
+		detail = "";
+		if (element.ValueKind == JsonValueKind.Null)
+			return true;
+		if (element.ValueKind != JsonValueKind.Object)
+		{
+			detail = "Completion propertyAccessorSet must be an object or null.";
+			return false;
+		}
+
+		int propertyAccessibilityCount = 0;
+		int getterCount = 0;
+		int setterCount = 0;
+		string propertyAccessibility = null;
+		CodeServiceCompletionPropertyAccessor getter = null;
+		CodeServiceCompletionPropertyAccessor setter = null;
+		int propertyAccessibilityBytes = 0;
+		int getterBytes = 0;
+		int setterBytes = 0;
+
+		foreach (JsonProperty property in element.EnumerateObject())
+		{
+			switch (property.Name)
+			{
+				case "propertyAccessibility":
+					if (++propertyAccessibilityCount != 1
+						|| !TryReadPropertyAccessibility(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionPropertyAccessibilityUtf8Bytes,
+							out propertyAccessibility,
+							out propertyAccessibilityBytes))
+					{
+						detail = "Completion propertyAccessorSet propertyAccessibility is invalid or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				case "getter":
+					if (++getterCount != 1 || !TryParsePropertyAccessor(
+						property.Value,
+						isGetter: true,
+						out getter,
+						out getterBytes,
+						out detail))
+					{
+						if (string.IsNullOrEmpty(detail))
+							detail = "Completion propertyAccessorSet getter is invalid.";
+						return false;
+					}
+					break;
+				case "setter":
+					if (++setterCount != 1 || !TryParsePropertyAccessor(
+						property.Value,
+						isGetter: false,
+						out setter,
+						out setterBytes,
+						out detail))
+					{
+						if (string.IsNullOrEmpty(detail))
+							detail = "Completion propertyAccessorSet setter is invalid.";
+						return false;
+					}
+					break;
+				default:
+					detail = "Completion propertyAccessorSet contained an unknown property.";
+					return false;
+			}
+		}
+
+		if (propertyAccessibilityCount != 1 || getterCount != 1 || setterCount != 1)
+		{
+			detail = "Completion propertyAccessorSet omitted one or more required properties.";
+			return false;
+		}
+		if (getter == null && setter == null)
+		{
+			detail = "Completion propertyAccessorSet must contain at least one accessor.";
+			return false;
+		}
+
+		if (!TryAddChecked(ref utf8Bytes, propertyAccessibilityBytes)
+			|| !TryAddChecked(ref utf8Bytes, getterBytes)
+			|| !TryAddChecked(ref utf8Bytes, setterBytes))
+		{
+			detail = "Completion propertyAccessorSet UTF-8 accounting overflowed.";
+			return false;
+		}
+
+		propertyAccessorSet = new CodeServiceCompletionPropertyAccessorSet(
+			propertyAccessibility,
+			getter,
+			setter);
+		return true;
+	}
+
+	private static bool TryParsePropertyAccessor(
+		JsonElement element,
+		bool isGetter,
+		out CodeServiceCompletionPropertyAccessor accessor,
+		out int utf8Bytes,
+		out string detail)
+	{
+		accessor = null;
+		utf8Bytes = 0;
+		detail = "";
+		if (element.ValueKind == JsonValueKind.Null)
+			return true;
+		if (element.ValueKind != JsonValueKind.Object)
+		{
+			detail = "Completion property accessor must be an object or null.";
+			return false;
+		}
+
+		int kindCount = 0;
+		int accessibilityCount = 0;
+		string kind = null;
+		string accessibility = null;
+		int kindBytes = 0;
+		int accessibilityBytes = 0;
+
+		foreach (JsonProperty property in element.EnumerateObject())
+		{
+			switch (property.Name)
+			{
+				case "kind":
+					if (++kindCount != 1
+						|| !TryReadRequiredNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionPropertyAccessorKindUtf8Bytes,
+							out kind,
+							out kindBytes)
+						|| (isGetter
+							? !string.Equals(kind, "get", StringComparison.Ordinal)
+							: !string.Equals(kind, "set", StringComparison.Ordinal)
+								&& !string.Equals(kind, "init", StringComparison.Ordinal)))
+					{
+						detail = isGetter
+							? "Completion property getter kind is invalid or exceeds the local UTF-8 bound."
+							: "Completion property setter kind is invalid or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				case "accessibility":
+					if (++accessibilityCount != 1
+						|| !TryReadPropertyAccessibility(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionPropertyAccessorAccessibilityUtf8Bytes,
+							out accessibility,
+							out accessibilityBytes))
+					{
+						detail = "Completion property accessor accessibility is invalid or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				default:
+					detail = "Completion property accessor contained an unknown property.";
+					return false;
+			}
+		}
+
+		if (kindCount != 1 || accessibilityCount != 1)
+		{
+			detail = "Completion property accessor omitted one or more required properties.";
+			return false;
+		}
+
+		if (!TryAddChecked(ref utf8Bytes, kindBytes)
+			|| !TryAddChecked(ref utf8Bytes, accessibilityBytes))
+		{
+			detail = "Completion property accessor UTF-8 accounting overflowed.";
+			return false;
+		}
+
+		accessor = new CodeServiceCompletionPropertyAccessor(kind, accessibility);
+		return true;
+	}
+
+	private static bool TryReadPropertyAccessibility(
+		JsonElement element,
+		int maximumUtf8Bytes,
+		out string accessibility,
+		out int utf8Bytes)
+	{
+		if (!TryReadRequiredNonEmptyBoundedString(
+			element,
+			maximumUtf8Bytes,
+			out accessibility,
+			out utf8Bytes))
+		{
+			return false;
+		}
+
+		return accessibility == "private"
+			|| accessibility == "private protected"
+			|| accessibility == "protected"
+			|| accessibility == "internal"
+			|| accessibility == "protected internal"
+			|| accessibility == "public";
+	}
+
+	private static bool TryParseMethodSignatureSet(
+		JsonElement element,
+		out CodeServiceCompletionMethodSignatureSet signatureSet,
+		out int utf8Bytes,
+		out string detail)
+	{
+		signatureSet = null;
+		utf8Bytes = 0;
+		detail = "";
+		if (element.ValueKind == JsonValueKind.Null)
+			return true;
+		if (element.ValueKind != JsonValueKind.Object)
+		{
+			detail = "Completion methodSignatureSet must be an object or null.";
+			return false;
+		}
+
+		int totalCountPropertyCount = 0;
+		int signaturesPropertyCount = 0;
+		int totalCount = 0;
+		JsonElement signaturesElement = default;
+		foreach (JsonProperty property in element.EnumerateObject())
+		{
+			switch (property.Name)
+			{
+				case "totalCount":
+					if (++totalCountPropertyCount != 1
+						|| property.Value.ValueKind != JsonValueKind.Number
+						|| !property.Value.TryGetInt32(out totalCount)
+						|| totalCount <= 0
+						|| totalCount > CodeServiceCompletionLimits.MaxCompletionMethodSignatureTotalCount)
+					{
+						detail = "Completion methodSignatureSet totalCount is invalid or outside the local bound.";
+						return false;
+					}
+					break;
+				case "signatures":
+					if (++signaturesPropertyCount != 1 || property.Value.ValueKind != JsonValueKind.Array)
+					{
+						detail = "Completion methodSignatureSet signatures is invalid.";
+						return false;
+					}
+					signaturesElement = property.Value;
+					break;
+				default:
+					detail = "Completion methodSignatureSet contained an unknown property.";
+					return false;
+			}
+		}
+
+		if (totalCountPropertyCount != 1 || signaturesPropertyCount != 1)
+		{
+			detail = "Completion methodSignatureSet omitted one or more required properties.";
+			return false;
+		}
+
+		int expectedSignatureCount = Math.Min(totalCount, CodeServiceCompletionLimits.MaxCompletionMethodSignatures);
+		if (signaturesElement.GetArrayLength() != expectedSignatureCount)
+		{
+			detail = "Completion methodSignatureSet signatures count does not match the bounded totalCount shape.";
+			return false;
+		}
+
+		List<CodeServiceCompletionMethodSignature> signatures = new(expectedSignatureCount);
+		foreach (JsonElement signatureElement in signaturesElement.EnumerateArray())
+		{
+			if (!TryParseMethodSignature(signatureElement, out CodeServiceCompletionMethodSignature signature, out int signatureBytes, out detail))
+				return false;
+			if (!TryAddChecked(ref utf8Bytes, signatureBytes))
+			{
+				detail = "Completion methodSignatureSet UTF-8 accounting overflowed.";
+				return false;
+			}
+			signatures.Add(signature);
+		}
+
+		signatureSet = new CodeServiceCompletionMethodSignatureSet(totalCount, signatures.AsReadOnly());
+		return true;
+	}
+
+	private static bool TryParseMethodSignature(
+		JsonElement element,
+		out CodeServiceCompletionMethodSignature signature,
+		out int utf8Bytes,
+		out string detail)
+	{
+		signature = null;
+		utf8Bytes = 0;
+		detail = "";
+		if (element.ValueKind != JsonValueKind.Object)
+		{
+			detail = "Completion method signature must be an object.";
+			return false;
+		}
+
+		int displayTextCount = 0;
+		int returnTypeCount = 0;
+		int typeParametersCount = 0;
+		int parameterCountPropertyCount = 0;
+		int parametersCount = 0;
+		string displayText = null;
+		string returnType = null;
+		JsonElement typeParametersElement = default;
+		int parameterCount = 0;
+		JsonElement parametersElement = default;
+		int displayTextBytes = 0;
+		int returnTypeBytes = 0;
+
+		foreach (JsonProperty property in element.EnumerateObject())
+		{
+			switch (property.Name)
+			{
+				case "displayText":
+					if (++displayTextCount != 1
+						|| !TryReadRequiredNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionMethodSignatureDisplayTextUtf8Bytes,
+							out displayText,
+							out displayTextBytes))
+					{
+						detail = "Completion method signature displayText is invalid, empty, or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				case "returnType":
+					if (++returnTypeCount != 1
+						|| !TryReadNullableNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionMethodReturnTypeUtf8Bytes,
+							out returnType,
+							out returnTypeBytes))
+					{
+						detail = "Completion method signature returnType is invalid, empty, or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				case "typeParameters":
+					if (++typeParametersCount != 1 || property.Value.ValueKind != JsonValueKind.Array)
+					{
+						detail = "Completion method signature typeParameters is invalid.";
+						return false;
+					}
+					typeParametersElement = property.Value;
+					break;
+				case "parameterCount":
+					if (++parameterCountPropertyCount != 1
+						|| property.Value.ValueKind != JsonValueKind.Number
+						|| !property.Value.TryGetInt32(out parameterCount)
+						|| parameterCount < 0
+						|| parameterCount > CodeServiceCompletionLimits.MaxCompletionMethodParameterCount)
+					{
+						detail = "Completion method signature parameterCount is invalid or outside the local bound.";
+						return false;
+					}
+					break;
+				case "parameters":
+					if (++parametersCount != 1 || property.Value.ValueKind != JsonValueKind.Array)
+					{
+						detail = "Completion method signature parameters is invalid.";
+						return false;
+					}
+					parametersElement = property.Value;
+					break;
+				default:
+					detail = "Completion method signature contained an unknown property.";
+					return false;
+			}
+		}
+
+		if (displayTextCount != 1 || returnTypeCount != 1 || typeParametersCount != 1
+			|| parameterCountPropertyCount != 1 || parametersCount != 1)
+		{
+			detail = "Completion method signature omitted one or more required properties.";
+			return false;
+		}
+		if (typeParametersElement.GetArrayLength() > CodeServiceCompletionLimits.MaxCompletionMethodTypeParameters)
+		{
+			detail = "Completion method signature typeParameters exceeds the local count bound.";
+			return false;
+		}
+		if (parametersElement.GetArrayLength()
+			!= Math.Min(parameterCount, CodeServiceCompletionLimits.MaxCompletionMethodParametersPerSignature))
+		{
+			detail = "Completion method signature parameters count does not match the bounded parameterCount shape.";
+			return false;
+		}
+
+		if (!TryAddChecked(ref utf8Bytes, displayTextBytes)
+			|| !TryAddChecked(ref utf8Bytes, returnTypeBytes))
+		{
+			detail = "Completion method signature UTF-8 accounting overflowed.";
+			return false;
+		}
+
+		List<string> typeParameters = new(typeParametersElement.GetArrayLength());
+		foreach (JsonElement typeParameterElement in typeParametersElement.EnumerateArray())
+		{
+			if (!TryReadRequiredNonEmptyBoundedString(
+				typeParameterElement,
+				CodeServiceCompletionLimits.MaxCompletionMethodTypeParameterUtf8Bytes,
+				out string typeParameter,
+				out int typeParameterBytes))
+			{
+				detail = "Completion method signature typeParameter is invalid, empty, or exceeds the local UTF-8 bound.";
+				return false;
+			}
+			if (!TryAddChecked(ref utf8Bytes, typeParameterBytes))
+			{
+				detail = "Completion method signature UTF-8 accounting overflowed.";
+				return false;
+			}
+			typeParameters.Add(typeParameter);
+		}
+
+		List<CodeServiceCompletionMethodParameter> parameters = new(parametersElement.GetArrayLength());
+		foreach (JsonElement parameterElement in parametersElement.EnumerateArray())
+		{
+			if (!TryParseMethodParameter(parameterElement, out CodeServiceCompletionMethodParameter parameter, out int parameterBytes, out detail))
+				return false;
+			if (!TryAddChecked(ref utf8Bytes, parameterBytes))
+			{
+				detail = "Completion method signature UTF-8 accounting overflowed.";
+				return false;
+			}
+			parameters.Add(parameter);
+		}
+
+		signature = new CodeServiceCompletionMethodSignature(
+			displayText,
+			returnType,
+			typeParameters.AsReadOnly(),
+			parameterCount,
+			parameters.AsReadOnly());
+		return true;
+	}
+
+	private static bool TryParseMethodParameter(
+		JsonElement element,
+		out CodeServiceCompletionMethodParameter parameter,
+		out int utf8Bytes,
+		out string detail)
+	{
+		parameter = null;
+		utf8Bytes = 0;
+		detail = "";
+		if (element.ValueKind != JsonValueKind.Object)
+		{
+			detail = "Completion method parameter must be an object.";
+			return false;
+		}
+
+		int displayTextCount = 0;
+		int typeCount = 0;
+		int nameCount = 0;
+		int modifierCount = 0;
+		int isParamsCount = 0;
+		int isOptionalCount = 0;
+		string displayText = null;
+		string type = null;
+		string name = null;
+		string modifier = null;
+		bool isParams = false;
+		bool isOptional = false;
+		int displayTextBytes = 0;
+		int typeBytes = 0;
+		int nameBytes = 0;
+		int modifierBytes = 0;
+
+		foreach (JsonProperty property in element.EnumerateObject())
+		{
+			switch (property.Name)
+			{
+				case "displayText":
+					if (++displayTextCount != 1
+						|| !TryReadRequiredNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionParameterDisplayTextUtf8Bytes,
+							out displayText,
+							out displayTextBytes))
+					{
+						detail = "Completion method parameter displayText is invalid, empty, or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				case "type":
+					if (++typeCount != 1
+						|| !TryReadRequiredNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionParameterTypeUtf8Bytes,
+							out type,
+							out typeBytes))
+					{
+						detail = "Completion method parameter type is invalid, empty, or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				case "name":
+					if (++nameCount != 1
+						|| !TryReadRequiredNonEmptyBoundedString(
+							property.Value,
+							CodeServiceCompletionLimits.MaxCompletionParameterNameUtf8Bytes,
+							out name,
+							out nameBytes))
+					{
+						detail = "Completion method parameter name is invalid, empty, or exceeds the local UTF-8 bound.";
+						return false;
+					}
+					break;
+				case "modifier":
+					if (++modifierCount != 1 || !TryReadMethodParameterModifier(property.Value, out modifier, out modifierBytes))
+					{
+						detail = "Completion method parameter modifier is invalid.";
+						return false;
+					}
+					break;
+				case "isParams":
+					if (++isParamsCount != 1 || !TryReadRequiredBoolean(property.Value, out isParams))
+					{
+						detail = "Completion method parameter isParams is invalid.";
+						return false;
+					}
+					break;
+				case "isOptional":
+					if (++isOptionalCount != 1 || !TryReadRequiredBoolean(property.Value, out isOptional))
+					{
+						detail = "Completion method parameter isOptional is invalid.";
+						return false;
+					}
+					break;
+				default:
+					detail = "Completion method parameter contained an unknown property.";
+					return false;
+			}
+		}
+
+		if (displayTextCount != 1 || typeCount != 1 || nameCount != 1 || modifierCount != 1
+			|| isParamsCount != 1 || isOptionalCount != 1)
+		{
+			detail = "Completion method parameter omitted one or more required properties.";
+			return false;
+		}
+
+		if (!TryAddChecked(ref utf8Bytes, displayTextBytes)
+			|| !TryAddChecked(ref utf8Bytes, typeBytes)
+			|| !TryAddChecked(ref utf8Bytes, nameBytes)
+			|| !TryAddChecked(ref utf8Bytes, modifierBytes))
+		{
+			detail = "Completion method parameter UTF-8 accounting overflowed.";
+			return false;
+		}
+
+		parameter = new CodeServiceCompletionMethodParameter(
+			displayText,
+			type,
+			name,
+			modifier,
+			isParams,
+			isOptional);
+		return true;
+	}
+
+	private static bool TryReadRequiredBoolean(JsonElement element, out bool value)
+	{
+		value = false;
+		if (element.ValueKind != JsonValueKind.True && element.ValueKind != JsonValueKind.False)
+			return false;
+		value = element.GetBoolean();
+		return true;
+	}
+
+	private static bool TryReadRequiredNonEmptyBoundedString(
+		JsonElement element,
+		int maximumUtf8Bytes,
+		out string value,
+		out int utf8Bytes)
+	{
+		value = null;
+		utf8Bytes = 0;
+		if (element.ValueKind != JsonValueKind.String)
+			return false;
+		value = element.GetString();
+		return !string.IsNullOrEmpty(value)
+			&& TryGetBoundedUtf8ByteCount(value, maximumUtf8Bytes, out utf8Bytes);
+	}
+
+	private static bool TryReadNullableNonEmptyBoundedString(
+		JsonElement element,
+		int maximumUtf8Bytes,
+		out string value,
+		out int utf8Bytes)
+	{
+		value = null;
+		utf8Bytes = 0;
+		if (element.ValueKind == JsonValueKind.Null)
+			return true;
+		return TryReadRequiredNonEmptyBoundedString(element, maximumUtf8Bytes, out value, out utf8Bytes);
+	}
+
+	private static bool TryReadMethodParameterModifier(
+		JsonElement element,
+		out string modifier,
+		out int utf8Bytes)
+	{
+		modifier = null;
+		utf8Bytes = 0;
+		if (element.ValueKind == JsonValueKind.Null)
+			return true;
+		if (element.ValueKind != JsonValueKind.String)
+			return false;
+
+		modifier = element.GetString();
+		if (modifier != "ref"
+			&& modifier != "out"
+			&& modifier != "in"
+			&& modifier != "ref readonly")
+		{
+			return false;
+		}
+
+		return TryGetBoundedUtf8ByteCount(modifier, 12, out utf8Bytes);
+	}
+
+	private static bool TryAddChecked(ref int total, int value)
+	{
+		try
+		{
+			total = checked(total + value);
+			return true;
+		}
+		catch (OverflowException)
+		{
+			return false;
+		}
 	}
 
 	private static bool TryParseSemanticOrigin(
