@@ -35,8 +35,8 @@
     <img src="screenshots/overview.png" width="250"  alt="System Explorer Overview">
   </a>
 </p>
-<details>
-  <summary><strong>▶ System Explorer 1.6 Roadmap</strong></summary>
+
+
 
   <br>
   <summary><strong>▶ See System Explorer in action</strong></summary>
