@@ -39,22 +39,6 @@
   <summary><strong>▶ System Explorer 1.6 Roadmap</strong></summary>
 
   <br>
-
-  <p align="center">
-    <img
-      src="screenshots/roadmap.png"
-       alt="System Explorer v1.6 Roadmap"
-    >
-  </p>
-
-  <p align="center">
-      <em>1.6 continues the perfectly reasonable plan of turning Godot into a lightweight C# IDE. <br/> With autocomplete, refactoring, better editor tooling, and naturally blackjack.</em>
-  </p>
-
-  <br>
-
-</details>
-<details>
   <summary><strong>▶ See System Explorer in action</strong></summary>
 
   <br>
