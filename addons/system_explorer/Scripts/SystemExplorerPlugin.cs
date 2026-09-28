@@ -31,7 +31,7 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private SystemExplorerDebugLogger _debugLogger;
 
 	private SystemExplorerDebugLogger DebugLogger =>
-		_debugLogger ??= new SystemExplorerDebugLogger(() => DebugState);
+		_debugLogger ??= new SystemExplorerDebugLogger(() => EnableLogging, _diagnosticLogDirectory);
 
 	#region Shared Script Editing Services
 
@@ -189,9 +189,9 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_editorOperationLifetime?.Dispose();
 		_editorOperationShutdownStarted = false;
 		_editorOperationLifetime = new SystemExplorer.EditorIntegration.Operations.EditorOperationLifetime();
-		TryLogEditorOperation("Enter Tree");
-
 		EnsureProjectSettings();
+		InitializeDiagnosticLogging();
+		TryLogEditorOperation("Enter Tree");
 		EnsureEditorShortcutsRegistered();
 		LoadEditorIcons();
 		EnsureScriptTemplateExists();
@@ -430,6 +430,7 @@ public sealed class {{CLASS_NAME}}
 	public override void _ExitTree()
 	{
 		TryLogEditorOperation("Exit Tree");
+		ShutdownDiagnosticLoggingSettingsObserver();
 		ShutdownEditorOperationLifecycle();
 		FlushAndShutdownTreeStatePersistence();
 
@@ -480,7 +481,7 @@ public sealed class {{CLASS_NAME}}
 		{
 			try
 			{
-				debugLogger.Log("System Explorer debug logging shutdown completed.");
+				debugLogger.Log("System Explorer diagnostic logging shutdown completed.");
 			}
 			catch
 			{

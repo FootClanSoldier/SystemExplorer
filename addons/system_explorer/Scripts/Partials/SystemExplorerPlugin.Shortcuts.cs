@@ -948,9 +948,6 @@ public partial class SystemExplorerPlugin
 	{
 		focusWasInScriptEditor = false;
 
-		if (!EnableQuickActions)
-			return false;
-
 		if (
 			!TryGetFocusedScriptEditorBeautifyTarget(
 				focusedControl,
@@ -1054,7 +1051,7 @@ public partial class SystemExplorerPlugin
 
 	private bool TryHandleBeautifyShortcutForSelectedItem()
 	{
-		if (!EnableQuickActions || _tree == null)
+		if (_tree == null)
 			return false;
 
 		TreeItem selectedItem = _tree.GetSelected();

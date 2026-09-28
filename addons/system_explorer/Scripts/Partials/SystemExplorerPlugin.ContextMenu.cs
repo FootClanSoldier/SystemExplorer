@@ -97,7 +97,7 @@ public partial class SystemExplorerPlugin
 
 	private bool CanShowQuickActionsForMetadata(string metadata)
 	{
-		if (!EnableQuickActions || string.IsNullOrWhiteSpace(metadata))
+		if (string.IsNullOrWhiteSpace(metadata))
 			return false;
 
 		return metadata.StartsWith("script::", StringComparison.Ordinal)

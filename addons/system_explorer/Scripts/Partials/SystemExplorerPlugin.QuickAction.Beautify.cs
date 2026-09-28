@@ -339,7 +339,7 @@ public partial class SystemExplorerPlugin
 		FocusedScriptEditorBeautifyTarget target
 	)
 	{
-		FocusedScriptEditorBeautifyTiming timing = DebugState
+		FocusedScriptEditorBeautifyTiming timing = EnableLogging
 			? new FocusedScriptEditorBeautifyTiming()
 			: null;
 

@@ -635,7 +635,7 @@ public partial class SystemExplorerPlugin
 		if (string.IsNullOrWhiteSpace(systemName))
 			return AddTreeMutationResult.Failed;
 
-		if (DebugState)
+		if (EnableLogging)
 		{
 			foreach (string path in scriptPaths)
 				PrintScriptCreationDebugInfo(path, systemName, folderPath);

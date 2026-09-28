@@ -1,32 +1,154 @@
 #if TOOLS
 using Godot;
+using SystemExplorer.Diagnostics;
 
 public partial class SystemExplorerPlugin
 {
 	#region Project Settings
 	private const string ProjectSettingsPath = "addons/system_explorer";
-	private const string EnableQuickActionsSetting = ProjectSettingsPath + "/enable_quick_actions";
-	private const string DebugStateSetting = ProjectSettingsPath + "/enable_debug_state";
+	private const string EnableLoggingSetting =
+		ProjectSettingsPath + "/Diagnostics/Enable_Logging";
+	private const string LegacyEnableQuickActionsSetting =
+		ProjectSettingsPath + "/enable_quick_actions";
+	private const string LegacyDebugStateSetting =
+		ProjectSettingsPath + "/enable_debug_state";
 
-	private bool EnableQuickActions => GetBoolProjectSetting(EnableQuickActionsSetting, false);
+	private static readonly StringName ProjectSettingsChangedSignalName =
+		new("project_settings_changed");
 
-	// Enable only when investigating editor state/save/Quick Action issues.
-	private bool DebugState => GetBoolProjectSetting(DebugStateSetting, false);
+	private bool _projectSettingsChangedSubscribed;
+	private bool _lastObservedEnableLogging;
+	private string _diagnosticLogDirectory = "";
+
+	private bool EnableLogging => GetBoolProjectSetting(EnableLoggingSetting, false);
 
 	private void EnsureProjectSettings()
 	{
-		EnsureBoolProjectSetting(EnableQuickActionsSetting, false);
-		EnsureBoolProjectSetting(DebugStateSetting, false);
+		bool shouldPersistLegacyCleanup = false;
+
+		if (
+			!ProjectSettings.HasSetting(EnableLoggingSetting)
+			&& TryGetBoolProjectSetting(LegacyDebugStateSetting, out bool legacyDebugState)
+		)
+		{
+			ProjectSettings.SetSetting(EnableLoggingSetting, legacyDebugState);
+			shouldPersistLegacyCleanup = true;
+		}
+
+		EnsureBoolProjectSetting(EnableLoggingSetting, false);
+
+		shouldPersistLegacyCleanup |= RemoveLegacyProjectSetting(
+			LegacyEnableQuickActionsSetting
+		);
+		shouldPersistLegacyCleanup |= RemoveLegacyProjectSetting(
+			LegacyDebugStateSetting
+		);
+
+		if (!shouldPersistLegacyCleanup)
+			return;
+
+		Error saveResult = ProjectSettings.Save();
+		if (saveResult != Error.Ok)
+		{
+			GD.PushWarning(
+				$"[SystemExplorer] Could not persist Project Settings cleanup. Error={saveResult}."
+			);
+		}
+	}
+
+	private void InitializeDiagnosticLogging()
+	{
+		try
+		{
+			string projectUserDataDirectory = ProjectSettings.GlobalizePath("user://");
+			_diagnosticLogDirectory =
+				SystemExplorerDiagnosticLogPathResolver.ResolveDiagnosticDirectory(
+					projectUserDataDirectory
+				);
+		}
+		catch
+		{
+			_diagnosticLogDirectory = "";
+		}
+
+		_lastObservedEnableLogging = EnableLogging;
+
+		if (!_projectSettingsChangedSubscribed)
+		{
+			_projectSettingsChangedSubscribed = TryConnectPluginSignal(
+				this,
+				ProjectSettingsChangedSignalName,
+				nameof(OnSystemExplorerProjectSettingsChanged),
+				"SystemExplorerPlugin project settings"
+			);
+		}
+
+		if (_lastObservedEnableLogging)
+			AnnounceDiagnosticLoggingEnabled();
+	}
+
+	private void ShutdownDiagnosticLoggingSettingsObserver()
+	{
+		if (!_projectSettingsChangedSubscribed)
+			return;
+
+		DisconnectPluginSignal(
+			this,
+			ProjectSettingsChangedSignalName,
+			nameof(OnSystemExplorerProjectSettingsChanged),
+			"SystemExplorerPlugin project settings"
+		);
+		_projectSettingsChangedSubscribed = false;
+	}
+
+	private void OnSystemExplorerProjectSettingsChanged()
+	{
+		bool isLoggingEnabled = EnableLogging;
+		if (isLoggingEnabled == _lastObservedEnableLogging)
+			return;
+
+		_lastObservedEnableLogging = isLoggingEnabled;
+
+		if (isLoggingEnabled)
+			AnnounceDiagnosticLoggingEnabled();
+	}
+
+	private void AnnounceDiagnosticLoggingEnabled()
+	{
+		if (!EnableLogging)
+			return;
+
+		if (DebugLogger.TryEnsurePersistentLogFile(out string filePath))
+		{
+			GD.Print($"[SystemExplorer] Logging enabled. Log file: '{filePath}'");
+			return;
+		}
+
+		GD.PushWarning(
+			"[SystemExplorer] Logging is enabled, but the diagnostic log file could not be opened."
+		);
+	}
+
+	private static bool TryGetBoolProjectSetting(string settingPath, out bool value)
+	{
+		value = false;
+
+		if (!ProjectSettings.HasSetting(settingPath))
+			return false;
+
+		Variant settingValue = ProjectSettings.GetSetting(settingPath, false);
+		if (settingValue.VariantType != Variant.Type.Bool)
+			return false;
+
+		value = settingValue.AsBool();
+		return true;
 	}
 
 	private static bool GetBoolProjectSetting(string settingPath, bool defaultValue)
 	{
-		if (!ProjectSettings.HasSetting(settingPath))
-			return defaultValue;
-
-		Variant value = ProjectSettings.GetSetting(settingPath, defaultValue);
-
-		return value.VariantType == Variant.Type.Bool ? value.AsBool() : defaultValue;
+		return TryGetBoolProjectSetting(settingPath, out bool value)
+			? value
+			: defaultValue;
 	}
 
 	private static void EnsureBoolProjectSetting(string settingPath, bool defaultValue)
@@ -44,6 +166,15 @@ public partial class SystemExplorerPlugin
 		);
 
 		ProjectSettings.SetAsBasic(settingPath, true);
+	}
+
+	private static bool RemoveLegacyProjectSetting(string settingPath)
+	{
+		if (!ProjectSettings.HasSetting(settingPath))
+			return false;
+
+		ProjectSettings.SetSetting(settingPath, default(Variant));
+		return true;
 	}
 
 	private void AddContextPopupMenuItem(

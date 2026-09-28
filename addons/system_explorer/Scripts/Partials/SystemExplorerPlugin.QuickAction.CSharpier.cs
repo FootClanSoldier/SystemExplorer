@@ -84,7 +84,7 @@ public partial class SystemExplorerPlugin
 	private void StartCSharpierStartupWarmUp()
 	{
 		if (_editorOperationShutdownStarted) return;
-		if (DebugState && DebugUninstallCSharpierOnStartup) CallDeferred(nameof(DebugUninstallCSharpierOnStartupThenWarmUp));
+		if (EnableLogging && DebugUninstallCSharpierOnStartup) CallDeferred(nameof(DebugUninstallCSharpierOnStartupThenWarmUp));
 		else CallDeferred(nameof(WarmUpCSharpierCommandCache));
 	}
 

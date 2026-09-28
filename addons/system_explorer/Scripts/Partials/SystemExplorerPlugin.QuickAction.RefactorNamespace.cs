@@ -607,7 +607,6 @@ public partial class SystemExplorerPlugin
 	{
 		if (
 			string.IsNullOrWhiteSpace(metadata)
-			|| !EnableQuickActions
 			|| _isBeautifyingScript
 		)
 		{

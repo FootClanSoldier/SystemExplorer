@@ -1905,7 +1905,7 @@ public partial class SystemExplorerPlugin
 				$"Reason='{reason}', Required='{requiredSystemName}', Status={diskReadResult.Status}, Detail='{diskReadResult.FailureDetail}'"
 			);
 
-			if (DebugState)
+			if (EnableLogging)
 				PushSystemExplorerError(
 					$"[SystemExplorer] Recovery failed. Reason='{reason}', Required='{requiredSystemName}', Status='{diskReadResult.Status}'.",
 					mirrorToDebugLog: false
@@ -1926,7 +1926,7 @@ public partial class SystemExplorerPlugin
 				$"Reason='{reason}', Required='{requiredSystemName}'"
 			);
 
-			if (DebugState)
+			if (EnableLogging)
 				PushSystemExplorerError(
 					$"[SystemExplorer] Recovery failed. Required system '{requiredSystemName}' was not found on disk. Reason='{reason}'.",
 					mirrorToDebugLog: false
@@ -1950,7 +1950,7 @@ public partial class SystemExplorerPlugin
 			$"{recoveryCompletionDetail} Reason='{reason}', Required='{requiredSystemName}'"
 		);
 
-		if (DebugState)
+		if (EnableLogging)
 		{
 			PushSystemExplorerWarning(
 				$"[SystemExplorer] Recovery successful. Reason='{reason}', Required='{requiredSystemName}', Recovered Systems={_systems.Count}",

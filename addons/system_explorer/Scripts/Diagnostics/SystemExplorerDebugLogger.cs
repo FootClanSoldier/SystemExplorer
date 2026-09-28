@@ -10,13 +10,15 @@ namespace SystemExplorer.Diagnostics;
 internal sealed class SystemExplorerDebugLogger : IDisposable
 {
 	private readonly Func<bool> _isEnabled;
+	private readonly string _diagnosticDirectory;
 	private readonly SystemExplorerPersistentLogFile _persistentLogFile = new();
 
 	private int _disposed;
 
-	internal SystemExplorerDebugLogger(Func<bool> isEnabled)
+	internal SystemExplorerDebugLogger(Func<bool> isEnabled, string diagnosticDirectory)
 	{
 		_isEnabled = isEnabled ?? throw new ArgumentNullException(nameof(isEnabled));
+		_diagnosticDirectory = diagnosticDirectory ?? "";
 	}
 
 	internal bool IsEnabled
@@ -86,6 +88,17 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 		}
 	}
 
+	internal bool TryEnsurePersistentLogFile(out string filePath)
+	{
+		filePath = "";
+
+		if (!IsEnabled)
+			return false;
+
+		EnsurePersistentFileSinkOpen();
+		return _persistentLogFile.TryGetOpenFilePath(out filePath);
+	}
+
 	internal Action<string, string> CreatePersistentFileOnlyDiagnosticSink()
 	{
 		if (!IsEnabled)
@@ -140,15 +153,23 @@ internal sealed class SystemExplorerDebugLogger : IDisposable
 			: $"{operation} -> {details}";
 	}
 
-	private static string CreateProcessLogPath()
+	private string CreateProcessLogPath()
 	{
-		string absoluteDirectory =
-			SystemExplorerDiagnosticLogPathResolver.ResolveDiagnosticDirectory();
+		if (
+			string.IsNullOrWhiteSpace(_diagnosticDirectory)
+			|| !Path.IsPathFullyQualified(_diagnosticDirectory)
+		)
+		{
+			throw new InvalidOperationException(
+				"The System Explorer diagnostics directory was not initialized."
+			);
+		}
+
 		using Process process = Process.GetCurrentProcess();
 		DateTime processStartTime = process.StartTime;
 		string fileName =
-			$"system_explorer_debug_{processStartTime:yyyyMMdd_HHmmss_fffffff}_pid{System.Environment.ProcessId}.log";
-		return Path.Combine(absoluteDirectory, fileName);
+			$"system_explorer_{processStartTime:yyyyMMdd_HHmmss_fffffff}_pid{System.Environment.ProcessId}.log";
+		return Path.Combine(_diagnosticDirectory, fileName);
 	}
 }
 
@@ -222,7 +243,7 @@ internal sealed class SystemExplorerPersistentLogFile
 				_filePath = filePath ?? "";
 				string directoryPath = Path.GetDirectoryName(_filePath) ?? "";
 				if (string.IsNullOrWhiteSpace(directoryPath))
-					throw new IOException("The debug log directory path could not be resolved.");
+					throw new IOException("The diagnostic log directory path could not be resolved.");
 
 				Directory.CreateDirectory(directoryPath);
 				FileStream stream = null;
@@ -236,10 +257,6 @@ internal sealed class SystemExplorerPersistentLogFile
 					);
 					_writer = new StreamWriter(stream, new UTF8Encoding(false));
 					stream = null;
-
-					WriteFileLineLocked(
-						$"System Explorer debug file logging started -> Path='{_filePath}'"
-					);
 				}
 				finally
 				{
@@ -250,6 +267,21 @@ internal sealed class SystemExplorerPersistentLogFile
 			{
 				DisableAfterFailureLocked();
 			}
+		}
+	}
+
+	internal bool TryGetOpenFilePath(out string filePath)
+	{
+		lock (_sync)
+		{
+			if (_disposed || _unavailable || _writer == null || string.IsNullOrWhiteSpace(_filePath))
+			{
+				filePath = "";
+				return false;
+			}
+
+			filePath = _filePath;
+			return true;
 		}
 	}
 
@@ -291,7 +323,7 @@ internal sealed class SystemExplorerPersistentLogFile
 			}
 			catch
 			{
-				// Persistent debug logging is best-effort and has no Godot fallback.
+				// Persistent diagnostic logging is best-effort and has no Godot fallback.
 			}
 			finally
 			{

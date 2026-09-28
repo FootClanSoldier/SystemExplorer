@@ -24,7 +24,7 @@ public partial class SystemExplorerPlugin
 
 	private void DebugLogStateSnapshot(string label)
 	{
-		if (!DebugState)
+		if (!EnableLogging)
 			return;
 
 		DebugLogger.Log($"--- {label} ---");
@@ -51,7 +51,7 @@ public partial class SystemExplorerPlugin
 
 	private void DebugLogSystems(string label)
 	{
-		if (!DebugState)
+		if (!EnableLogging)
 			return;
 
 		DebugLogger.Log(label);
