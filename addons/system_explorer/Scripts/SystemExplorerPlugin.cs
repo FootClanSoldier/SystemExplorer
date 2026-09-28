@@ -112,7 +112,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private OptionButton _namespaceRefactorExistingNamespaceDropdown;
 	private CheckBox _namespaceRefactorWithoutNamespaceOption;
 	private NamespaceRefactorPluginHost _namespaceRefactorHost;
-	private AcceptDialog _codeServiceInstallResultDialog;
 	private AcceptDialog _csharpierInstallResultDialog;
 	private ConfirmationDialog _csharpierNotInstalledDialog;
 	private EditorFileDialog _createScriptDialog;
@@ -167,7 +166,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 	private Texture2D _contextCategoryAddIcon;
 	private Texture2D _contextCategoryArrowLeftIcon;
 	private Texture2D _contextQuickActionsIcon;
-	private Texture2D _contextInstallCodeIntelligenceIcon;
 	private Texture2D _contextRefactorNamespaceIcon;
 	private Texture2D _contextBeautifyScriptIcon;
 	private Texture2D _contextNoteIcon;
@@ -194,9 +192,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		TryLogEditorOperation("Enter Tree");
 
 		EnsureProjectSettings();
-		StartCodeServiceSessionEnsureAtStartup();
-		InitializeProjectSettingsDebugStateObservation();
-		EnsureProjectSettingsSignalIntegrationCurrent();
 		EnsureEditorShortcutsRegistered();
 		LoadEditorIcons();
 		EnsureScriptTemplateExists();
@@ -282,7 +277,6 @@ public partial class SystemExplorerPlugin : EditorPlugin
 		_contextCategoryAddIcon = GetEditorIcon(editorTheme, "Add");
 		_contextCategoryArrowLeftIcon = GetEditorIcon(editorTheme, "ArrowLeft");
 		_contextQuickActionsIcon = GetEditorIcon(editorTheme, "Tools");
-		_contextInstallCodeIntelligenceIcon = GetEditorIcon(editorTheme, "Favorites");
 		_contextRefactorNamespaceIcon = GetEditorIcon(editorTheme, "Rename");
 		_contextBeautifyScriptIcon = GetEditorIcon(editorTheme, "CodeHighlighter");
 		_contextBeautifyScriptIcon ??= GetEditorIcon(editorTheme, "CSharpScript");
@@ -449,10 +443,8 @@ public sealed class {{CLASS_NAME}}
 		_boundFolderSyncRunning = false;
 		_isScriptEditorSyncDeferredQueued = false;
 		ShutdownTreeOperationDialogs();
-		ShutdownAutocomplete();
 		ShutdownScriptEditorSync();
 		ShutdownFolderBindingFilesystemLifecycle();
-		DisconnectProjectSettingsSignalIntegration();
 		DisconnectNamespaceRefactorDialogSignals();
 		ClearInlineTreeNotePressState();
 		ResetPendingContextNoteState();

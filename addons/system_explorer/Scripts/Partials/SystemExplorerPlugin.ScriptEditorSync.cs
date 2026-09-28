@@ -405,7 +405,6 @@ public partial class SystemExplorerPlugin
 
 		_lastObservedActiveScriptPath = normalizedPath;
 		_followActiveScriptHasObservedInitialPath = true;
-		UpdatePersistentLastScriptFromResourcePath(normalizedPath);
 	}
 
 	private void UpdateScriptEditorSyncPathTracking(string scriptPath)

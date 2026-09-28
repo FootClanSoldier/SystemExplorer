@@ -19,8 +19,7 @@ public partial class SystemExplorerPlugin
 	private const int ContextBeautifyScripts = 11;
 	private const int ContextBindFolder = 12;
 	private const int ContextUnbindFolder = 13;
-	private const int ContextInstallCodeIntelligence = 14;
-	private const int ContextNote = 15;
+	private const int ContextNote = 14;
 	private const string BeautifyUnavailableTooltip = "Beautify is busy.";
 	private const string RefactorNamespaceBeautifyRunningTooltip = "Beautify is running.";
 	private const string QuickActionsNoScriptsTooltip = "No scripts found";
@@ -206,21 +205,6 @@ public partial class SystemExplorerPlugin
 				useReversedSubmenuIcons,
 				GetContextQuickActionsSubmenuItemIcon(useReversedSubmenuIcons)
 			);
-
-			if (ShouldShowCodeServiceInstallQuickAction())
-			{
-				AddContextSubmenuIconItem(
-					_contextQuickActionsSubmenu,
-					"Install Code Intelligence",
-					ContextInstallCodeIntelligence,
-					_contextInstallCodeIntelligenceIcon
-				);
-
-				_contextQuickActionsSubmenu.SetItemIconModulate(
-					_contextQuickActionsSubmenu.GetItemIndex(ContextInstallCodeIntelligence),
-					new Color(1.0f, 0.8f, 0.2f)
-				);
-			}
 
 			int beautifyContextId = isScript ? ContextBeautifyScript : ContextBeautifyScripts;
 
@@ -600,7 +584,6 @@ public partial class SystemExplorerPlugin
 		if (!CanShowQuickActionsForMetadata(_pendingBeautifyScriptMetadata))
 			return;
 
-		UpdateCodeServiceInstallContextMenuAvailability();
 		UpdateBeautifyContextMenuAvailability(_pendingQuickActionsNoScriptsFound);
 		UpdateRefactorNamespaceContextMenuAvailability(_pendingQuickActionsNoScriptsFound);
 	}
@@ -624,15 +607,6 @@ public partial class SystemExplorerPlugin
 		{
 			return false;
 		}
-	}
-
-	private void UpdateCodeServiceInstallContextMenuAvailability()
-	{
-		UpdateQuickActionContextMenuItemAvailability(
-			ContextInstallCodeIntelligence,
-			_isInstallingCodeService,
-			_isInstallingCodeService ? "Installation is already in progress." : string.Empty
-		);
 	}
 
 	private void UpdateBeautifyContextMenuAvailability(bool noScriptsFound)
@@ -726,13 +700,6 @@ public partial class SystemExplorerPlugin
 
 			case ContextUnbindFolder:
 				UnbindPendingFolder();
-				break;
-
-			case ContextInstallCodeIntelligence:
-				if (_isInstallingCodeService)
-					return;
-
-				StartCodeServiceInstallation();
 				break;
 
 			case ContextNote:

@@ -183,7 +183,6 @@ public partial class SystemExplorerPlugin
 		BuildTree(keepCurrentExpansionState: true);
 		RestorePersistentTreeSelectionBestEffort(reason);
 		CallDeferred(nameof(MakeSystemExplorerDockVisible));
-		StartCodeServiceSessionEnsure("Managed Assembly Recovery");
 		DebugLogger.LogOperation("Managed assembly recovery completed", $"Reason='{reason}', Strategy='{strategy}'");
 		return true;
 	}
@@ -211,10 +210,8 @@ public partial class SystemExplorerPlugin
 		failureDetail = "";
 		try
 		{
-			ShutdownAutocomplete();
 			ShutdownScriptEditorSync();
 			ShutdownFolderBindingFilesystemLifecycle();
-			DisconnectProjectSettingsSignalIntegration();
 			DisconnectNamespaceRefactorDialogSignals();
 			DisconnectDockSignals();
 			_namespaceRefactorHost = null;
@@ -484,26 +481,11 @@ public partial class SystemExplorerPlugin
 				return false;
 			}
 
-			if (!EnsureAutocompleteLifecycleCurrent())
-			{
-				failureDetail = "The C# autocomplete ScriptEditor integration could not be restored.";
-				return false;
-			}
-
-			// Phase-7 document synchronization is additive and is not yet a user-facing
-			// semantic feature. A binding/composition failure must not fail managed dock
-			// recovery or disable autocomplete/namespace refactoring.
-			EnsureCodeServiceDocumentSynchronizationLifecycleCurrent();
-
 			if (!TryEnsureNamespaceRefactorHost(out _))
 			{
 				failureDetail = "The Refactor Namespace managed host could not be restored.";
 				return false;
 			}
-
-			// ProjectSettings live synchronization is permanent editor integration, but it
-			// must remain noncritical to dock recovery and CodeService startup.
-			EnsureProjectSettingsSignalIntegrationCurrent();
 
 			return true;
 		}
@@ -523,9 +505,6 @@ public partial class SystemExplorerPlugin
 		_boundFolderSyncQueued = false;
 		_boundFolderSyncRunning = false;
 		ResetScriptEditorSyncTransientStateAfterManagedAssemblyReload();
-		ResetAutocompleteTransientStateAfterManagedAssemblyReload();
-		ResetCodeServiceDocumentSynchronizationAfterManagedAssemblyReload();
-		ResetCodeServiceManagedStateForOperationLifecycleShutdown("Managed Assembly Reload");
 		CancelPendingScriptRenameEditorRestore();
 		ClearInlineTreeNotePressState();
 		ResetPendingContextNoteState();
@@ -584,7 +563,6 @@ public partial class SystemExplorerPlugin
 		HideWindowForManagedAssemblyReload(_missingScriptDialog);
 		HideWindowForManagedAssemblyReload(_missingSceneDialog);
 		HideWindowForManagedAssemblyReload(_namespaceRefactorDialog);
-		HideWindowForManagedAssemblyReload(_codeServiceInstallResultDialog);
 		HideWindowForManagedAssemblyReload(_csharpierNotInstalledDialog);
 	}
 
