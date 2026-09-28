@@ -39,6 +39,7 @@
 
 
   <br>
+  <details>
   <summary><strong>▶ See System Explorer in action</strong></summary>
 
   <br>
